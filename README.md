@@ -2,7 +2,7 @@
 
 **让模型发出一次执行请求，由程序负责排队、等待和收取结果。**
 
-DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **0.2.0**
+DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **0.2.1**
 
 > 当前是早期可运行版本，不是完整生产验收版。已验证真实 DSH 组件和脚本模型驱动的内存会话；真实模型、桌面界面和 PTC 完整链路尚未验收。**不支持重启后恢复任务。**
 
@@ -81,7 +81,7 @@ flowchart TD
 
 ## 在 Agent 预设中选择测试模式
 
-从 0.2.0 起，包内提供标准 DSH bundle patch。通过宿主正常加载这个 bundle 后，设置 → Agent 预设 → **自定义**区域会收到“执行总线测试 / Execution Bus Test”预设定义；选择它创建一个新测试会话。不要把它设成默认，也不要修改正在使用的普通会话。宿主一般只允许空白会话切换预设。
+从 0.2.0 起，包内提供标准 DSH bundle patch。通过宿主正常加载这个 bundle 后，设置 → Agent 预设 → **自定义**区域会收到“执行总线 / Execution Bus”预设定义；选择它创建一个新测试会话。不要把它设成默认，也不要修改正在使用的普通会话。宿主一般只允许空白会话切换预设。
 
 该预设只在自己的作用域注册 execution_bus，使用原生工具调用，不改其他会话的 PTC 模式。它没有 shell 行；宿主文件工具套件会声明 read/write/edit 等工具，但测试模式的执行 guard 只允许总线、read 和 Job 控制，写入/编辑即使可见也会拒绝。它不是进程级沙箱，读取边界仍由宿主权限决定；同一测试预设的会话共享有界队列容量，但请求结果按会话隔离。
 
@@ -100,7 +100,7 @@ flowchart TD
 2. 在你选定的隔离 DSH 配置依赖目录安装固定版本，不要在 DSH 程序安装目录执行：
 
    ```powershell
-   npm install --ignore-scripts @feng0531/dsh-execution-bus@0.2.0
+   npm install --ignore-scripts @feng0531/dsh-execution-bus@0.2.1
    ```
 
    这是 npm 目录示例。若目标配置使用 pnpm，应沿用其包管理器，不混用锁文件。遇到宿主 peer 版本冲突就停止，不用强制安装绕过。
@@ -229,7 +229,7 @@ npm run test:install    # 临时目录安装，不操作日常 DSH
 
 - [协议和投递语义](<docs/protocol.md>)：字段、状态、重复处理与取消规则。
 - [宿主兼容性与源码调用链](<docs/host-compatibility.md>)：为什么可以等待，为什么不能跨重启恢复。
-- [验证记录](<docs/validation.md>)、[0.2.0 发布说明](<docs/releases/0.2.0.md>)：已验证与未验证范围。
+- [验证记录](<docs/validation.md>)、[0.2.1 发布说明](<docs/releases/0.2.1.md>)：已验证与未验证范围。
 - [维护者发布流程](<docs/RELEASING.md>)：标签 CI、安装包校验与正式发布门禁。
 
 ## 许可

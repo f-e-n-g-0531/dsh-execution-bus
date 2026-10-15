@@ -4,15 +4,15 @@
       name: '@deepseek-ai/dsh-agent-preset'
       config:
         id: execution-bus-test
-        name: 执行总线测试 / Execution Bus Test
-        description: 独立可选测试模式：只读文件、延迟与失败演示、进度和取消。不修改默认模式，禁止命令和写入执行；不支持重启恢复。
+        name: 执行总线 / Execution Bus
+        description: 独立执行模式：请求排队、异步等待、进度和取消；当前支持受控验证与只读文件。不修改默认模式，禁止命令和写入执行；不支持重启恢复。
         order: 20
         plugins:
           - id: execution-bus-persona
             name: '@deepseek-ai/dsh-persona'
             config:
               prefix: >-
-                你正在执行总线测试模式中。只使用 execution_bus、只读文件和任务控制工具。
+                你正在执行总线模式中。只使用 execution_bus、只读文件和任务控制工具。
                 请求只提交一次并等待结果，不循环查询进度；同一逻辑操作重发沿用 requestId。
                 默认先用 test Handler 做延迟成功、失败和取消测试，读取真实文件须有用户要求。
                 cancelRequested 不代表已取消，unknown 不代表执行失败。禁止声称跨重启恢复或完整模型性能提升。

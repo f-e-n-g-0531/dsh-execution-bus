@@ -20,7 +20,7 @@ const definition = parse(readFileSync("cordis.patch.yml", "utf8"))[0].insert[0]
   .config;
 test("preset bundle declares a custom opt-in mode and no default/global bus change", () => {
   assert.equal(definition.id, "execution-bus-test");
-  assert.match(definition.name, /执行总线测试/);
+  assert.equal(definition.name, "执行总线 / Execution Bus");
   assert.equal(entryListProblem(definition.plugins), undefined);
   assert.equal(
     definition.plugins.filter((r) => r.name.endsWith("/test-mode")).length,
