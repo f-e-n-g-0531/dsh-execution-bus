@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as pause } from "node:timers/promises";
 import { ExecutionBus, parse } from "./bus.js";
 import { testHandler, readHandler } from "./handlers.js";
 export const name = "execution-bus";
@@ -107,12 +108,6 @@ export function apply(ctx) {
                         },
                     });
                     const ownerId = exec.agent.id;
-                    let hostCommitted;
-                    const hostSettlement = new Promise(resolve => { hostCommitted = resolve; });
-                    const stopSettlementObserver = ctx.jobs.events.subscribe({ owner: ownerId }, event => {
-                        if ((event.type === "settled" || event.type === "removed") && event.job.id === job && event.job.owner === ownerId)
-                            hostCommitted();
-                    });
                     // One registered host waiter suppresses extra completion messages for every attachment.
                     settled = (async () => {
                         try {
@@ -140,18 +135,29 @@ export function apply(ctx) {
                             // attached, drain both producer and host outcome, then attempt cleanup once.
                             await attached.done;
                             if (!alreadyRemoved) {
-                                await hostSettlement;
-                                try {
-                                    ctx.jobs.remove(job, ownerId);
-                                }
-                                catch {
-                                    /* Best effort cleanup must not replace the original service error. */
+                                // No scope-owned observer: teardown can remove it before settlement.
+                                // After producer drain, allow a bounded host commit window. This is
+                                // program-side cleanup only, never execution retry or model polling.
+                                for (let attempt = 0; attempt < 20; attempt++) {
+                                    try {
+                                        const view = ctx.jobs
+                                            .list(ownerId)
+                                            .find((view) => view.id === job && view.owner === ownerId);
+                                        if (!view)
+                                            break;
+                                        if (view.status !== "running" &&
+                                            view.status !== "stopping") {
+                                            ctx.jobs.remove(job, ownerId);
+                                            break;
+                                        }
+                                    }
+                                    catch {
+                                        break;
+                                    }
+                                    await pause(10);
                                 }
                                 throw error;
                             }
-                        }
-                        finally {
-                            stopSettlementObserver();
                         }
                     })();
                     sharedJobs.set(jobKey, settled);
