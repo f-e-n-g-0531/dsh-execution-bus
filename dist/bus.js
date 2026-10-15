@@ -41,6 +41,14 @@ export function parse(raw) {
         throw Error("MESSAGE_TOO_LARGE");
     return structuredClone(m);
 }
+function freezeJson(value) {
+    if (value && typeof value === "object") {
+        for (const child of Object.values(value))
+            freezeJson(child);
+        Object.freeze(value);
+    }
+    return value;
+}
 const terminal = (s) => !["queued", "running"].includes(s);
 /** Volatile single-process bus; no acceptance durability or automatic execution retry. */
 export class ExecutionBus {
@@ -206,6 +214,7 @@ export class ExecutionBus {
             throw Error("EXPECTED_CONTROL");
         if (Object.keys(m.payload).length)
             throw Error("INVALID_CONTROL");
+        this.sweep();
         const e = this.get(owner, m.requestId);
         const previous = e.messages.get(m.messageId), fingerprint = canonical(m);
         if (previous && previous !== fingerprint)
@@ -240,7 +249,7 @@ export class ExecutionBus {
         if (error)
             e.view.error = error;
         this.emit(e, state, { state });
-        e.resolve(this.view(e));
+        e.resolve(freezeJson(this.view(e)));
         e.listeners.clear();
     }
     pump() {
@@ -278,7 +287,14 @@ export class ExecutionBus {
                     this.emit(e, "progress", { percent: pct });
                 },
             });
-            const json = JSON.stringify(result);
+            let json;
+            try {
+                json = JSON.stringify(result);
+            }
+            catch {
+                this.finish(e, "unknown", undefined, "RESULT_NOT_RETAINED");
+                return;
+            }
             if (json === undefined ||
                 Buffer.byteLength(json) > this.options.resultBytes) {
                 this.finish(e, "unknown", undefined, "RESULT_NOT_RETAINED");

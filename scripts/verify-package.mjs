@@ -28,10 +28,10 @@ export function verifyReport(r, p) {
     "docs/RELEASING.md",
     "docs/releases/" + p.version + ".md",
   ];
-  const allowed = new Set([...required, "LICENSE", "THIRD_PARTY_NOTICES.md"]);
+  const allowed = new Set([...required, "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/FLOW-TEST.md"]);
   const paths = new Set();
   for (const f of r.files) {
-    assert.ok(allowed.has(f.path), "Unexpected packed path: " + f.path);
+    assert.ok(allowed.has(f.path) || /^docs[/]releases[/][0-9]+[.][0-9]+[.][0-9]+[.]md$/.test(f.path), "Unexpected packed path: " + f.path);
     assert.ok(!paths.has(f.path), "Duplicate packed path");
     assert.ok(Number.isSafeInteger(f.size) && f.size > 0);
     paths.add(f.path);

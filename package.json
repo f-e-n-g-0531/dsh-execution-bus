@@ -1,6 +1,6 @@
 {
   "name": "@feng0531/dsh-execution-bus",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "private": false,
   "license": "SEE LICENSE IN LICENSE",
@@ -27,6 +27,7 @@
     "test": "npm run build && node --test test/*.test.mjs",
     "pack": "npm pack",
     "check": "npm test",
+    "test:flow": "npm run build && node --test test/flow-regression.test.mjs test/host.test.mjs test/agent-loop.test.mjs",
     "prepack": "npm run check && npm run verify:package",
     "verify:package": "node scripts/verify-package.mjs",
     "test:install": "node scripts/test-install.mjs",
