@@ -69,6 +69,18 @@ export function apply(ctx) {
                     throw Error("HOST_READ_FAILED");
                 return result.value;
             });
+            // Terminal reuse is a read of an existing result, not admission of new work.
+            if (attached.accepted.payload.state !== "queued" &&
+                attached.accepted.payload.state !== "running") {
+                try {
+                    const value = await attached.done;
+                    attached.returned();
+                    return value;
+                }
+                finally {
+                    attached.detach();
+                }
+            }
             const abort = () => attached.cancel();
             const jobKey = JSON.stringify([owner.sessionId, m.requestId]);
             let settled = sharedJobs.get(jobKey);
