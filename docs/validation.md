@@ -40,7 +40,7 @@ npm test：**21/21 通过**。本地 tgz 已在 artifacts/package-check 独立�
 
 参考 dsh-vcs 配置标签/手动 CI：Windows/Ubuntu × Node 22/24；普通分支和 PR 不触发。新增版本/锁文件/标签一致性、包严格白名单、全新临时目录生产依赖安装、工作流 YAML 契约和许可证缺失拒绝测试。本地 Windows/Node 24 的 check、verify:package、pack:candidate、test:install 通过，npm audit 为 0 漏洞。
 
-发布仅手动确认后运行，需精确标签 CI 成功且四份候选与重建包逐字节一致；先 npm 上传并验证公开实际字节，再创建 GitHub Release。用户已确认非商业许可证并授权正式发布；预检仍验证明确确认词及完整 LICENSE。远端 CI、Actions environment 审批和真实发布均未执行。
+发布仅手动确认后运行，需精确标签 CI 成功且四份候选与重建包逐字节一致；先 npm 上传并验证公开实际字节，再创建 GitHub Release。用户已确认非商业许可证并授权正式发布；预检仍验证明确确认词及完整 LICENSE。2026-10-15：v0.1.0 标签 CI 四矩阵成功（运行 38705851984），联合发布成功（38706021548）。GitHub Release 非草稿、非预发布；npm latest 为 0.1.0。公开 npm/GitHub 包均为 22,017 字节，与候选逐字节一致，SHA-256：9b5f57d829c2238d0bed8548e17633a67b15a5358b792df0d492071a261529ce。npm-release 环境此前不存在，未配置维护者保护审批，发布使用用户授权及工作流明确确认门禁。
 
 ## 已完成 / 部分完成 / 后续
 
