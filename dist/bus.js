@@ -98,7 +98,10 @@ export class ExecutionBus {
         };
         for (const f of e.listeners)
             try {
-                f(event);
+                // Observe promise rejection without awaiting or blocking task settlement.
+                void Promise.resolve(f(event)).catch(() => {
+                    /* Async observers are best-effort; never leak their error text. */
+                });
             }
             catch {
                 /* Observers cannot alter execution. */

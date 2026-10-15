@@ -17,6 +17,8 @@ export function assertJson(
   if (typeof value !== "object" || value === null) throw Error("INVALID_JSON");
   if (active.has(value)) throw Error("CYCLIC_JSON");
   const array = Array.isArray(value);
+  if (array && Object.getPrototypeOf(value) !== Array.prototype)
+    throw Error("INVALID_JSON_ARRAY");
   if (
     !array &&
     Object.getPrototypeOf(value) !== Object.prototype &&

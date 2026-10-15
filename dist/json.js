@@ -13,6 +13,8 @@ export function assertJson(value, depth = 0, active = new Set(), budget = { left
     if (active.has(value))
         throw Error("CYCLIC_JSON");
     const array = Array.isArray(value);
+    if (array && Object.getPrototypeOf(value) !== Array.prototype)
+        throw Error("INVALID_JSON_ARRAY");
     if (!array &&
         Object.getPrototypeOf(value) !== Object.prototype &&
         Object.getPrototypeOf(value) !== null)

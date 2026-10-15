@@ -2,7 +2,7 @@
 
 ## 输入
 
-严格无损 JSON，最大 16 KiB，不接受额外顶层字段。JSON 值最大深度 64、访问节点最多 65536；拒绝非有限数字、负零、undefined、函数、符号、稀疏数组、访问器属性、特殊对象和循环引用。messageId / requestId 为 1–128 位字母、数字、下划线、点、冒号或短横线。
+严格无损 JSON，最大 16 KiB，不接受额外顶层字段。JSON 值最大深度 64、访问节点最多 65536；拒绝非有限数字、负零、undefined、函数、符号、稀疏数组、访问器属性、特殊对象和循环引用；数组只接受当前运行域的原生 Array.prototype，拒绝数组子类、自定义原型及跨域数组。messageId / requestId 为 1–128 位字母、数字、下划线、点、冒号或短横线。
 
 
 type 为 request 时 payload 为 {handler,input}；type 为 status / result / cancel 时 payload 必须为 {}。不支持其他类型或版本。sessionId、权限、工作目录不能出现在输入中，可信归属只能由宿主工具上下文绑定。
@@ -16,7 +16,7 @@ type 为 request 时 payload 为 {handler,input}；type 为 status / result / ca
 
 核心 submit 返回 accepted 事件和 done Promise。受理只意味着已进入内存记录和队列，durable:false；不是成功。事件包含 protocolVersion、messageId、requestId、correlationId（首次请求 messageId）、sequence、type、payload。每请求 sequence 单调递增，accepted 是当前序号的快照，不占新增序号。
 
-事件类型：accepted、started、progress、cancel_requested、succeeded、failed、cancelled、unknown。进度只接受 Handler 正整数序号递增的百分比，重复、乱序、终态后进度丢弃。进程内投递，无外部消息接收端，也不支持任意远端终态注入；终态只由总线持有的执行 Promise 结算。
+事件类型：accepted、started、progress、cancel_requested、succeeded、failed、cancelled、unknown。进度只接受 Handler 正整数序号递增的百分比，重复、乱序、终态后进度丢弃。进程内投递，无外部消息接收端，也不支持任意远端终态注入；终态只由总线持有的执行 Promise 结算。观察者是最佳努力通知：同步抛错及异步 Promise 拒绝均被隔离，不记录异常原文；不等待观察者完成，不保证关闭前异步通知已经完成，观察者须自行管理资源。
 
 工具的 request 保持 pending，最终返回 RecordView（requestId,state,sequence,cancelRequested,delivery,result?,error?,progress?）；status/result/cancel 返回同一种当前快照。工具不会提前返回 accepted 或 taskId，也不会用聊天进度消息唤醒模型。Job 的 UI progress 只含状态/百分比。
 
