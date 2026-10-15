@@ -16,6 +16,9 @@ export function verifyReport(r, p) {
     "THIRD_PARTY_NOTICES.md",
     "package.json",
     "README.md",
+    "cordis.patch.yml",
+    "dist/test-mode.js",
+    "dist/test-mode.d.ts",
     "dist/bus.js",
     "dist/bus.d.ts",
     "dist/plugin.js",
@@ -41,6 +44,7 @@ export function verifyReport(r, p) {
   assert.deepEqual(p.exports, {
     ".": "./dist/plugin.js",
     "./core": "./dist/bus.js",
+    "./test-mode": "./dist/test-mode.js",
   });
   for (const target of Object.values(p.exports))
     assert.ok(paths.has(target.slice(2)));
