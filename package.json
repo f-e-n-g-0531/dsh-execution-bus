@@ -1,6 +1,6 @@
 {
   "name": "@feng0531/dsh-execution-bus",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "type": "module",
   "private": false,
   "license": "SEE LICENSE IN LICENSE",
@@ -12,7 +12,7 @@
     "type": "git",
     "url": "git+https://github.com/f-e-n-g-0531/dsh-execution-bus.git"
   },
-  "description": "执行总线 / Execution Bus: bounded DSH handler dispatch with original-call waiting",
+  "description": "萧何 / Xiao He: execution bus, bounded DSH handler dispatch with original-call waiting",
   "main": "dist/plugin.js",
   "exports": {
     ".": "./dist/plugin.js",

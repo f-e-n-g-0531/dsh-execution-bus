@@ -24,7 +24,7 @@ export function apply(ctx: Context) {
   ctx.tools.register({
     name: "execution_bus",
     description:
-      "执行总线 / Execution Bus. Submit a version 1 request and WAIT for its terminal result in this tool call. Reuse requestId only for the same logical operation. Handlers: test {delayMs:0..30000,fail:boolean}, host.read {file_path,offset?,limit?<=100}. Control types status/result/cancel use empty payload. Acceptance is volatile, not execution success. No polling needed; no restart resume.",
+      "萧何 / Xiao He. Submit a version 1 request and WAIT for its terminal result in this tool call. Reuse requestId only for the same logical operation. Handlers: test {delayMs:0..30000,fail:boolean}, host.read {file_path,offset?,limit?<=100}. Control types status/result/cancel use empty payload. Acceptance is volatile, not execution success. No polling needed; no restart resume.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -91,7 +91,7 @@ export function apply(ctx: Context) {
         try {
           const job = ctx.jobs.start({
             kind: "execution-bus",
-            label: "执行总线 / Execution Bus",
+            label: "萧何 / Xiao He",
             owner: exec.agent.id,
             run(h) {
               handle = h;
