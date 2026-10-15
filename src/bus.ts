@@ -142,6 +142,26 @@ export class ExecutionBus {
       retentionMs: 3600000,
     },
   ) {
+    const keys = [
+      "concurrency",
+      "queueLimit",
+      "recordLimit",
+      "resultBytes",
+      "retentionMs",
+    ];
+    if (
+      !options ||
+      typeof options !== "object" ||
+      Array.isArray(options) ||
+      Reflect.ownKeys(options).length !== keys.length ||
+      keys.some((key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(options, key);
+        return (
+          !descriptor || !("value" in descriptor) || !descriptor.enumerable
+        );
+      })
+    )
+      throw Error("INVALID_OPTIONS");
     this.options = Object.freeze({ ...options });
     for (const v of Object.values(this.options))
       if (!Number.isSafeInteger(v) || v < 1) throw Error("INVALID_OPTIONS");
@@ -275,9 +295,11 @@ export class ExecutionBus {
     onEvent: ((e: Event) => void) | undefined,
     id: string,
   ) {
-    if (onEvent && !terminal(e.view.state)) {
+    // Each attachment owns its registration, even when callers reuse one function.
+    const listener = onEvent ? (event: Event) => onEvent(event) : undefined;
+    if (listener && !terminal(e.view.state)) {
       if (e.listeners.size >= 32) throw Error("WAITER_LIMIT");
-      e.listeners.add(onEvent);
+      e.listeners.add(listener);
     }
     const accepted: Event = {
       protocolVersion: 1,
@@ -293,7 +315,7 @@ export class ExecutionBus {
       done: e.done,
       cancel: () => this.cancel(e),
       detach: () => {
-        if (onEvent) e.listeners.delete(onEvent);
+        if (listener) e.listeners.delete(listener);
       },
       returned: () => {
         e.view.delivery = "returned";

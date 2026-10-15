@@ -16,7 +16,7 @@ type 为 request 时 payload 为 {handler,input}；type 为 status / result / ca
 
 核心 submit 返回 accepted 事件和 done Promise。受理只意味着已进入内存记录和队列，durable:false；不是成功。事件包含 protocolVersion、messageId、requestId、correlationId（首次请求 messageId）、sequence、type、payload。每请求 sequence 单调递增，accepted 是当前序号的快照，不占新增序号。
 
-事件类型：accepted、started、progress、cancel_requested、succeeded、failed、cancelled、unknown。进度只接受 Handler 正整数序号递增的百分比，重复、乱序、终态后进度丢弃。进程内投递，无外部消息接收端，也不支持任意远端终态注入；终态只由总线持有的执行 Promise 结算。事件及其 payload 在投递前深度冻结，观察者不得修改请求关联、序号、类型或进度内容。观察者是最佳努力通知：同步抛错及异步 Promise 拒绝均被隔离，不记录异常原文；不等待观察者完成，不保证关闭前异步通知已经完成，观察者须自行管理资源。
+事件类型：accepted、started、progress、cancel_requested、succeeded、failed、cancelled、unknown。进度只接受 Handler 正整数序号递增的百分比，重复、乱序、终态后进度丢弃。进程内投递，无外部消息接收端，也不支持任意远端终态注入；终态只由总线持有的执行 Promise 结算。事件及其 payload 在投递前深度冻结，观察者不得修改请求关联、序号、类型或进度内容。每个附着拥有独立观察者注册和名额，即使复用同一回调；detach 幂等且只移除自己的通知，不影响其他附着或执行结果。观察者是最佳努力通知：同步抛错及异步 Promise 拒绝均被隔离，不记录异常原文；不等待观察者完成，不保证关闭前异步通知已经完成，观察者须自行管理资源。
 
 工具的 request 保持 pending，最终返回 RecordView（requestId,state,sequence,cancelRequested,delivery,result?,error?,progress?）；status/result/cancel 返回同一种当前快照。工具不会提前返回 accepted 或 taskId，也不会用聊天进度消息唤醒模型。Job 的 UI progress 只含状态/百分比。
 
@@ -31,7 +31,7 @@ queued → cancelled。终态不可变；取消终态任务只返回原状态。
 
 ## 容量和清理
 
-默认并发 2，待分发队列 32，记录 256，单结果 JSON 64 KiB；所有请求先经上限检查，满则 BACKPRESSURE，不自动重试。Job 仍受宿主自己的每 owner 容量限制。队列不提供公平性 SLA，单会话可占满实例。core 构造时复制并冻结容量配置，之后修改调用方原对象不改变总线限制；没有动态配置更新接口。重复附着只有成功取得观察者名额后才提交新消息记账，WAITER_LIMIT 拒绝不占用消息 ID 或额度。
+默认并发 2，待分发队列 32，记录 256，单结果 JSON 64 KiB；所有请求先经上限检查，满则 BACKPRESSURE，不自动重试。Job 仍受宿主自己的每 owner 容量限制。队列不提供公平性 SLA，单会话可占满实例。core 不传配置时使用默认值；传入配置必须完整包含五项正安全整数，不接受部分配置、额外字段或访问器，缺项立即 INVALID_OPTIONS。core 构造时复制并冻结容量配置，之后修改调用方原对象不改变总线限制；没有动态配置更新接口。重复附着只有成功取得观察者名额后才提交新消息记账，WAITER_LIMIT 拒绝不占用消息 ID 或额度。
 
 终态自完成后保存一小时；新受理及控制消息查询时惰性清理，可通过 core.sweep 主动清理。无定时器常驻、无磁盘结果存储、无日志输出。插件关闭先停止受理，取消队列与运行任务，等待合作 Handler，清理内存；不合作的 Handler 会阻碍关闭，插件无法安全硬杀同进程代码。
 
