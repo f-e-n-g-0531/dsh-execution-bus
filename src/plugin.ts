@@ -102,6 +102,17 @@ export function apply(ctx: Context) {
       let settled = sharedJobs.get(jobKey);
       if (!settled) {
         try {
+          const outcome = attached.done.then(
+            (v): JobOutcome => ({
+              status:
+                v.state === "succeeded"
+                  ? "completed"
+                  : v.state === "cancelled"
+                    ? "killed"
+                    : "failed",
+              detail: v.state,
+            }),
+          );
           const job = ctx.jobs.start({
             kind: "execution-bus",
             label: "萧何 / Xiao He",
@@ -109,22 +120,17 @@ export function apply(ctx: Context) {
             run(h) {
               handle = h;
               return {
-                done: attached.done.then(
-                  (v): JobOutcome => ({
-                    status:
-                      v.state === "succeeded"
-                        ? "completed"
-                        : v.state === "cancelled"
-                          ? "killed"
-                          : "failed",
-                    detail: v.state,
-                  }),
-                ),
+                done: outcome,
                 cancel: abort,
               };
             },
           });
           const ownerId = exec.agent.id;
+          let hostCommitted!: () => void;
+          const hostSettlement = new Promise<void>(resolve => { hostCommitted = resolve; });
+          const stopSettlementObserver = ctx.jobs.events.subscribe({ owner: ownerId }, event => {
+            if ((event.type === "settled" || event.type === "removed") && event.job.id === job && event.job.owner === ownerId) hostCommitted();
+          });
           // One registered host waiter suppresses extra completion messages for every attachment.
           settled = (async () => {
             try {
@@ -137,14 +143,29 @@ export function apply(ctx: Context) {
             } catch (error) {
               // rc.2 has no typed not-found code. Match only this minted Job and
               // confirm absence in the original owner scope; never swallow access/service errors.
-              if (
-                !(error instanceof Error) ||
-                error.message !== `unknown job ${job}` ||
-                ctx.jobs.list(ownerId).some((view) => view.id === job)
-              )
-                throw error;
-              // Record cleanup is not execution completion. Drain the original result.
+              let alreadyRemoved = false;
+              try {
+                alreadyRemoved =
+                  error instanceof Error &&
+                  error.message === `unknown job ${job}` &&
+                  !ctx.jobs.list(ownerId).some((view) => view.id === job);
+              } catch {
+                /* Preserve the original wait/cleanup error. */
+              }
+              // A broken wait channel does not terminate execution. Keep caller cancellation
+              // attached, drain both producer and host outcome, then attempt cleanup once.
               await attached.done;
+              if (!alreadyRemoved) {
+                await hostSettlement;
+                try {
+                  ctx.jobs.remove(job, ownerId);
+                } catch {
+                  /* Best effort cleanup must not replace the original service error. */
+                }
+                throw error;
+              }
+            } finally {
+              stopSettlementObserver();
             }
           })();
           sharedJobs.set(jobKey, settled);
