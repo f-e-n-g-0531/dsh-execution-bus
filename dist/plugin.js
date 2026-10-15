@@ -108,12 +108,24 @@ export function apply(ctx) {
                     const ownerId = exec.agent.id;
                     // One registered host waiter suppresses extra completion messages for every attachment.
                     settled = (async () => {
-                        for (;;) {
-                            const view = await ctx.jobs.wait(job, 60000, ownerId);
-                            if (view.status !== "running" && view.status !== "stopping")
-                                break;
+                        try {
+                            for (;;) {
+                                const view = await ctx.jobs.wait(job, 60000, ownerId);
+                                if (view.status !== "running" && view.status !== "stopping")
+                                    break;
+                            }
+                            ctx.jobs.remove(job, ownerId);
                         }
-                        ctx.jobs.remove(job, ownerId);
+                        catch (error) {
+                            // rc.2 has no typed not-found code. Match only this minted Job and
+                            // confirm absence in the original owner scope; never swallow access/service errors.
+                            if (!(error instanceof Error) ||
+                                error.message !== `unknown job ${job}` ||
+                                ctx.jobs.list(ownerId).some((view) => view.id === job))
+                                throw error;
+                            // Record cleanup is not execution completion. Drain the original result.
+                            await attached.done;
+                        }
                     })();
                     sharedJobs.set(jobKey, settled);
                     void settled.then(() => sharedJobs.delete(jobKey), () => sharedJobs.delete(jobKey));
