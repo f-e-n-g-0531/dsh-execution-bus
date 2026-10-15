@@ -1,0 +1,75 @@
+name: Publish GitHub and npm
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing verified tag vX.Y.Z'
+        required: true
+        type: string
+      confirmation:
+        description: 'Type publish-execution-bus to authorize publication'
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: execution-bus-release-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: npm-release
+    permissions:
+      contents: write
+      actions: read
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      CONFIRM_PUBLISH: ${{ inputs.confirmation }}
+    steps:
+      - name: Validate requested tag and confirmation
+        shell: bash
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$ ]]
+          test "$CONFIRM_PUBLISH" = publish-execution-bus
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org/
+      - run: node scripts/release-preflight.mjs
+      - run: npm ci --include=dev --ignore-scripts
+      - run: npm run check
+      - run: npm run verify:package
+      - run: npm run pack:candidate
+        id: pack
+      - name: Require exact-tag CI and identical four candidates
+        run: node scripts/require-tag-ci.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+      - run: npm run test:install -- artifacts/candidate/${{ steps.pack.outputs.filename }}
+      - name: Preserve checked release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: execution-bus-release-candidate
+          path: artifacts/candidate/
+          if-no-files-found: error
+      - name: Publish exact tarball to npm
+        run: node scripts/npm-release.mjs publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_AUTOMATION_TOKEN }}
+      - name: Verify public npm bytes
+        run: node scripts/npm-release.mjs verify
+      - name: Create GitHub release after public npm verification
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          gh release create "$RELEASE_TAG" "artifacts/candidate/feng0531-dsh-execution-bus-$version.tgz" artifacts/candidate/SHA256SUMS.txt --verify-tag --title "执行总线 / Execution Bus $RELEASE_TAG" --notes-file "docs/releases/$version.md"

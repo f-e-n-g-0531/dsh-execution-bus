@@ -1,0 +1,40 @@
+name: CI
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Verify version tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: node scripts/verify-tag.mjs
+      - run: npm ci --include=dev --ignore-scripts
+      - run: npm run check
+      - run: npm run verify:package
+      - run: npm run pack:candidate
+        id: pack
+      - run: npm run test:install -- artifacts/candidate/${{ steps.pack.outputs.filename }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: execution-bus-${{ matrix.os }}-node-${{ matrix.node }}
+          path: artifacts/candidate/
+          if-no-files-found: error
+          retention-days: 14

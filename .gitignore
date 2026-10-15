@@ -1,0 +1,5 @@
+node_modules/
+dev/host-snapshot/
+dev/github-api.mjs
+artifacts/
+*.tgz

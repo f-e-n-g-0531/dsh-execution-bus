@@ -1,0 +1,53 @@
+{
+  "name": "@feng0531/dsh-execution-bus",
+  "version": "0.1.0",
+  "type": "module",
+  "private": false,
+  "license": "SEE LICENSE IN LICENSE",
+  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
+  "repository": { "type": "git", "url": "git+https://github.com/f-e-n-g-0531/dsh-execution-bus.git" },
+  "description": "执行总线 / Execution Bus: bounded DSH handler dispatch with original-call waiting",
+  "main": "dist/plugin.js",
+  "exports": {
+    ".": "./dist/plugin.js",
+    "./core": "./dist/bus.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "README.md",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "pack": "npm pack",
+    "check": "npm test",
+    "prepack": "npm run check && npm run verify:package",
+    "verify:package": "node scripts/verify-package.mjs",
+    "test:install": "node scripts/test-install.mjs",
+    "pack:candidate": "node scripts/pack.mjs",
+    "verify:release": "node scripts/release-preflight.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/dsh-jobs": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-agent-loop": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-fs-local": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-jobs": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-jobs-local": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tool-fs": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tool-jobs": "0.2.0-rc.2",
+    "@types/node": "^22",
+    "prettier": "3.6.2",
+    "typescript": "~5.9.3",
+    "yaml": "2.9.1"
+  }
+}
