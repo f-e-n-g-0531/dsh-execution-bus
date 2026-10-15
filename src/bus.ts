@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from "node:crypto";
+import { assertJson } from "./json.js";
 export type State =
   | "queued"
   | "running"
@@ -88,6 +89,7 @@ function canonical(v: unknown): string {
   );
 }
 export function parse(raw: unknown): Message {
+  assertJson(raw);
   const m = object(raw);
   if (
     Object.keys(m).some(
@@ -299,7 +301,12 @@ export class ExecutionBus {
       fingerprint = canonical(m);
     if (previous && previous !== fingerprint) throw Error("MESSAGE_CONFLICT");
     if (!previous) {
-      if (e.messages.size >= 128) throw Error("MESSAGE_LIMIT");
+      // Keep one emergency control slot: read traffic must never prevent cancellation.
+      if (e.messages.size >= 128) {
+        if (m.type !== "cancel") throw Error("MESSAGE_LIMIT");
+        if (e.view.cancelRequested || terminal(e.view.state))
+          return this.view(e);
+      }
       e.messages.set(m.messageId, fingerprint);
       if (m.type === "cancel") this.cancel(e);
     }
@@ -317,12 +324,29 @@ export class ExecutionBus {
   }
   private finish(e: Entry, state: State, result?: unknown, error?: string) {
     if (terminal(e.view.state)) return;
+    // Prepare the delivery snapshot BEFORE committing an irreversible terminal state.
+    let next: RecordView = { ...e.view, state, sequence: e.view.sequence + 1 };
+    if (result !== undefined) next.result = result;
+    if (error) next.error = error;
+    let snapshot: RecordView;
+    try {
+      snapshot = freezeJson(structuredClone(next));
+    } catch {
+      state = "unknown";
+      next = {
+        requestId: e.view.requestId,
+        state,
+        sequence: e.view.sequence + 1,
+        cancelRequested: e.view.cancelRequested,
+        delivery: e.view.delivery,
+        error: "RESULT_NOT_RETAINED",
+      };
+      snapshot = freezeJson({ ...next });
+    }
     e.created = Date.now();
-    e.view.state = state;
-    if (result !== undefined) e.view.result = result;
-    if (error) e.view.error = error;
+    e.view = { ...next, sequence: next.sequence - 1 };
     this.emit(e, state, { state });
-    e.resolve(freezeJson(this.view(e)));
+    e.resolve(snapshot);
     e.listeners.clear();
   }
   private pump() {
@@ -365,6 +389,7 @@ export class ExecutionBus {
       });
       let json: string | undefined;
       try {
+        assertJson(result);
         json = JSON.stringify(result);
       } catch {
         this.finish(e, "unknown", undefined, "RESULT_NOT_RETAINED");

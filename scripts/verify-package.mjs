@@ -19,6 +19,8 @@ export function verifyReport(r, p) {
     "cordis.patch.yml",
     "dist/test-mode.js",
     "dist/test-mode.d.ts",
+    "dist/json.js",
+    "dist/json.d.ts",
     "dist/bus.js",
     "dist/bus.d.ts",
     "dist/plugin.js",

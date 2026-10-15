@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from "node:crypto";
+import { assertJson } from "./json.js";
 export function object(v) {
     if (!v || typeof v !== "object" || Array.isArray(v))
         throw Error("INVALID_OBJECT");
@@ -19,6 +20,7 @@ function canonical(v) {
         "}");
 }
 export function parse(raw) {
+    assertJson(raw);
     const m = object(raw);
     if (Object.keys(m).some((k) => ![
         "protocolVersion",
@@ -220,8 +222,13 @@ export class ExecutionBus {
         if (previous && previous !== fingerprint)
             throw Error("MESSAGE_CONFLICT");
         if (!previous) {
-            if (e.messages.size >= 128)
-                throw Error("MESSAGE_LIMIT");
+            // Keep one emergency control slot: read traffic must never prevent cancellation.
+            if (e.messages.size >= 128) {
+                if (m.type !== "cancel")
+                    throw Error("MESSAGE_LIMIT");
+                if (e.view.cancelRequested || terminal(e.view.state))
+                    return this.view(e);
+            }
             e.messages.set(m.messageId, fingerprint);
             if (m.type === "cancel")
                 this.cancel(e);
@@ -242,14 +249,32 @@ export class ExecutionBus {
     finish(e, state, result, error) {
         if (terminal(e.view.state))
             return;
-        e.created = Date.now();
-        e.view.state = state;
+        // Prepare the delivery snapshot BEFORE committing an irreversible terminal state.
+        let next = { ...e.view, state, sequence: e.view.sequence + 1 };
         if (result !== undefined)
-            e.view.result = result;
+            next.result = result;
         if (error)
-            e.view.error = error;
+            next.error = error;
+        let snapshot;
+        try {
+            snapshot = freezeJson(structuredClone(next));
+        }
+        catch {
+            state = "unknown";
+            next = {
+                requestId: e.view.requestId,
+                state,
+                sequence: e.view.sequence + 1,
+                cancelRequested: e.view.cancelRequested,
+                delivery: e.view.delivery,
+                error: "RESULT_NOT_RETAINED",
+            };
+            snapshot = freezeJson({ ...next });
+        }
+        e.created = Date.now();
+        e.view = { ...next, sequence: next.sequence - 1 };
         this.emit(e, state, { state });
-        e.resolve(freezeJson(this.view(e)));
+        e.resolve(snapshot);
         e.listeners.clear();
     }
     pump() {
@@ -289,6 +314,7 @@ export class ExecutionBus {
             });
             let json;
             try {
+                assertJson(result);
                 json = JSON.stringify(result);
             }
             catch {

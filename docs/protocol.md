@@ -2,12 +2,12 @@
 
 ## 输入
 
-严格 JSON，最大 16 KiB，不接受额外顶层字段。messageId / requestId 为 1–128 位字母、数字、下划线、点、冒号或短横线。
+严格无损 JSON，最大 16 KiB，不接受额外顶层字段。JSON 值最大深度 64、访问节点最多 65536；拒绝非有限数字、负零、undefined、函数、符号、稀疏数组、访问器属性、特殊对象和循环引用。messageId / requestId 为 1–128 位字母、数字、下划线、点、冒号或短横线。
 
 
 type 为 request 时 payload 为 {handler,input}；type 为 status / result / cancel 时 payload 必须为 {}。不支持其他类型或版本。sessionId、权限、工作目录不能出现在输入中，可信归属只能由宿主工具上下文绑定。
 
-- messageId 标识一条消息；同请求内同 messageId 不同内容拒绝。消息记账最多 128 条，超过拒绝新消息，不自动遗忘取消记账。
+- messageId 标识一条消息；同请求内同 messageId 不同内容拒绝。普通消息记账最多 128 条，超过拒绝普通新消息。首次有效取消可使用额外一个保留槽，最多 129 条；之后的新取消不再增加记账，已记录消息 ID 的冲突检查仍生效，不会因查询耗尽额度而丧失取消路径。
 - requestId 是一次逻辑操作的稳定幂等键；作用域为当前插件实例 + 宿主 session。相同 requestId 不同 handler/input 拒绝冲突，相同输入使用新 requestId 仍是新操作。
 - 输入规范排序后的摘要仅用于同 requestId 冲突比较，不作永久参数去重。保存期后旧键会失效，调用者不得因此盲目重跑有副作用操作。
 - callId / rootCallId / Agent / parent token 来自宿主；通过工具原本的 Promise 关联结果，不依赖模型提供的身份。
@@ -27,13 +27,13 @@ queued → cancelled。终态不可变；取消终态任务只返回原状态。
 
 运行中取消先置 cancelRequested 并触发 AbortSignal，不立即声称 cancelled。Handler 用 AbortError 确认取消后才 cancelled；收到取消仍成功返回则 success 获胜；取消后其他异常为 unknown。Handler 必须合作取消并等待自身资源停止，不能把部分副作用当作已撤销。初版内置 Handler 仅为受控测试和只读宿主 read，没有非幂等写操作。
 
-异常是固定错误码，不将异常堆栈/原文写日志。过大或不可保存的结果进入 unknown / RESULT_NOT_RETAINED，不因结果传输失败自动执行一次。执行结束不等于交付，delivery 单独记录 pending / returned；returned 仅代表插件已走到工具返回路径，**不是会话持久化提交确认**。done 快照保留当时的 pending，后续查询可见 returned。宿主可能因取消/后置策略改变最终工具结果，插件不声称已确认模型收到。
+异常是固定错误码，不将异常堆栈/原文写日志。结果遵守同样的严格 JSON 深度/节点与值约束；过大、会丢失信息或不可保存的结果进入 unknown / RESULT_NOT_RETAINED，不因结果传输失败自动执行一次。执行结束不等于交付，delivery 单独记录 pending / returned；returned 仅代表插件已走到工具返回路径，**不是会话持久化提交确认**。done 快照保留当时的 pending，后续查询可见 returned。宿主可能因取消/后置策略改变最终工具结果，插件不声称已确认模型收到。
 
 ## 容量和清理
 
 默认并发 2，待分发队列 32，记录 256，单结果 JSON 64 KiB；所有请求先经上限检查，满则 BACKPRESSURE，不自动重试。Job 仍受宿主自己的每 owner 容量限制。队列不提供公平性 SLA，单会话可占满实例。
 
-终态自完成后保存一小时；新受理时惰性清理，可通过 core.sweep 主动清理。无定时器常驻、无磁盘结果存储、无日志输出。插件关闭先停止受理，取消队列与运行任务，等待合作 Handler，清理内存；不合作的 Handler 会阻碍关闭，插件无法安全硬杀同进程代码。
+终态自完成后保存一小时；新受理及控制消息查询时惰性清理，可通过 core.sweep 主动清理。无定时器常驻、无磁盘结果存储、无日志输出。插件关闭先停止受理，取消队列与运行任务，等待合作 Handler，清理内存；不合作的 Handler 会阻碍关闭，插件无法安全硬杀同进程代码。
 
 敏感文件结果仍可能进入宿主原有工具会话日志，本插件不具备任意文本秘密识别能力。只请求确实需要的内容；不将敏感内容放入请求标识。结果长度检查发生在 Handler 返回后，扩展 Handler 自身也必须限制分配，不可把此检查当成防止超大对象构造的内存沙箱。
 

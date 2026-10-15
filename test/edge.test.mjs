@@ -66,7 +66,7 @@ test("record backpressure, message cap and bounded duplicate waiters", async () 
     b.command(o, { ...m, type: "status", messageId: "s" + i, payload: {} });
   assert.throws(
     () =>
-      b.command(o, { ...m, type: "cancel", messageId: "over", payload: {} }),
+      b.command(o, { ...m, type: "status", messageId: "over", payload: {} }),
     /MESSAGE_LIMIT/,
   );
   await b.close();
