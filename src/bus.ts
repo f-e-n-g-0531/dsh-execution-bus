@@ -142,7 +142,8 @@ export class ExecutionBus {
       retentionMs: 3600000,
     },
   ) {
-    for (const v of Object.values(options))
+    this.options = Object.freeze({ ...options });
+    for (const v of Object.values(this.options))
       if (!Number.isSafeInteger(v) || v < 1) throw Error("INVALID_OPTIONS");
   }
   register(name: string, handler: Handler) {
@@ -225,11 +226,11 @@ export class ExecutionBus {
       const previous = e.messages.get(m.messageId);
       if (previous && previous !== canonical(m))
         throw Error("MESSAGE_CONFLICT");
-      if (!previous) {
-        if (e.messages.size >= 128) throw Error("MESSAGE_LIMIT");
-        e.messages.set(m.messageId, canonical(m));
-      }
-      return this.attachment(e, onEvent, m.messageId);
+      if (!previous && e.messages.size >= 128) throw Error("MESSAGE_LIMIT");
+      // Acquire the attachment before committing its message identity. Rejection is side-effect free.
+      const attached = this.attachment(e, onEvent, m.messageId);
+      if (!previous) e.messages.set(m.messageId, canonical(m));
+      return attached;
     }
     const handler = this.handlers.get(p.handler)?.handler;
     if (!handler) throw Error("UNKNOWN_HANDLER");

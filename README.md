@@ -4,7 +4,7 @@
 
 “萧何”是产品与模式显示名，执行总线是其技术功能；不新增人物 Agent，不进行角色扮演。仓库 dsh-execution-bus、npm 包名、execution_bus 工具名及 execution-bus-test 预设 ID 保持不变。历史版本发布说明保留当时名称。
 
-DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **0.2.5**
+DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **0.2.6**
 
 > 当前是早期可运行版本，不是完整生产验收版。已验证真实 DSH 组件和脚本模型驱动的内存会话；真实模型、桌面界面和 PTC 完整链路尚未验收。**不支持重启后恢复任务。**
 
@@ -102,7 +102,7 @@ flowchart TD
 2. 在你选定的隔离 DSH 配置依赖目录安装固定版本，不要在 DSH 程序安装目录执行：
 
    ```powershell
-   npm install --ignore-scripts @feng0531/dsh-execution-bus@0.2.5
+   npm install --ignore-scripts @feng0531/dsh-execution-bus@0.2.6
    ```
 
    这是 npm 目录示例。若目标配置使用 pnpm，应沿用其包管理器，不混用锁文件。遇到宿主 peer 版本冲突就停止，不用强制安装绕过。
@@ -231,7 +231,7 @@ npm run test:install    # 临时目录安装，不操作日常 DSH
 
 - [协议和投递语义](<docs/protocol.md>)：字段、状态、重复处理与取消规则。
 - [宿主兼容性与源码调用链](<docs/host-compatibility.md>)：为什么可以等待，为什么不能跨重启恢复。
-- [验证记录](<docs/validation.md>)、[0.2.5 发布说明](<docs/releases/0.2.5.md>)：已验证与未验证范围。
+- [验证记录](<docs/validation.md>)、[0.2.6 发布说明](<docs/releases/0.2.6.md>)：已验证与未验证范围。
 - [维护者发布流程](<docs/RELEASING.md>)：标签 CI、安装包校验与正式发布门禁。
 
 ## 许可
