@@ -16,7 +16,7 @@ type 为 request 时 payload 为 {handler,input}；type 为 status / result / ca
 
 核心 submit 返回 accepted 事件和 done Promise。受理只意味着已进入内存记录和队列，durable:false；不是成功。事件包含 protocolVersion、messageId、requestId、correlationId（首次请求 messageId）、sequence、type、payload。每请求 sequence 单调递增，accepted 是当前序号的快照，不占新增序号。
 
-事件类型：accepted、started、progress、cancel_requested、succeeded、failed、cancelled、unknown。进度只接受 Handler 正整数序号递增的百分比，重复、乱序、终态后进度丢弃。进程内投递，无外部消息接收端，也不支持任意远端终态注入；终态只由总线持有的执行 Promise 结算。观察者是最佳努力通知：同步抛错及异步 Promise 拒绝均被隔离，不记录异常原文；不等待观察者完成，不保证关闭前异步通知已经完成，观察者须自行管理资源。
+事件类型：accepted、started、progress、cancel_requested、succeeded、failed、cancelled、unknown。进度只接受 Handler 正整数序号递增的百分比，重复、乱序、终态后进度丢弃。进程内投递，无外部消息接收端，也不支持任意远端终态注入；终态只由总线持有的执行 Promise 结算。事件及其 payload 在投递前深度冻结，观察者不得修改请求关联、序号、类型或进度内容。观察者是最佳努力通知：同步抛错及异步 Promise 拒绝均被隔离，不记录异常原文；不等待观察者完成，不保证关闭前异步通知已经完成，观察者须自行管理资源。
 
 工具的 request 保持 pending，最终返回 RecordView（requestId,state,sequence,cancelRequested,delivery,result?,error?,progress?）；status/result/cancel 返回同一种当前快照。工具不会提前返回 accepted 或 taskId，也不会用聊天进度消息唤醒模型。Job 的 UI progress 只含状态/百分比。
 
@@ -47,6 +47,6 @@ queued → cancelled。终态不可变；取消终态任务只返回原状态。
 
 ## 扩展 Handler
 
-core 导出 ExecutionBus、Handler 和 Capability 类型。register(name,handler) 返回注销函数；同名拒绝。Handler 提供 validate 和 async run，执行上下文仅有 requestId、signal、progress 与最小执行 capability，不传聊天历史。注销不影响已受理任务捕获的 Handler；关闭时等待它们。
+core 导出 ExecutionBus、Handler 和 Capability 类型。register(name,handler) 返回幂等注销函数，绑定唯一注册令牌；旧函数不会删除后来同名注册，即使复用同一 Handler 对象。同名活跃注册拒绝。Handler 提供 validate 和 async run，执行上下文仅有 requestId、signal、progress 与最小执行 capability，不传聊天历史。注销不影响已受理任务捕获的 Handler；关闭时等待它们。
 
 当前插件内置注册 test 与 host.read。尚未公开 Cordis Handler 注册服务，其他插件不能假定存在 ctx.executionBus；跨插件动态注册属于后续事项。

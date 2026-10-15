@@ -75,9 +75,15 @@ export class ExecutionBus {
     register(name, handler) {
         if (this.handlers.has(name))
             throw Error("DUPLICATE_HANDLER");
-        this.handlers.set(name, handler);
+        const registration = { handler, token: Symbol(name) };
+        this.handlers.set(name, registration);
+        let disposed = false;
         return () => {
-            this.handlers.delete(name);
+            if (disposed)
+                return;
+            disposed = true;
+            if (this.handlers.get(name)?.token === registration.token)
+                this.handlers.delete(name);
         };
     }
     key(o, id) {
@@ -87,7 +93,7 @@ export class ExecutionBus {
     }
     emit(e, type, payload, correlationId = "") {
         e.view.sequence++;
-        const event = {
+        const event = freezeJson({
             protocolVersion: 1,
             messageId: randomUUID(),
             requestId: e.view.requestId,
@@ -95,7 +101,7 @@ export class ExecutionBus {
             sequence: e.view.sequence,
             type,
             payload,
-        };
+        });
         for (const f of e.listeners)
             try {
                 // Observe promise rejection without awaiting or blocking task settlement.
@@ -148,7 +154,7 @@ export class ExecutionBus {
             }
             return this.attachment(e, onEvent, m.messageId);
         }
-        const handler = this.handlers.get(p.handler);
+        const handler = this.handlers.get(p.handler)?.handler;
         if (!handler)
             throw Error("UNKNOWN_HANDLER");
         handler.validate(input);

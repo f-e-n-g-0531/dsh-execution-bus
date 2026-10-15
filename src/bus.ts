@@ -129,7 +129,7 @@ const terminal = (s: State) => !["queued", "running"].includes(s);
 /** Volatile single-process bus; no acceptance durability or automatic execution retry. */
 export class ExecutionBus {
   private entries = new Map<string, Entry>();
-  private handlers = new Map<string, Handler>();
+  private handlers = new Map<string, { handler: Handler; token: symbol }>();
   private queue: Entry[] = [];
   private running = 0;
   private closed = false;
@@ -147,9 +147,14 @@ export class ExecutionBus {
   }
   register(name: string, handler: Handler) {
     if (this.handlers.has(name)) throw Error("DUPLICATE_HANDLER");
-    this.handlers.set(name, handler);
+    const registration = { handler, token: Symbol(name) };
+    this.handlers.set(name, registration);
+    let disposed = false;
     return () => {
-      this.handlers.delete(name);
+      if (disposed) return;
+      disposed = true;
+      if (this.handlers.get(name)?.token === registration.token)
+        this.handlers.delete(name);
     };
   }
   private key(o: Owner, id: string) {
@@ -163,7 +168,7 @@ export class ExecutionBus {
     correlationId = "",
   ) {
     e.view.sequence++;
-    const event: Event = {
+    const event: Event = freezeJson({
       protocolVersion: 1,
       messageId: randomUUID(),
       requestId: e.view.requestId,
@@ -171,7 +176,7 @@ export class ExecutionBus {
       sequence: e.view.sequence,
       type,
       payload,
-    };
+    });
     for (const f of e.listeners)
       try {
         // Observe promise rejection without awaiting or blocking task settlement.
@@ -226,7 +231,7 @@ export class ExecutionBus {
       }
       return this.attachment(e, onEvent, m.messageId);
     }
-    const handler = this.handlers.get(p.handler);
+    const handler = this.handlers.get(p.handler)?.handler;
     if (!handler) throw Error("UNKNOWN_HANDLER");
     handler.validate(input);
     if (
