@@ -17,6 +17,8 @@ export function verifyReport(r, p) {
     "package.json",
     "README.md",
     "cordis.patch.yml",
+    "dist/preset.js",
+    "dist/preset.d.ts",
     "dist/test-mode.js",
     "dist/test-mode.d.ts",
     "dist/json.js",
@@ -47,6 +49,7 @@ export function verifyReport(r, p) {
     ".": "./dist/plugin.js",
     "./core": "./dist/bus.js",
     "./test-mode": "./dist/test-mode.js",
+    "./preset": "./dist/preset.js",
   });
   for (const target of Object.values(p.exports))
     assert.ok(paths.has(target.slice(2)));

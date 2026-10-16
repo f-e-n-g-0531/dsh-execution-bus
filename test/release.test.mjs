@@ -22,6 +22,8 @@ test("package whitelist rejects missing exports and sensitive additions", () => 
     "package.json",
     "README.md",
     "cordis.patch.yml",
+    "dist/preset.js",
+    "dist/preset.d.ts",
     "dist/test-mode.js",
     "dist/test-mode.d.ts",
     "dist/json.js",

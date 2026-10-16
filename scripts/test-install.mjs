@@ -58,6 +58,7 @@ try {
   assert.equal(actual.version, expected.version);
   // A fresh child process rooted outside this checkout prevents resolving source devDependencies.
   const source = `import assert from 'node:assert/strict';import * as plugin from './node_modules/@feng0531/dsh-execution-bus/dist/plugin.js';
+const preset=await import('./node_modules/@feng0531/dsh-execution-bus/dist/preset.js');assert.equal(preset.PRESET_ID,'execution-bus-test');assert.equal(preset.derivePreset('[]').plugins.at(-1).name,'@feng0531/dsh-execution-bus/test-mode');
 assert.equal(plugin.name,'execution-bus');assert.deepEqual(plugin.inject,['tools','jobs']);let definition;const disposers=[];
 plugin.apply({effect(fn){disposers.push(fn())},tools:{register(d){definition=d}}});assert.equal(definition.name,'execution_bus');assert.equal(typeof definition.execute,'function');
 await assert.rejects(definition.execute({},{}),/OWNING_SESSION_REQUIRED/);for(const dispose of disposers)await dispose();
