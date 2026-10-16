@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from "node:crypto";
 import { assertJson } from "./json.js";
+import { Diagnostics } from "./diagnostics.js";
 export function object(v) {
     if (!v || typeof v !== "object" || Array.isArray(v))
         throw Error("INVALID_OBJECT");
@@ -58,8 +59,25 @@ export class ExecutionBus {
     entries = new Map();
     handlers = new Map();
     queue = [];
+    readyOwners = [];
     running = 0;
     closed = false;
+    telemetry = new Diagnostics();
+    diagnostics() {
+        return {
+            ...this.telemetry.snapshot(),
+            phase: this.shutdownPhase,
+            queued: this.queue.length,
+            running: this.running,
+            records: this.entries.size,
+            retainedResultBytes: [...this.entries.values()].reduce((sum, e) => sum +
+                (e.view.result === undefined
+                    ? 0
+                    : Buffer.byteLength(JSON.stringify(e.view.result))), 0),
+        };
+    }
+    closing;
+    shutdownPhase = "open";
     constructor(options = {
         concurrency: 2,
         queueLimit: 32,
@@ -119,16 +137,30 @@ export class ExecutionBus {
             type,
             payload,
         });
-        for (const f of e.listeners)
-            try {
-                // Observe promise rejection without awaiting or blocking task settlement.
-                void Promise.resolve(f(event)).catch(() => {
-                    /* Async observers are best-effort; never leak their error text. */
-                });
+        // Snapshot and enqueue before invoking user code: nested cancellation cannot
+        // overtake the current event for later observers. Removed listeners are skipped.
+        e.notifications.push({ event, listeners: [...e.listeners] });
+        if (e.dispatching)
+            return;
+        e.dispatching = true;
+        try {
+            while (e.notifications.length) {
+                const batch = e.notifications.shift();
+                for (const listener of batch.listeners) {
+                    if (!e.listeners.has(listener))
+                        continue;
+                    try {
+                        void Promise.resolve(listener(batch.event)).catch(() => { });
+                    }
+                    catch { }
+                }
             }
-            catch {
-                /* Observers cannot alter execution. */
-            }
+        }
+        finally {
+            e.dispatching = false;
+            if (terminal(e.view.state))
+                e.listeners.clear();
+        }
     }
     view(e) {
         return structuredClone(e.view);
@@ -170,6 +202,7 @@ export class ExecutionBus {
             const attached = this.attachment(e, onEvent, m.messageId);
             if (!previous)
                 e.messages.set(m.messageId, canonical(m));
+            this.telemetry.record(e.trace, "reused");
             return attached;
         }
         const handler = this.handlers.get(p.handler)?.handler;
@@ -182,6 +215,7 @@ export class ExecutionBus {
         let resolve;
         const done = new Promise((r) => (resolve = r));
         e = {
+            trace: this.telemetry.begin(),
             invoke,
             correlationId: m.messageId,
             owner: owner.sessionId,
@@ -199,13 +233,18 @@ export class ExecutionBus {
             done,
             resolve,
             listeners: new Set(),
+            notifications: [],
+            dispatching: false,
             sourceSequence: 0,
             created: Date.now(),
             messages: new Map([[m.messageId, canonical(m)]]),
         };
         this.entries.set(key, e);
+        this.telemetry.record(e.trace, "accepted");
         const attached = this.attachment(e, onEvent, m.messageId);
         this.queue.push(e);
+        if (!this.readyOwners.includes(e.owner))
+            this.readyOwners.push(e.owner);
         queueMicrotask(() => this.pump());
         return attached;
     }
@@ -235,6 +274,8 @@ export class ExecutionBus {
                     e.listeners.delete(listener);
             },
             returned: () => {
+                if (e.view.delivery !== "returned")
+                    this.telemetry.record(e.trace, "returned");
                 e.view.delivery = "returned";
             },
         };
@@ -268,10 +309,13 @@ export class ExecutionBus {
         if (terminal(e.view.state) || e.view.cancelRequested)
             return;
         e.view.cancelRequested = true;
+        this.telemetry.record(e.trace, "cancel_requested");
         e.controller.abort();
         this.emit(e, "cancel_requested", {});
         if (e.view.state === "queued") {
             this.queue = this.queue.filter((x) => x !== e);
+            if (!this.queue.some((entry) => entry.owner === e.owner))
+                this.readyOwners = this.readyOwners.filter((owner) => owner !== e.owner);
             this.finish(e, "cancelled");
         }
     }
@@ -302,19 +346,33 @@ export class ExecutionBus {
         }
         e.created = Date.now();
         e.view = { ...next, sequence: next.sequence - 1 };
-        this.emit(e, state, { state });
+        this.telemetry.record(e.trace, "terminal");
         e.resolve(snapshot);
-        e.listeners.clear();
+        this.emit(e, state, { state });
+        // A reentrant terminal notification may still be queued behind this batch.
+        if (!e.dispatching)
+            e.listeners.clear();
     }
     pump() {
         while (!this.closed &&
             this.running < this.options.concurrency &&
             this.queue.length) {
-            const e = this.queue.shift();
+            let index = -1;
+            while (this.readyOwners.length && index < 0) {
+                const owner = this.readyOwners.shift();
+                index = this.queue.findIndex((entry) => entry.owner === owner);
+                if (index >= 0 &&
+                    this.queue.some((entry, i) => i !== index && entry.owner === owner))
+                    this.readyOwners.push(owner);
+            }
+            if (index < 0)
+                index = 0;
+            const e = this.queue.splice(index, 1)[0];
             if (e.view.state !== "queued")
                 continue;
             this.running++;
             e.view.state = "running";
+            this.telemetry.record(e.trace, "started");
             this.emit(e, "started", {});
             void this.run(e).finally(() => {
                 this.running--;
@@ -372,12 +430,28 @@ export class ExecutionBus {
                     : "HANDLER_FAILED");
         }
     }
-    async close() {
+    close() {
+        if (this.closing)
+            return this.closing;
         this.closed = true;
-        for (const e of this.entries.values())
-            this.cancel(e);
-        await Promise.all([...this.entries.values()].map((e) => e.done));
-        this.handlers.clear();
-        this.entries.clear();
+        this.shutdownPhase = "cancelling";
+        let resolve, reject;
+        this.closing = new Promise((r, j) => {
+            resolve = r;
+            reject = j;
+        });
+        void (async () => {
+            const entries = [...this.entries.values()];
+            for (const e of entries)
+                this.cancel(e);
+            this.shutdownPhase = "draining";
+            await Promise.all(entries.map((e) => e.done));
+            this.handlers.clear();
+            this.entries.clear();
+            this.queue = [];
+            this.readyOwners = [];
+            this.shutdownPhase = "closed";
+        })().then(resolve, reject);
+        return this.closing;
     }
 }

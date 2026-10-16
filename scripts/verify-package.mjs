@@ -23,6 +23,10 @@ export function verifyReport(r, p) {
     "dist/test-mode.d.ts",
     "dist/json.js",
     "dist/json.d.ts",
+    "dist/execution.js",
+    "dist/execution.d.ts",
+    "dist/diagnostics.js",
+    "dist/diagnostics.d.ts",
     "dist/bus.js",
     "dist/bus.d.ts",
     "dist/plugin.js",
@@ -35,7 +39,7 @@ export function verifyReport(r, p) {
     "docs/RELEASING.md",
     "docs/releases/" + p.version + ".md",
   ];
-  const allowed = new Set([...required, "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/FLOW-TEST.md"]);
+  const allowed = new Set([...required, "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/FLOW-TEST.md", "docs/OPTIMIZATION.md"]);
   const paths = new Set();
   for (const f of r.files) {
     assert.ok(allowed.has(f.path) || /^docs[/]releases[/][0-9]+[.][0-9]+[.][0-9]+[.]md$/.test(f.path), "Unexpected packed path: " + f.path);

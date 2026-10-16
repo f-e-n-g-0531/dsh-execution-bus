@@ -53,8 +53,35 @@ export declare class ExecutionBus {
     private entries;
     private handlers;
     private queue;
+    private readyOwners;
     private running;
     private closed;
+    private telemetry;
+    diagnostics(): {
+        phase: "open" | "cancelling" | "draining" | "closed";
+        queued: number;
+        running: number;
+        records: number;
+        retainedResultBytes: number;
+        counts: {
+            accepted?: number | undefined;
+            started?: number | undefined;
+            cancel_requested?: number | undefined;
+            terminal?: number | undefined;
+            returned?: number | undefined;
+            job_created?: number | undefined;
+            job_released?: number | undefined;
+            job_error?: number | undefined;
+            reused?: number | undefined;
+        };
+        traces: {
+            operation: number;
+            stage: import("./diagnostics.js").TraceStage;
+            elapsedMs: number;
+        }[];
+    };
+    private closing?;
+    private shutdownPhase;
     constructor(options?: {
         concurrency: number;
         queueLimit: number;
