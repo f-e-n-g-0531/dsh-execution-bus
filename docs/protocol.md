@@ -1,52 +1,101 @@
-# 协议 v1、状态与投递
+# 协议 v1：请求、状态与结果
 
-## 输入
+本文面向调用者和 core Handler 开发者。消息示例见[使用说明](<../README.md>)，兼容版本见[宿主说明](<host-compatibility.md>)。
 
-严格无损 JSON，最大 16 KiB，不接受额外顶层字段。JSON 值最大深度 64、访问节点最多 65536；拒绝非有限数字、负零、undefined、函数、符号、稀疏数组、访问器属性、特殊对象和循环引用；数组只接受当前运行域的原生 Array.prototype，拒绝数组子类、自定义原型及跨域数组。messageId / requestId 为 1–128 位字母、数字、下划线、点、冒号或短横线。
+## 1. 请求结构
 
+```json
+{
+  "protocolVersion": 1,
+  "messageId": "message-001",
+  "requestId": "operation-001",
+  "type": "request",
+  "payload": { "handler": "test", "input": { "delayMs": 1000, "fail": false } }
+}
+```
 
-type 为 request 时 payload 为 {handler,input}；type 为 status / result / cancel 时 payload 必须为 {}。不支持其他类型或版本。sessionId、权限、工作目录不能出现在输入中，可信归属只能由宿主工具上下文绑定。
+| 字段 | 规则 |
+|---|---|
+| `protocolVersion` | 必须为数字 1 |
+| `messageId` | 单请求范围内一条消息的编号；相同编号不同内容拒绝 |
+| `requestId` | 同一逻辑执行的稳定编号；同会话内重复输入复用执行，不同输入拒绝冲突 |
+| `type` | `request`、`status`、`result` 或 `cancel` |
+| `payload` | request 必须为 `{handler,input}`；其他三种类型必须为 `{}` |
 
-- messageId 标识一条消息；同请求内同 messageId 不同内容拒绝。普通消息记账最多 128 条，超过拒绝普通新消息。首次有效取消可使用额外一个保留槽，最多 129 条；之后的新取消不再增加记账，已记录消息 ID 的冲突检查仍生效，不会因查询耗尽额度而丧失取消路径。
-- requestId 是一次逻辑操作的稳定幂等键；作用域为当前插件实例 + 宿主 session。相同 requestId 不同 handler/input 拒绝冲突，相同输入使用新 requestId 仍是新操作。
-- 输入规范排序后的摘要仅用于同 requestId 冲突比较，不作永久参数去重。保存期后旧键会失效，调用者不得因此盲目重跑有副作用操作。
-- callId / rootCallId / Agent / parent token 来自宿主；通过工具原本的 Promise 关联结果，不依赖模型提供的身份。
+两个 ID 都只接受 1–128 位字母、数字、下划线、点、冒号和短横线；不接受其他顶层字段。身份、权限和工作目录不能由消息另行指定。宿主工具上下文中的 Agent、调用 ID 与 token 才是可信关联。
 
-## 输出
+请求最大 16 KiB。输入和结果采用严格 JSON：深度最多 64，访问节点最多 65536；拒绝非有限数字、负零、undefined、函数、符号、稀疏数组、访问器、特殊对象和循环引用。普通对象接受当前运行域 Object.prototype 或 null 原型；数组只接受当前运行域 Array.prototype。跨运行域值须先转换为受支持的纯数据，不能假定任意 JavaScript 对象都可传入。
 
-核心 submit 返回 accepted 事件和 done Promise。受理只意味着已进入内存记录和队列，durable:false；不是成功。事件包含 protocolVersion、messageId、requestId、correlationId（首次请求 messageId）、sequence、type、payload。每请求 sequence 单调递增，accepted 是当前序号的快照，不占新增序号。
+### 去重与消息额度
 
-事件类型：accepted、started、progress、cancel_requested、succeeded、failed、cancelled、unknown。进度只接受 Handler 正整数序号递增的百分比，重复、乱序、终态后进度丢弃。进程内投递，无外部消息接收端，也不支持任意远端终态注入；终态只由总线持有的执行 Promise 结算。事件及其 payload 在投递前深度冻结，观察者不得修改请求关联、序号、类型或进度内容。每个附着拥有独立观察者注册和名额，即使复用同一回调；detach 幂等且只移除自己的通知，不影响其他附着或执行结果。观察者是最佳努力通知：同步抛错及异步 Promise 拒绝均被隔离，不记录异常原文；不等待观察者完成，不保证关闭前异步通知已经完成，观察者须自行管理资源。
+- 逻辑键是 **当前存活总线实例 + 宿主会话身份 + requestId**。不同会话不能查询/取消彼此记录；同预设仍共享容量。
+- 对参数规范排序后的摘要仅用于同 requestId 的冲突比较，不用于永久按参数去重。相同参数的新 requestId 仍是新操作。
+- 普通消息最多记账 128 条，含首次请求、重复请求及查询。满后拒绝普通新消息；首次尚未确认的有效取消可使用一个额外控制槽，最多 129 条。已记账消息的冲突检查不因控制槽而放松。
+- 活跃观察者附着最多 32 个；每个附着独立占名额，即使共用回调。附着被拒绝时不占用新消息编号/额度。
+- 终态超期清理后旧请求键失效，不应把此机制用于长期避免外部副作用重复。
 
-工具的 request 保持 pending，最终返回 RecordView（requestId,state,sequence,cancelRequested,delivery,result?,error?,progress?）；status/result/cancel 返回同一种当前快照。工具不会提前返回 accepted 或 taskId，也不会用聊天进度消息唤醒模型。Job 的 UI progress 只含状态/百分比。
+## 2. 工具返回和 core 事件
 
-## 状态转换
+**工具 request 不提前返回 accepted 或仅 taskId。** 它异步等待后返回执行快照；校验、容量、宿主服务等也可能令外层工具调用返回错误，而非执行快照。
 
-queued → running → succeeded / failed / cancelled / unknown。
-queued → cancelled。终态不可变；取消终态任务只返回原状态。
+快照字段：`requestId`、`state`、`sequence`、`cancelRequested`、`delivery`，以及可选 `result`、`error`、`progress`。`status`、`result`、`cancel` 均返回当前快照；`result` 在运行中也只返回当前状态，不额外等待。
 
-运行中取消先置 cancelRequested 并触发 AbortSignal，不立即声称 cancelled。Handler 用 AbortError 确认取消后才 cancelled；收到取消仍成功返回则 success 获胜；取消后其他异常为 unknown。Handler 必须合作取消并等待自身资源停止，不能把部分副作用当作已撤销。初版内置 Handler 仅为受控测试和只读宿主 read，没有非幂等写操作。
+core 的 `submit()` 返回 `accepted`、`done` Promise 和取消/解除通知/返回标记句柄。accepted 只是内存受理或已有记录的快照，`durable:false`，不代表执行成功；终态重取也不代表重新执行。
 
-异常是固定错误码，不将异常堆栈/原文写日志。结果遵守同样的严格 JSON 深度/节点与值约束；过大、会丢失信息或不可保存的结果进入 unknown / RESULT_NOT_RETAINED，不因结果传输失败自动执行一次。执行结束不等于交付，delivery 单独记录 pending / returned；returned 仅代表插件已走到工具返回路径，**不是会话持久化提交确认**。done 快照保留当时的 pending，后续查询可见 returned。宿主可能因取消/后置策略改变最终工具结果，插件不声称已确认模型收到。
+通知包含版本、消息 ID、请求 ID、关联 ID（correlationId）、请求内序号、类型与 payload。accepted 的 correlationId 对应本次提交消息，序号是当前快照；后续事件关联首次请求 messageId，新增序号。类型包括 started、progress、cancel_requested 和 succeeded、failed、cancelled、unknown 四种终态事件。
 
-## 容量和清理
+Handler 报告的进度序号必须递增；重复、乱序及终态后进度忽略，百分比须在 0–100 内。事件及 payload 在通知前冻结。每个附着独立解除通知，detach 不取消执行；取消是另一个操作。观察者抛错或异步拒绝被隔离，不记录异常原文，也不等待观察者资源完成。
 
-默认并发 2，待分发队列 32，记录 256，单结果 JSON 64 KiB；所有请求先经上限检查，满则 BACKPRESSURE，不自动重试。Job 仍受宿主自己的每 owner 容量限制。队列不提供公平性 SLA，单会话可占满实例。core 不传配置时使用默认值；传入配置必须完整包含五项正安全整数，不接受部分配置、额外字段或访问器，缺项立即 INVALID_OPTIONS。core 构造时复制并冻结容量配置，之后修改调用方原对象不改变总线限制；没有动态配置更新接口。重复附着只有成功取得观察者名额后才提交新消息记账，WAITER_LIMIT 拒绝不占用消息 ID 或额度。
+## 3. 执行状态和交付标记
 
-终态自完成后保存一小时；新受理及控制消息查询时惰性清理，可通过 core.sweep 主动清理。无定时器常驻、无磁盘结果存储、无日志输出。插件关闭先停止受理，取消队列与运行任务，等待合作 Handler，清理内存；不合作的 Handler 会阻碍关闭，插件无法安全硬杀同进程代码。
+```text
+queued → running → succeeded / failed / cancelled / unknown
+   └────────────→ cancelled
+```
 
-敏感文件结果仍可能进入宿主原有工具会话日志，本插件不具备任意文本秘密识别能力。只请求确实需要的内容；不将敏感内容放入请求标识。结果长度检查发生在 Handler 返回后，扩展 Handler 自身也必须限制分配，不可把此检查当成防止超大对象构造的内存沙箱。
+终态不可再改成另一终态：
 
-## 投递语义、超时和恢复
+| 状态 | 含义 |
+|---|---|
+| queued | 内存已受理，尚未开始 |
+| running | 正在执行 |
+| succeeded | Handler 正常返回，结果可验证、保存 |
+| failed | 未在取消中的 Handler 执行异常 |
+| cancelled | 排队时取消，或运行 Handler 用 AbortError 确认取消 |
+| unknown | 取消后异常未确认，或执行结果不能可靠保存 |
 
-在同一个存活实例/保存期内，同 session + requestId 多次投递共用一次执行；每个实际工具调用独立取得一次响应。这不是端到端 exactly-once，同一请求重复调用仍会增加宿主工具调用记录。终态状态和结算锁避免一次执行被重复完成；不会额外主动提交会话结果。
+`cancelRequested` 只表示发出了 AbortSignal，不代表停止或回滚。取消后正常返回且结果可保存，成功可获胜；取消后其他异常保守记为 unknown。取消某个正在等待的重复调用，会请求取消整个逻辑执行，不是仅退出该等待者。
 
-无网络传输层，因此自动通信重试次数为 **0**，也不自动重试执行。宿主 Job 60 秒窗口超时只是程序续等，不改变执行状态、不触发模型查询。PTC 外层仍有自己的时限和取消语义。
+执行完成与结果交付分开。`pending`/`returned` 只是插件返回路径的标记；done 快照保留当时值，后续查询可看到更新。**returned 不证明宿主磁盘提交或模型已消费**。外层取消/后置策略仍可能改变返回值。
 
-本版不做持久化：受理/运行/结果/交付任一阶段进程崩溃都会丢失插件记录。宿主日志可能记录请求和结果，不代表插件恢复了执行。跨重启需人工结合宿主 outcome unknown 和外部实际状态处理；不能自动重跑非幂等操作。本版不实现对账钩子或跨进程重试，扩展有副作用 Handler 前必须另行设计这些能力。
+错误也须分层：Handler 异常原文不进入保存结果，使用 HANDLER_FAILED 等固定码；不合法、过大或快照不可保存结果为 unknown / RESULT_NOT_RETAINED。宿主 wait/remove 等服务错误可能作为外层工具错误传出，不能笼统声称所有错误都已脱敏或都是固定码。不要把宿主服务错误文本当成业务执行失败凭据。
 
-## 扩展 Handler
+## 4. 容量、保存与关闭
 
-core 导出 ExecutionBus、Handler 和 Capability 类型。register(name,handler) 返回幂等注销函数，绑定唯一注册令牌；旧函数不会删除后来同名注册，即使复用同一 Handler 对象。同名活跃注册拒绝。Handler 提供 validate 和 async run，执行上下文仅有 requestId、signal、progress 与最小执行 capability，不传聊天历史。注销不影响已受理任务捕获的 Handler；关闭时等待它们。
+| 默认配置 | 值 |
+|---|---|
+| 并发执行 | 2 |
+| 待分发队列 | 32 |
+| 任务记录 | 256 |
+| 单结果 JSON | 64 KiB |
+| 终态保留期 | 自完成起 1 小时 |
 
-当前插件内置注册 test 与 host.read。尚未公开 Cordis Handler 注册服务，其他插件不能假定存在 ctx.executionBus；跨插件动态注册属于后续事项。
+新执行请求受队列和记录容量限制；运行中重复附着受消息/监听名额限制；未过期终态复用不申请新 Job。宿主新 Job 准入还有独立容量要求。没有公平性 SLA，单会话可能占满总线。
+
+core 不传配置时用默认值；显式配置必须完整包含 concurrency、queueLimit、recordLimit、resultBytes、retentionMs 五项正安全整数。拒绝缺项、额外字段与访问器；构造时复制冻结，无动态更新接口。
+
+保留期通过新请求或控制消息触发惰性清理，也可调用实例 `sweep()`；不是精确的一小时定时删除，闲置时记录可能继续占内存，但后续正常查询会先清理过期记录。无磁盘任务库。结果大小检查在 Handler 返回后进行，Handler 自身也必须限制内存分配。敏感返回内容仍可能进入宿主会话日志，本插件不是秘密识别器。
+
+关闭停止受理，取消队列和运行任务，等待合作 Handler。正常路径复用 Job 窗口等待；服务异常后仍先排空执行，再有界检查记录并保留原服务错误。持续故障可能留记录到宿主生命周期清理，不合作 Handler 可能阻碍关闭。
+
+## 5. 重试与恢复语义
+
+当前没有网络传输层，自动通信重试与执行重试均为 0。正常 Job 的 60 秒窗口只由程序续等，不自动改为失败；异常清理有界检查也不是模型轮询或执行重试。
+
+同存活实例、保存期内的请求复用不是端到端 exactly-once；每个实际工具调用仍有自己的宿主结果记录。没有外部终态注入接口，也没有跨重启恢复：任一阶段进程崩溃都会丢失插件内存状态。宿主日志不能复活旧 Promise，不追加聊天消息冒充原调用恢复。
+
+## 6. 扩展 Handler
+
+包的 `./core` 导出 ExecutionBus、Handler、Capability 类型。Handler 只接收输入、requestId、signal、progress 和可选最小 capability，不接收聊天历史。register 返回绑定唯一注册令牌的幂等注销函数，不会误删后来同名注册；已受理请求继续持有原 Handler。
+
+内置 test 和 host.read 没有非幂等写能力。当前没有 ctx.executionBus 服务、远端传输、跨插件动态注册或外部副作用对账契约。扩展有副作用 Handler 前必须另行设计授权、幂等与崩溃对账，不能仅依赖本版请求键。

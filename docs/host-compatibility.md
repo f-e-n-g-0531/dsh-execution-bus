@@ -1,44 +1,75 @@
-# 宿主调查与兼容性
+# 宿主兼容性与接入原理
 
-## 结论：只做插件
+## 兼容目标
 
-调查日期：2026-10-15。当前桌面安装的 runtime 和各 DSH 组件均为 **0.2.0-rc.2**，Cordis 4.0.4。源码来自安装 ASAR，只读提取到项目开发证据目录；未改安装文件。插件针对这个精确版本编译。不能据此推断旧版、新版均兼容。
+源码调查基线为 **2026-10-15 的 DSH 0.2.0-rc.2、Cordis 4.0.4**。本项目用同版本 npm 组件编译和隔离测试；这不是对任意旧版、新版宿主的兼容保证，也不是对读者当前安装版本的自动检测。Node.js 要求为 22 或以上；CI 使用 Node 22、24。
 
-**A. 纯插件可实现**：注册工具、同进程异步等待原调用、可信 Agent 归属、排队及幂等请求、调用现有 read 工具全管线、Job 进度与取消。无需模型参与等待。
+本项目只做插件，没有修改宿主源码、ASAR 或其他插件。
 
-**B. 当前缺少的能力（仅记录，不修改宿主）**：跨进程重新认领原工具调用的公开契约，以及工具结果写入会话日志的持久化确认。若将来宿主提供，至少需要以 session + call-event-seq + callId 进行 CAS 认领、单次提交和可查询提交凭证，且必须在中断恢复合成结果前参与恢复。现在不实现、不伪造这些 API。
+## 接入链路
 
-**C. 本版降级**：受理、队列、结果与交付标记均为内存态。停止/崩溃后不可续接；不会自动重跑。新调用查询只能在当前插件实例的保存期内重取，不能当作恢复原调用。整体交付属于第一阶段、部分完成，不是完整跨重启总线。
+```text
+AgentLoop 发起工具调用
+  → ToolRuntime 校验、策略与可信身份绑定
+  → execution_bus 工具体
+  → 内存去重/排队，宿主 Job 记录和程序等待
+  → test Handler 或经 ToolRuntime 再调用宿主 read
+  → 保存执行结果，清理 Job
+  → 工具体返回
+  → AgentLoop 关联原工具调用并继续会话
+```
 
-## 实际调用链和源码位置
+等待由 Promise 完成，不阻塞宿主线程，不为正常等待反复调用模型。进度只交给 Job 机制；宿主的前后置策略、取消和最终会话提交仍有权改变外层工具结果。
 
-以下均为本机只读提取的**实际发布构建源码**，不是臆测的源码仓库路径。安装归档无法直接被普通文件工具当目录访问，提取脚本只向本项目写入。
+### 与 PTC 的关系
 
-1. [Agent 调度器:506–532](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js#L506-L532)：requireInitiator 得到 Agent，产生 callId、arguments、agent、signal；runGroup 调度且等待结果。不在等待期间请求模型。
-2. [工具注册:2878–2886](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-tools/lib/index.js#L2878-L2886)：ctx.tools.register 是作用域 effect，卸载自动移除。工具 execute 可以返回 Promise。
-3. [可信执行身份:3131–3175](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-tools/lib/index.js#L3131-L3175)：注册表生成 token，保留 callId、rootCallId、agent、signal，快照参数。
-4. [前置策略:3225](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-tools/lib/index.js#L3225) → [执行 waterfall 与工具体:3294–3331](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-tools/lib/index.js#L3294-L3331) → [后置策略:3504](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-tools/lib/index.js#L3504) → [最终 tools/result:3417](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-tools/lib/index.js#L3417)。插件只调用公开 execute，不直接调用 read 的定义体，不跳过这些策略。
-5. [可选 PTC:1294–1307](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-tools/lib/index.js#L1294-L1307)：子调用继承 agent、rootCallId，带 parent token；在原 run_code 时间预算内等待。[超时策略:4–6](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-tool-call-timeout-policy/lib/index.js#L4-L6) 是协作式取消并 drain，不代表外部副作用失败。插件不改全局工具呈现、不拦截其他工具。
-6. [宿主 read:174](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-tool-fs/lib/index.js#L174)：cwd 来自 exec.agent.session.header；[实际读取和输出限制:348](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-tool-fs/lib/index.js#L348)。嵌套 read 在出队时重新进工具管线，沿用当时宿主权限和 fs 实现；插件没有独立 shell、spawn 或文件读取能力。read 的只读访问边界由宿主实际组合的 fs/权限实现决定，不能把 cwd 当作沙箱。隔离测试的 LocalFS 不等于桌面沙箱验证。
-7. [Job start:412–491](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-jobs-local/lib/index.js#L412-L491)：已有 owner 校验、controller admission、输出环、进度句柄、首终态约束；[等待:510](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-jobs-local/lib/index.js#L510)、[进度:717–729](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-jobs-local/lib/index.js#L717-L729)。插件只补排队、请求冲突和结果复用，不再造通用 Job 注册表。
-8. [完成通知抑制:268–270](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-tool-jobs/lib/index.js#L268-L270)：awaited 为 true 时不追加完成通知；插件先注册 wait 再等待终态，并移除已收集 Job。每 60 秒等待窗口续等由程序执行，不调用模型，不把超时改为失败。
-9. [原调用结果提交:680–706](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js#L680-L706)：宿主将结果关联原 callId 和 call-event-seq；插件只 return，不追加 tool/result 或聊天消息。
-10. [中断恢复:717–730](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-session/lib/index.js#L717-L730) 和 [interruptedTurnClosers:904](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-session/lib/index.js#L904)：为未保存结果生成 outcome unknown，不会复活内存中的 Promise。[Agent 恢复:1950](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js#L1950) 使用这个保守闭合机制。
+PTC 是可选入口：外层 `run_code` 可以调用同一个工具。它不是总线本身，也不会因使用本插件取消自身时间预算。可选“萧何”预设选择 native 工具呈现；其他预设原有 PTC 呈现不变。完整 PTC 进程尚未端到端验收。
 
-## 插件扩展方式
+## 源码证据定位
 
-- 工具：ctx.tools.register；服务：Cordis Service 的标准构造注册（例如 [JobRegistry:106–110](../dev/host-snapshot/node_modules/@deepseek-ai/dsh-jobs/lib/index.js#L106-L110)）。本插件没有替换宿主服务。
-- 事件：ctx.on / ctx.waterfall / ctx.emit；副作用生命周期 ctx.effect，异步 disposer 用于取消并等待处理中的任务。本插件未注册全局工具拦截器。
-- 界面：本版不注册自定义前端，复用现有 Jobs 进度事件和默认工具卡片。宿主原有客户端插件体系不是必需依赖；尚未完成该体系全部入口调查，不能提供未核实的 UI 注册示例。
-- 持久化：宿主会话日志有持久化；本地 Job 注册表注释明确是 process-local。二者不能混同为插件可恢复执行权。
+下表位置来自调查时实际安装包的发布构建文件，均是组件内部的 `lib/index.js` 行号，**不是上游 TypeScript 源文件行号**。要复核，请取得相同版本包后定位组件与符号；宿主升级后行号可能变化。
 
-## 名称核对
+| 环节 | 组件、构建行号与符号 | 结论 |
+|---|---|---|
+| 调用与调度 | `@deepseek-ai/dsh-agent-loop`：506–532，`runGroup` 调度路径 | 绑定原调用并等待工具返回 |
+| 注册与卸载 | `@deepseek-ai/dsh-tools`：2878–2886，工具注册；3294–3331，`dispatchToolBody` | 注册为作用域副作用，工具体可异步等待 |
+| 身份与策略 | `@deepseek-ai/dsh-tools`：3131–3175、3225、3504、3417 | 生成可信 token、保留 agent/callId/rootCallId，执行前后策略及结果通知 |
+| PTC 子调用 | `@deepseek-ai/dsh-tools`：1294–1307 | 子调用携带 agent、rootCallId 和 parent token；不是任意身份注入 |
+| 文件读取 | `@deepseek-ai/dsh-tool-fs`：174、348，read 注册/执行路径 | 工作目录来自会话；输出和文件边界由宿主组合决定 |
+| 任务与等待 | `@deepseek-ai/dsh-jobs-local`：412–491 `start`、510 `wait`、717–729 `updateProgress` | 所属访问、容量、进度、取消、首终态与程序等待可复用 |
+| 完成通知 | `@deepseek-ai/dsh-tool-jobs`：268–270 | 正常已等待的完成通知不再额外报告；异常等待通道不承诺这一抑制仍完整生效 |
+| 会话结果提交 | `@deepseek-ai/dsh-agent-loop`：680–706 | 宿主按 callId 和调用事件序号写入结果，插件不自行追加聊天消息 |
+| 中断闭合 | `@deepseek-ai/dsh-session`：717–730、904；`@deepseek-ai/dsh-agent-loop`：1950 | 未保存结果保守闭合为未知，不恢复旧 Promise |
+| 预设注册 | `@deepseek-ai/dsh-agent-preset-registry`：500–539 `register`/`activate` | 独立组合作用域，可供所选 Agent 加入 |
 
-- [npm 官方接口](https://registry.npmjs.org/@feng0531%2Fdsh-execution-bus) 在调查时返回 404：未发现可见同名包，不代表预留成功或拥有发布权限。
-- 现有本地 origin 是 https://github.com/f-e-n-g-0531/dsh-execution-bus.git ，git ls-remote 读取 HEAD 为 06299e9425d6ba197c0d2e04bf8818ddfe471edf。仓库名称已经存在，与当前工作区既有 remote 一致，未创建、推送或修改远程；GitHub API 限流未拿到账户所有权证明。
-- 中文“执行总线”和英文“Execution Bus”是描述性显示名称，不是唯一名称或商标授权结论。
+开发仓库中的提取脚本可在原调查安装布局下生成本地快照；该布局是开发证据，不是用户必需依赖。快照不进入仓库或 npm 包，因此本文不再提供指向未分发快照的相对链接。
 
-## 验证分层
+## 插件能力与边界
 
-真实 npm 宿主组件隔离冒烟：已运行（真实 ToolRuntime / LocalJobs / read / LocalFS，测试 Agent 夹具）。
-真实 AgentLoop + AgentRegistry + SessionStore 内存会话：脚本 LlmAdapter 隔离测试已通过，原工具成功结果只提交一次，再进入下一适配器请求。不是实际模型评测。真实桌面 GUI、磁盘会话持久化提交、真实模型推理续接、PTC 进程端到端：**未验证**。没有安装日常环境，也没有重启或使用模型凭据。组件测试不能替代这些结论。
+### 当前可用
+
+- 标准 Cordis 工具注册、异步等待及生命周期清理。
+- 复用宿主工具管线和 Job 服务，不自行启动进程或实现独立 HTTP 执行服务。
+- bundle patch 注册可选预设，由宿主既有 Agent 预设界面消费元数据，不需要自定义前端。
+- 同预设范围内共享有界总线，但查询/取消按宿主 Agent 的会话身份分隔。
+
+测试预设使用作用域 guard 拒绝非白名单执行，不是隐藏全部其他工具：文件工具套件的 write/edit 仍可能可见。它不是进程或权限沙箱，也不隔离进程资源消耗。宿主 cwd 只是路径解析基准，不是文件访问围栏。
+
+### 当前不提供
+
+- 接管所有现有工具或更改默认 Agent 预设。
+- 持久化受理、跨重启恢复或重新认领原工具调用。
+- 工具结果已写入会话磁盘日志的持久化回执。
+- 远端执行端、通用工作流或有副作用操作的对账能力。
+
+若未来要跨重启接续，需要宿主公开稳定的认领/提交契约；本项目不虚构这样的 API，也不通过聊天消息绕过。
+
+## 故障处理
+
+正常等待使用宿主 Job 窗口续等。等待服务异常后，先排空原执行并保留原服务错误；然后按原 owner 对确切 Job 最多检查 20 次、每次间隔 10 毫秒，尝试清理终态记录。这些是错误恢复检查，不是模型轮询或重跑任务。
+
+宿主 rc.2 没有类型化 Job not-found 错误码。对先行移除的幂等处理仅匹配本调用创建的 Job 的精确错误消息，并确认原 owner 查询中记录已不存在。其他错误不被冒充成功。持续故障时可能遗留记录，不合作 Handler 可能阻碍关闭。
+
+## 哪些是真实验证？
+
+真实组件、真实 AgentLoop 内存会话和真实预设注册表均有隔离测试；模型侧是脚本适配器，部分 Agent 身份是夹具。桌面卡片渲染、实际权限提示/沙箱、磁盘结果提交和真实模型继续推理均未验收。详见[验证范围](<validation.md>)。

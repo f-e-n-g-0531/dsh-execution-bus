@@ -1,29 +1,58 @@
-# 测试与发布流程
+# 维护者发布流程
 
-参考 dsh-vcs 的标签 CI 与联合发布流程，针对纯后端执行总线适配。没有复制 SVN、Monaco 或浏览器 layout 检查，因为本项目没有这些依赖和前端。
+此文面向维护者，使用者从[README](<../README.md>)开始。流程参考 dsh-vcs，使用本项目实际工作流和脚本；没有 SVN 或浏览器布局任务。
 
-## 触发策略
+## 1. 版本与说明
 
-普通分支 push 和 pull_request 不触发 CI。仅 vX.Y.Z 标签 push 和手动 workflow_dispatch 触发 CI；Windows/Ubuntu × Node 22/24 四项矩阵运行相同的构建、测试、包白名单、候选打包和生产依赖隔离安装。手动分支 CI 不能替代正式发布所需的同标签 push CI。
+采用 vX.Y.Z：X 为大版本，Y 为小版本/新增功能，Z 为 BUG 或文档纠错补丁。每轮完成且验证通过的改动主动正式发布；没有确认问题时不为发版本制造改动。
 
-## 本地验证
+包版本、锁文件根版本和标签必须一致，每版提供独立中文发布说明。说明围绕本版变化、使用影响、验证和限制，不把开发流水账当用户文档。保留旧发布说明的版本语境，不移动已有标签、不替换已上传的同版本包。
 
-依次运行 npm ci --include=dev --ignore-scripts、npm run check、npm run verify:package、npm run pack:candidate、npm run test:install。test:install 默认新打包，也允许传入一个本地 tgz。安装目录在系统临时目录中，结束后清理，不操作用户 DSH 配置。
+发布前核对非商业许可证、第三方说明和公开文件，排除凭据、私人材料、宿主源码快照及开发制品。产品显示名为萧何 / Xiao He；仓库、npm 包、工具和预设技术标识保持兼容。
 
-每个版本必须有独立中文发布说明 docs/releases/X.Y.Z.md，注明实际模型/桌面/跨重启等未验证项。package.json、package-lock.json 根版本及标签必须一致。不移动已有标签。
+## 2. 本地验证
 
-## 发布门禁
+```powershell
+npm ci --include=dev --ignore-scripts
+npm run check
+npm run verify:package
+npm run pack:candidate
+npm run test:install -- artifacts/candidate/feng0531-dsh-execution-bus-X.Y.Z.tgz
+```
 
-用户已授权 0.1.0 正式发布，并确认沿用 dsh-vcs 的非商业源码公开许可证。该许可不是 OSI 开源许可证，限制商业项目内部使用与有偿交付，具体以 LICENSE 为准。用户已持续授权本项目每轮改动完成并验证通过后主动正式发布，无需逐次提醒；仍必须通过工作流确认与完整门禁，不表示实际模型验收通过。版本采用 vX.Y.Z：X 大版本、Y 小版本/新增功能、Z BUG 修复；发布不自动安装或重启 DSH。
+把示例 X.Y.Z 替换为待发版本。包安装校验在系统临时目录运行，只检查生产依赖、入口及简化注册；不是实际桌面验收。候选生成命令不自行保证源码已重建，必须按上述顺序先执行 check。
 
-准备正式发布前：由用户明确授权；确定 LICENSE 与包 license 字段；检查公开材料、第三方许可和敏感信息；更新版本、锁文件与发布说明；提交并推送已批准的版本标签；等待四矩阵通过。
+## 3. 标签 CI
 
-从 main 手动运行 Publish GitHub and npm，输入已存在标签及确认词 publish-execution-bus。推荐为 npm-release environment 配置必须审批的维护者及适当分支限制，并配置 NPM_AUTOMATION_TOKEN。仓库环境审批和 token 均需要维护者配置，本次没有配置远端。
+只有匹配格式的版本标签 push 和手动 workflow_dispatch 触发 [CI](https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/.github/workflows/ci.yml)；普通分支 push、PR 不触发。标签检查会进一步严格校验格式及版本一致性。
 
-工作流重新检查标签版本与许可证，运行本地检查，生成候选，查询该精确标签/提交的最新 push CI 为 success，下载四个矩阵候选并逐字节核对。然后隔离安装同一候选、保留制品，仅 npm 上传步骤取得凭据。npm 公开元数据 integrity 与实际下载字节必须一致，才创建 GitHub Release；附件是同一个 tgz 与 SHA256SUMS.txt。不自动覆盖已有 Release。
+创建新 vX.Y.Z 标签后，等待 Windows/Ubuntu × Node 22/24 四项全部成功。各项编译、测试、检查包、生成候选，再安装该项的同一 tgz，并上传候选和 SHA-256 文件。手动分支 CI 不能替代同标签 push CI。
 
-npm 与 GitHub 不是原子发布。如果上传后公开包 404，不盲目重传；先只读对账，再重跑原工作流。已有 npm 同版本必须 integrity 相同才跳过上传；不匹配立即停止。发布过程没有自动重试上传，公开可见性最多查询十次。
+失败后先定位。需要修改冻结源码或测试时使用新的版本/标签，不强推覆盖。制品过期或缺少任何一份时，发布门禁会拒绝，需要先恢复可核验的同标签 CI。
 
-## 验证边界
+## 4. 联合发布
 
-本地 Windows/Node 24 的脚本验证不等于 GitHub 四平台已成功。远端工作流、token、environment 审批、上传和两端公开包核验在执行前都属于未验证。CI 中的脚本模型适配器不是实际模型评测，包入口夹具不是桌面安装验收。发布不自动安装或重启 DSH。
+从 main 手动运行 [Publish GitHub and npm](https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/.github/workflows/release.yml)，输入已验证标签和确认词 publish-execution-bus。工作流并非由普通分支推送自动发布。
+
+仓库需配置 NPM_AUTOMATION_TOKEN，具有指定包发布权限并满足 npm 策略；密钥仅提供给上传步骤，不写源码、日志或文档。工作流声明 npm-release environment，但**声明环境不等于已经配置维护者审批规则**，规则需要仓库维护者单独设置。本项目历史发布使用明确用户授权和工作流确认，不能称为人工环境审批已验收。
+
+发布步骤：
+
+1. 检出指定标签，校验标签/版本/许可证/发布说明。
+2. 重新安装、检查和打包。
+3. 要求同一提交、同一标签的最新 push CI 成功，下载四份候选，与本次候选逐字节比较。
+4. 对同一 tgz 做隔离安装，保留发布候选制品。
+5. 查询 npm 已有版本：存在且 integrity 相同则跳过上传；不一致停止。确实未找到时才上传固定 tgz，禁用生命周期脚本。
+6. 有界核对公开 npm 元数据 integrity 和实际下载字节；成功后才创建非草稿、非预发布 GitHub Release，上传同一个 tgz 与 SHA256SUMS.txt。
+
+## 5. 失败恢复与发布后核验
+
+npm 与 GitHub 不是原子发布。上传显示成功但公开包仍 404 时，门禁会停止并保留候选。**不要盲目重传，不另造版本绕过，不先创建 Release。** 先只读检查公开元数据和实际包；确认与原候选相同后恢复原失败任务，使上传步骤核对已有 integrity 并跳过。若仍不公开，则报告发布未完成，继续保留原标签/制品。
+
+公开核验当前最多查询十次；网络异常或非预期状态也可能立即失败，不能解释成“必定等足十次”或“上传失败”。已有 GitHub Release 不自动覆盖；已经完成的发布仅补记证据，不替换附件。
+
+最终核对 npm 指定版本和 latest、GitHub 非草稿/非预发布、两端真实下载大小和 SHA-256 与候选一致。源码或 npm 包内的发布说明是在上传前冻结的，不能含尚未发生的通过结论；发布后的事实以 Actions、公开制品和版本化记录为准。
+
+## 6. 安装边界
+
+正式发布不自动安装、升级或重启任何日常 DSH。桌面卡片、实际模型、权限/沙箱或 PTC 端到端未验收项必须如实披露，不能用 CI、注册表测试或替代服务器冒充当前页面通过。
