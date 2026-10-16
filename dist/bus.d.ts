@@ -55,6 +55,7 @@ export declare class ExecutionBus {
     private queue;
     private readyOwners;
     private running;
+    private retainedResultBytes;
     private closed;
     private telemetry;
     diagnostics(): {

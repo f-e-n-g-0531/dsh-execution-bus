@@ -61,6 +61,7 @@ export class ExecutionBus {
     queue = [];
     readyOwners = [];
     running = 0;
+    retainedResultBytes = 0;
     closed = false;
     telemetry = new Diagnostics();
     diagnostics() {
@@ -70,10 +71,7 @@ export class ExecutionBus {
             queued: this.queue.length,
             running: this.running,
             records: this.entries.size,
-            retainedResultBytes: [...this.entries.values()].reduce((sum, e) => sum +
-                (e.view.result === undefined
-                    ? 0
-                    : Buffer.byteLength(JSON.stringify(e.view.result))), 0),
+            retainedResultBytes: this.retainedResultBytes,
         };
     }
     closing;
@@ -173,8 +171,11 @@ export class ExecutionBus {
     }
     sweep(now = Date.now()) {
         for (const [k, e] of this.entries)
-            if (terminal(e.view.state) && now - e.created > this.options.retentionMs)
+            if (terminal(e.view.state) &&
+                now - e.created > this.options.retentionMs) {
+                this.retainedResultBytes -= e.resultBytes;
                 this.entries.delete(k);
+            }
     }
     submit(owner, raw, onEvent, invoke) {
         if (this.closed)
@@ -216,6 +217,7 @@ export class ExecutionBus {
         const done = new Promise((r) => (resolve = r));
         e = {
             trace: this.telemetry.begin(),
+            resultBytes: 0,
             invoke,
             correlationId: m.messageId,
             owner: owner.sessionId,
@@ -319,7 +321,7 @@ export class ExecutionBus {
             this.finish(e, "cancelled");
         }
     }
-    finish(e, state, result, error) {
+    finish(e, state, result, error, resultBytes = 0) {
         if (terminal(e.view.state))
             return;
         // Prepare the delivery snapshot BEFORE committing an irreversible terminal state.
@@ -334,6 +336,7 @@ export class ExecutionBus {
         }
         catch {
             state = "unknown";
+            resultBytes = 0;
             next = {
                 requestId: e.view.requestId,
                 state,
@@ -344,6 +347,8 @@ export class ExecutionBus {
             };
             snapshot = freezeJson({ ...next });
         }
+        e.resultBytes = resultBytes;
+        this.retainedResultBytes += resultBytes;
         e.created = Date.now();
         e.view = { ...next, sequence: next.sequence - 1 };
         this.telemetry.record(e.trace, "terminal");
@@ -413,7 +418,7 @@ export class ExecutionBus {
                 this.finish(e, "unknown", undefined, "RESULT_NOT_RETAINED");
                 return;
             }
-            this.finish(e, "succeeded", JSON.parse(json));
+            this.finish(e, "succeeded", JSON.parse(json), undefined, Buffer.byteLength(json));
         }
         catch (err) {
             const cancelled = e.controller.signal.aborted &&
@@ -448,6 +453,7 @@ export class ExecutionBus {
             await Promise.all(entries.map((e) => e.done));
             this.handlers.clear();
             this.entries.clear();
+            this.retainedResultBytes = 0;
             this.queue = [];
             this.readyOwners = [];
             this.shutdownPhase = "closed";

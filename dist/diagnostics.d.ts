@@ -8,6 +8,8 @@ export interface Trace {
 export declare class Diagnostics {
     private next;
     private events;
+    private cursor;
+    private size;
     private counts;
     begin(): {
         operation: number;

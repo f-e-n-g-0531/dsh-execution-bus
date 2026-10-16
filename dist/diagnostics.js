@@ -2,25 +2,29 @@ import { performance } from "node:perf_hooks";
 /** In-memory numeric metadata only: never accepts request/session strings, input, output or error text. */
 export class Diagnostics {
     next = 0;
-    events = [];
+    events = new Array(128);
+    cursor = 0;
+    size = 0;
     counts = {};
     begin() {
         return { operation: ++this.next, at: performance.now() };
     }
     record(context, stage) {
         this.counts[stage] = (this.counts[stage] ?? 0) + 1;
-        this.events.push({
+        this.events[this.cursor] = {
             operation: context.operation,
             stage,
             elapsedMs: Math.max(0, performance.now() - context.at),
-        });
-        if (this.events.length > 128)
-            this.events.shift();
+        };
+        this.cursor = (this.cursor + 1) % 128;
+        this.size = Math.min(this.size + 1, 128);
     }
     snapshot() {
         return {
             counts: { ...this.counts },
-            traces: this.events.map((e) => ({ ...e })),
+            traces: Array.from({ length: this.size }, (_, index) => ({
+                ...this.events[(this.cursor - this.size + 128 + index) % 128],
+            })),
         };
     }
 }
