@@ -4,7 +4,7 @@
 
 “萧何”是产品与模式显示名，执行总线是其技术功能；不新增人物 Agent，不进行角色扮演。仓库 dsh-execution-bus、npm 包名、execution_bus 工具名及 execution-bus-test 预设 ID 保持不变。历史版本发布说明保留当时名称。
 
-DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **0.5.0**
+DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **0.5.1**
 
 > 萧何模式从宿主已声明的 PTC 组合派生，保留日常工具，再叠加可选执行总线。已验证隔离的真实 Node PTC → 原 read + 总线调用，以及脚本模型内存会话；真实模型、桌面界面与实际沙箱仍未验收。**不支持重启后恢复任务。**
 
@@ -83,12 +83,21 @@ flowchart TD
 
 | Handler 名称 | 用途 | 输入 |
 |---|---|---|
-| `test` | 检查延迟、进度、成功、失败和取消 | `delayMs`：0–30000；`fail`：布尔值 |
+| `test`（诊断，非业务） | 仅在明确诊断时检查延迟、进度、成功、失败和取消 | `delayMs`：0–30000；`fail`：布尔值 |
 | `host.read` | 经由 DSH 现有 `read` 工具读取文本 | `file_path`；可选 `offset` 和 `limit`，最多 100 行 |
 
 `host.read` 在出队时重新进入宿主工具管线，沿用宿主当前权限、会话工作目录及输出限制。插件不自行启动命令、不提供任意远程执行服务。它也不会强制将现有工具改成总线调用。
 
 ## 选择“萧何”预设
+
+正式模式入口为 `/mode`。新生成预设在原 PTC 组合末尾追加以下行，它不是整份预设：
+
+```yaml
+- id: xiao-he-execution-bus
+  name: '@feng0531/dsh-execution-bus/mode'
+```
+
+旧 /test-mode 保留为兼容别名，两个入口指向同一正式模块，不表示测试专用模式，也不要同时配置新旧两行。必须先安装 0.5.1 或以上才能使用 /mode；旧包没有此导出。旧预设不会自动重写，旧入口继续有效。历史预设 ID execution-bus-test 和包级配置行 ID 不改，避免已有会话失联。
 
 包内提供标准 DSH bundle patch（预设组合补丁）。宿主正常加载后会收到“萧何 / Xiao He”预设定义，由既有设置 → Agent 预设 → **自定义**列表展示。建议选择它新建专门会话，不改默认选择或正在使用的普通会话。已有会话的切换受宿主空白会话检查约束。**实际桌面卡片展示尚未验收**，不能把注册表测试当作界面已通过。
 
@@ -115,7 +124,7 @@ flowchart TD
 2. 在你选定的隔离 DSH 配置依赖目录安装固定版本，不要在 DSH 程序安装目录执行：
 
    ```powershell
-   npm install --ignore-scripts @feng0531/dsh-execution-bus@0.5.0
+   npm install --ignore-scripts @feng0531/dsh-execution-bus@0.5.1
    ```
 
    这是 npm 目录示例。若目标配置使用 pnpm，应沿用其包管理器，不混用锁文件。遇到宿主 peer 版本冲突就停止，不用强制安装绕过。
@@ -254,9 +263,11 @@ npm run test:install    # 临时目录安装，不操作日常 DSH
 
 ## 进一步阅读
 
+- [产品结构与兼容契约](<docs/PRODUCT.md>)：正式入口、模块职责及维护验收边界。
+
 - [协议和投递语义](<docs/protocol.md>)：字段、状态、重复处理与取消规则。
 - [宿主兼容性与源码调用链](<docs/host-compatibility.md>)：为什么可以等待，为什么不能跨重启恢复。
-- [验证记录](<docs/validation.md>)、[0.5.0 发布说明](<docs/releases/0.5.0.md>)：已验证与未验证范围。
+- [验证记录](<docs/validation.md>)、[0.5.1 发布说明](<docs/releases/0.5.1.md>)：已验证与未验证范围。
 - [同类项目源码整合](<docs/INTEGRATION.md>)：固定来源、采用范围、许可与验证边界。
 - [维护者发布流程](<docs/RELEASING.md>)：标签 CI、安装包校验与正式发布门禁。
 

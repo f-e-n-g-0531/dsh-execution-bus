@@ -9,7 +9,7 @@ import Subprocess from "@deepseek-ai/dsh-subprocess-local";
 import NodePtc from "@deepseek-ai/dsh-ptc-runtime-node";
 import { createScope } from "@deepseek-ai/dsh-scope";
 import * as files from "@deepseek-ai/dsh-tool-fs";
-import * as mode from "../dist/test-mode.js";
+import * as mode from "../dist/mode.js";
 test(
   "real Node PTC run_code retains original file binding and adds bus binding",
   { timeout: 20000 },

@@ -2,6 +2,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { assertJson } from "./json.js";
 import { Diagnostics } from "./diagnostics.js";
 import { performance } from "node:perf_hooks";
+import { CORE_DEFAULTS } from "./product.js";
 export function object(v) {
     if (!v || typeof v !== "object" || Array.isArray(v))
         throw Error("INVALID_OBJECT");
@@ -78,13 +79,7 @@ export class ExecutionBus {
     }
     closing;
     shutdownPhase = "open";
-    constructor(options = {
-        concurrency: 2,
-        queueLimit: 32,
-        recordLimit: 256,
-        resultBytes: 65536,
-        retentionMs: 3600000,
-    }, admission = {}) {
+    constructor(options = CORE_DEFAULTS, admission = {}) {
         this.options = options;
         this.admission = admission;
         const allowed = ["sessionQueueLimit", "maxQueueWaitMs"];

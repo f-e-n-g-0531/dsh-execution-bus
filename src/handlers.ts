@@ -1,12 +1,13 @@
 import { setTimeout } from "node:timers/promises";
 import type { Handler } from "./bus.js";
+import { LIMITS } from "./product.js";
 export const testHandler: Handler = {
   validate(input) {
     if (
       Object.keys(input).some((k) => !["delayMs", "fail"].includes(k)) ||
       !Number.isSafeInteger(input.delayMs) ||
       Number(input.delayMs) < 0 ||
-      Number(input.delayMs) > 30000 ||
+      Number(input.delayMs) > LIMITS.diagnosticDelayMs ||
       typeof input.fail !== "boolean"
     )
       throw Error("INVALID_TEST_INPUT");
@@ -30,7 +31,7 @@ export const readHandler: Handler = {
       ) ||
       typeof input.file_path !== "string" ||
       !input.file_path ||
-      input.file_path.length > 2048
+      input.file_path.length > LIMITS.readPathChars
     )
       throw Error("INVALID_READ_INPUT");
     for (const k of ["offset", "limit"])
@@ -39,10 +40,14 @@ export const readHandler: Handler = {
         (!Number.isSafeInteger(input[k]) || Number(input[k]) < 1)
       )
         throw Error("INVALID_READ_INPUT");
-    if (Number(input.limit ?? 100) > 100) throw Error("READ_LIMIT");
+    if (Number(input.limit ?? LIMITS.readLines) > LIMITS.readLines)
+      throw Error("READ_LIMIT");
   },
   async run(input, ctx) {
     if (!ctx.invoke) throw Error("HOST_CAPABILITY_REQUIRED");
-    return ctx.invoke({ ...input, limit: input.limit ?? 100 }, ctx.signal);
+    return ctx.invoke(
+      { ...input, limit: input.limit ?? LIMITS.readLines },
+      ctx.signal,
+    );
   },
 };

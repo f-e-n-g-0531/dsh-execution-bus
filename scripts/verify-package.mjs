@@ -19,6 +19,10 @@ export function verifyReport(r, p) {
     "cordis.patch.yml",
     "dist/preset.js",
     "dist/preset.d.ts",
+    "dist/mode.js",
+    "dist/mode.d.ts",
+    "dist/product.js",
+    "dist/product.d.ts",
     "dist/test-mode.js",
     "dist/test-mode.d.ts",
     "dist/json.js",
@@ -39,7 +43,7 @@ export function verifyReport(r, p) {
     "docs/RELEASING.md",
     "docs/releases/" + p.version + ".md",
   ];
-  const allowed = new Set([...required, "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/FLOW-TEST.md", "docs/OPTIMIZATION.md", "docs/GITHUB-COMPARISON.md", "docs/INTEGRATION.md"]);
+  const allowed = new Set([...required, "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/FLOW-TEST.md", "docs/OPTIMIZATION.md", "docs/GITHUB-COMPARISON.md", "docs/INTEGRATION.md", "docs/PRODUCT.md"]);
   const paths = new Set();
   for (const f of r.files) {
     assert.ok(allowed.has(f.path) || /^docs[/]releases[/][0-9]+[.][0-9]+[.][0-9]+[.]md$/.test(f.path), "Unexpected packed path: " + f.path);
@@ -52,7 +56,8 @@ export function verifyReport(r, p) {
   assert.deepEqual(p.exports, {
     ".": "./dist/plugin.js",
     "./core": "./dist/bus.js",
-    "./test-mode": "./dist/test-mode.js",
+    "./mode": "./dist/mode.js",
+    "./test-mode": "./dist/mode.js",
     "./preset": "./dist/preset.js",
   });
   for (const target of Object.values(p.exports))

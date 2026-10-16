@@ -2,6 +2,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { assertJson } from "./json.js";
 import { Diagnostics } from "./diagnostics.js";
 import { performance } from "node:perf_hooks";
+import { CORE_DEFAULTS } from "./product.js";
 export interface AdmissionPolicy {
   sessionQueueLimit?: number;
   maxQueueWaitMs?: number;
@@ -163,13 +164,13 @@ export class ExecutionBus {
   private closing?: Promise<void>;
   private shutdownPhase: "open" | "cancelling" | "draining" | "closed" = "open";
   constructor(
-    readonly options = {
-      concurrency: 2,
-      queueLimit: 32,
-      recordLimit: 256,
-      resultBytes: 65536,
-      retentionMs: 3600000,
-    },
+    readonly options: {
+      concurrency: number;
+      queueLimit: number;
+      recordLimit: number;
+      resultBytes: number;
+      retentionMs: number;
+    } = CORE_DEFAULTS,
     readonly admission: AdmissionPolicy = {},
   ) {
     const allowed = ["sessionQueueLimit", "maxQueueWaitMs"];

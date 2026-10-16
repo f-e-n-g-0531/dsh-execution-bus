@@ -15,7 +15,7 @@ import Jobs from "@deepseek-ai/dsh-jobs-local";
 import { createScope } from "@deepseek-ai/dsh-scope";
 import LocalFS from "@deepseek-ai/dsh-fs-local";
 import Registrar, { derivePreset, PRESET_ID } from "../dist/preset.js";
-import * as mode from "../dist/test-mode.js";
+import * as mode from "../dist/mode.js";
 test("bundle registers derived preset without altering default or original ptc", () => {
   const rows = parse(readFileSync("cordis.patch.yml", "utf8"));
   assert.equal(rows[0].insert[0].id, "preset-execution-bus-test");
@@ -30,6 +30,10 @@ test("declaration derivation preserves nested config, disabled flags and host ex
     definition = derivePreset(text);
   assert.deepEqual(definition.plugins.slice(0, -1), source);
   assert.equal(definition.id, PRESET_ID);
+  assert.equal(
+    definition.plugins.at(-1).name,
+    "@feng0531/dsh-execution-bus/mode",
+  );
   assert.equal(definition.name, "萧何 / Xiao He");
   assert.throws(() => derivePreset("invalid: mapping"), /Invalid PTC/);
   assert.throws(
@@ -88,7 +92,7 @@ test(
     await registry.mount(selected.ctx, PRESET_ID);
     await registry.mount(normal.ctx, "ptc");
     await stop(); // existing joined agents retain their revision during registrar reload
-    assert.ok(ctx.tools.get("execution_bus",agent));
+    assert.ok(ctx.tools.get("execution_bus", agent));
     try {
       assert.ok(ctx.tools.get("execution_bus", agent));
       assert.equal(ctx.tools.get("execution_bus", normalAgent), undefined);
@@ -126,3 +130,10 @@ test(
     }
   },
 );
+
+test("formal and legacy mode exports resolve to the same plugin module", async () => {
+  const formal = await import("@feng0531/dsh-execution-bus/mode"),
+    legacy = await import("@feng0531/dsh-execution-bus/test-mode");
+  assert.equal(formal, legacy);
+  assert.equal(formal.apply, legacy.apply);
+});

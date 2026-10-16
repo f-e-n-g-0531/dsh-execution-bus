@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
+import {
+  ADMISSION_DEFAULTS,
+  REQUEST_DESCRIPTION,
+  REQUEST_PARAMETERS,
+  STATE_PARAMETERS,
+} from "./product.js";
 import { ExecutionHandle, ExecutionOwner } from "./execution.js";
 declare module "@deepseek-ai/dsh-jobs" {
   interface JobKindMap {
@@ -12,10 +18,7 @@ import { testHandler, readHandler } from "./handlers.js";
 export const name = "execution-bus";
 export const inject = ["tools", "jobs"];
 export function apply(ctx: Context) {
-  const bus = new ExecutionBus(undefined, {
-    sessionQueueLimit: 16,
-    maxQueueWaitMs: 120000,
-  });
+  const bus = new ExecutionBus(undefined, ADMISSION_DEFAULTS);
   bus.register("test", testHandler);
   bus.register("host.read", readHandler);
   const executions = new ExecutionOwner();
@@ -24,7 +27,7 @@ export function apply(ctx: Context) {
     name: "execution_bus_state",
     description:
       "Read a bounded metadata-only snapshot of this agent session’s bus tasks. No inputs/results, no cross-session access. Do not poll during an awaited request.",
-    parameters: { type: "object", properties: {}, additionalProperties: false },
+    parameters: STATE_PARAMETERS,
     output: {
       schema: {},
       render: (_a, v) => [{ type: "text", text: JSON.stringify(v) }],
@@ -47,29 +50,8 @@ export function apply(ctx: Context) {
   });
   ctx.tools.register({
     name: "execution_bus",
-    description:
-      "萧何 / Xiao He. Submit a version 1 request and WAIT for its terminal result in this tool call. Reuse requestId only for the same logical operation. Handlers: test {delayMs:0..30000,fail:boolean}, host.read {file_path,offset?,limit?<=100}. Control types status/result/cancel use empty payload. Acceptance is volatile, not execution success. No polling needed; no restart resume.",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      required: [
-        "protocolVersion",
-        "messageId",
-        "requestId",
-        "type",
-        "payload",
-      ],
-      properties: {
-        protocolVersion: { type: "integer", const: 1 },
-        messageId: { type: "string" },
-        requestId: { type: "string" },
-        type: {
-          type: "string",
-          enum: ["request", "status", "result", "cancel"],
-        },
-        payload: { type: "object" },
-      },
-    },
+    description: REQUEST_DESCRIPTION,
+    parameters: REQUEST_PARAMETERS,
     output: {
       schema: {},
       render: (_a, v) => [{ type: "text", text: JSON.stringify(v) }],

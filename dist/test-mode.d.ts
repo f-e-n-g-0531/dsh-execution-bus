@@ -1,5 +1,2 @@
-import type { Context } from "@deepseek-ai/cordis";
-export declare const name = "execution-bus-test-mode";
-export declare const inject: string[];
-/** An additive preset row: presentation, tool inventory and authority belong to the host PTC composition. */
-export declare function apply(ctx: Context): void;
+/** @deprecated Compatibility-only forwarding entry. Use the package /mode export. */
+export { name, inject, apply } from "./mode.js";

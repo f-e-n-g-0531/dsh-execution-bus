@@ -4,7 +4,8 @@ import { entryListProblem } from "@deepseek-ai/dsh-agent-preset-registry";
 import { entryListSchema } from "@deepseek-ai/cordis-plugin-include";
 import { load } from "js-yaml";
 import { setTimeout as pause } from "node:timers/promises";
-export const PRESET_ID = "execution-bus-test";
+import { PRODUCT } from "./product.js";
+export const PRESET_ID = PRODUCT.presetId;
 /** Capture the host-declared composition without evaluating !!js or changing disabled rows. */
 export function derivePreset(content: string): PresetDefinition {
   if (Buffer.byteLength(content) > 1048576) throw Error("PTC_PRESET_TOO_LARGE");
@@ -32,7 +33,7 @@ export function derivePreset(content: string): PresetDefinition {
   inspect(rows);
   return {
     id: PRESET_ID,
-    name: "萧何 / Xiao He",
+    name: PRODUCT.name,
     order: 20,
     description:
       "继承宿主 PTC 工具组合，叠加执行请求排队、等待与结果回传。普通任务使用原工具，授权和沙箱由宿主管理；不支持重启恢复。",
@@ -40,7 +41,7 @@ export function derivePreset(content: string): PresetDefinition {
       ...rows,
       {
         id: "xiao-he-execution-bus",
-        name: "@feng0531/dsh-execution-bus/test-mode",
+        name: PRODUCT.modeEntry,
       },
     ],
   };
