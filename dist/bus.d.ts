@@ -1,3 +1,7 @@
+export interface AdmissionPolicy {
+    sessionQueueLimit?: number;
+    maxQueueWaitMs?: number;
+}
 export type State = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "unknown";
 export type Owner = {
     sessionId: string;
@@ -50,6 +54,7 @@ export declare class ExecutionBus {
         resultBytes: number;
         retentionMs: number;
     };
+    readonly admission: AdmissionPolicy;
     private entries;
     private handlers;
     private queue;
@@ -89,7 +94,7 @@ export declare class ExecutionBus {
         recordLimit: number;
         resultBytes: number;
         retentionMs: number;
-    });
+    }, admission?: AdmissionPolicy);
     register(name: string, handler: Handler): () => void;
     private key;
     private emit;
@@ -105,6 +110,34 @@ export declare class ExecutionBus {
     };
     private attachment;
     command(owner: Owner, raw: unknown): RecordView;
+    private removeQueued;
+    /** Trusted host owner required. Never exposes other sessions or business payloads. */
+    inspect(owner: Owner): {
+        phase: "open" | "cancelling" | "draining" | "closed";
+        policy: {
+            sessionQueueLimit?: number;
+            maxQueueWaitMs?: number;
+        };
+        counts: {
+            queued: number;
+            running: number;
+            terminal: number;
+        };
+        tasks: {
+            requestId: string;
+            state: State;
+            delivery: "returned" | "pending";
+            cancelRequested: boolean;
+            error: string | null;
+            progress: number | null;
+            waitReason: string | null;
+            phase: string;
+            queueMs: number;
+            runMs: number;
+            remainingQueueMs: number | null;
+        }[];
+        truncated: boolean;
+    };
     private cancel;
     private finish;
     private pump;

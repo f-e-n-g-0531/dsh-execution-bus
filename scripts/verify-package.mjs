@@ -39,7 +39,7 @@ export function verifyReport(r, p) {
     "docs/RELEASING.md",
     "docs/releases/" + p.version + ".md",
   ];
-  const allowed = new Set([...required, "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/FLOW-TEST.md", "docs/OPTIMIZATION.md", "docs/GITHUB-COMPARISON.md"]);
+  const allowed = new Set([...required, "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/FLOW-TEST.md", "docs/OPTIMIZATION.md", "docs/GITHUB-COMPARISON.md", "docs/INTEGRATION.md"]);
   const paths = new Set();
   for (const f of r.files) {
     assert.ok(allowed.has(f.path) || /^docs[/]releases[/][0-9]+[.][0-9]+[.][0-9]+[.]md$/.test(f.path), "Unexpected packed path: " + f.path);

@@ -80,7 +80,7 @@ queued → running → succeeded / failed / cancelled / unknown
 | 单结果 JSON | 64 KiB |
 | 终态保留期 | 自完成起 1 小时 |
 
-新执行请求受队列和记录容量限制；运行中重复附着受消息/监听名额限制；未过期终态复用不申请新 Job。宿主新 Job 准入还有独立容量要求。已受理的排队任务按会话轮转，各会话内部 FIFO；不抢占运行任务，没有完成时间 SLA，单会话仍可占满受理容量，不保证其他会话一定获得入队名额。
+新执行请求受队列和记录容量限制；运行中重复附着受消息/监听名额限制；未过期终态复用不申请新 Job。宿主新 Job 准入还有独立容量要求。已受理的排队任务按会话轮转，各会话内部 FIFO；不抢占运行任务，没有完成时间 SLA，core 未启用会话配额时单会话可占满队列；宿主插件启用每会话16项，但终态记录与多会话总量仍可占满容量，不保证其他会话一定获得入队名额。
 
 core 不传配置时用默认值；显式配置必须完整包含 concurrency、queueLimit、recordLimit、resultBytes、retentionMs 五项正安全整数。拒绝缺项、额外字段与访问器；构造时复制冻结，无动态更新接口。
 
@@ -94,13 +94,25 @@ core 不传配置时用默认值；显式配置必须完整包含 concurrency、
 
 同存活实例、保存期内的请求复用不是端到端 exactly-once；每个实际工具调用仍有自己的宿主结果记录。没有外部终态注入接口，也没有跨重启恢复：任一阶段进程崩溃都会丢失插件内存状态。宿主日志不能复活旧 Promise，不追加聊天消息冒充原调用恢复。
 
-## 6. 诊断
+## 6. 准入与会话状态（0.5.0）
+
+原五项 core options 不变。第二构造参数 AdmissionPolicy 可含 sessionQueueLimit、maxQueueWaitMs，均为 1..2147483647 安全整数，省略表示不启用该约束。策略复制冻结，未知键和访问器拒绝。宿主插件启用每会话排队 16、排队 120000ms，普通请求不可覆盖策略。
+
+相同 requestId 的复用先于新准入检查，不重复占槽或重置原期限。每会话超额返回 SESSION_BACKPRESSURE，不受理、不占 requestId；全局/记录容量仍优先返回 BACKPRESSURE。两者只限制准入，不保留所有会话的专用槽。终态记录仍可占满 recordLimit。
+
+期限使用单调时钟，计时器及出队前均检查，超期只将 queued 结算 failed / QUEUE_WAIT_TIMEOUT，不调用 Handler、不设置 cancelRequested、不重试，沿原 done/Job 返回。开始运行、取消或关闭时清除计时器。事件循环繁忙会令通知晚于期限，但不会让超期任务出队执行。已运行任务继续遵守原执行/取消规则。
+
+execution_bus_state 工具仅接受 {}，从宿主 Agent 取 sessionId，拒绝匿名或自报身份，关闭后拒绝查询。它读取 core inspect 的不可变快照，不创建 Job、不改变消息额度；查询会做正常终态 TTL 清理。不包含输入/输出，不访问其他会话。最多 50 条、活跃优先，其后按受理次序倒序列出终态；总数未截断，truncated 提示列表截断。元数据含 requestId、state、delivery、cancelRequested、固定 error/progress、waitReason、queueMs/runMs/remainingQueueMs。phase terminal 只表示执行终态且尚未标记返回，不代表可推断宿主 Job 清理进度。
+
+core inspect(trustedOwner) 要求非空 sessionId，但不提供鉴权，可信身份和访问控制属于嵌入宿主。勿把 core 的任意 owner 参数直接暴露给远端。状态不是持久审计/模型消费回执，不应循环调用。
+
+## 7. 诊断
 
 core 实例的 `diagnostics()` 返回只读用途的独立快照：阶段计数、最近 128 条 `{operation,stage,elapsedMs}` 轨迹、关闭阶段、队列/运行/记录数及保留结果字节数。operation 是实例内递增数值，不是消息或会话 ID；elapsedMs 以单调时钟计算，阶段时间均相对受理时间，可相减得到排队/执行/返回延迟。复用计数仅在附着受理成功时增加；返回阶段按逻辑结果首次标记，不代表每个工具调用都持久化。
 
 宿主执行所有者另有内部 Job 创建/释放/异常聚合轨迹，不作为模型工具或公开服务导出；其 operation 是独立编号，不能与 core 轨迹按编号关联。数据只在内存，不保存参数、结果、Handler 名称、请求/会话 ID、异常文本或聊天记录。总计数会持续累积，128 槽环形轨迹有界且按时间顺序导出；结果字节只在保存/过期/关闭时更新，查询不读取结果内容或重复序列化。异常计数不等于每次清理最终失败。
 
-## 7. 扩展 Handler
+## 8. 扩展 Handler
 
 包的 `./core` 导出 ExecutionBus、Handler、Capability 类型。Handler 只接收输入、requestId、signal、progress 和可选最小 capability，不接收聊天历史。register 返回绑定唯一注册令牌的幂等注销函数，不会误删后来同名注册；已受理请求继续持有原 Handler。
 

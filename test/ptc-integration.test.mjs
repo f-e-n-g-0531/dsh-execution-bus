@@ -56,7 +56,7 @@ test(
       const result = await ctx.tools.execute({
         name: "run_code",
         arguments: {
-          code: 'const data = await tools.read({file_path:"package.json",limit:1}); const bus = await tools.execution_bus({protocolVersion:1,messageId:"m",requestId:"r",type:"request",payload:{handler:"test",input:{delayMs:10,fail:false}}}); return {read:!!data,bus:bus.state};',
+          code: 'const data = await tools.read({file_path:"package.json",limit:1}); const bus = await tools.execution_bus({protocolVersion:1,messageId:"m",requestId:"r",type:"request",payload:{handler:"test",input:{delayMs:10,fail:false}}}); const state=await tools.execution_bus_state({}); return {read:!!data,bus:bus.state,sessionTasks:state.counts.terminal};',
           description: "Verify PTC and bus bindings",
         },
         callId: "ptc",
@@ -65,15 +65,32 @@ test(
       });
       assert.equal(result.isError, false, JSON.stringify(result));
       assert.match(JSON.stringify(result), /succeeded/);
+      assert.match(JSON.stringify(result), /sessionTasks/);
+      assert.ok(before.includes("execution_bus_state"));
       assert.ok(before.includes("read") && before.includes("execution_bus"));
       assert.equal(ctx.tools.modeFor(agent), "ptc");
       assert.ok(ctx.tools.get("write", agent));
-      const deny = ctx.on("tools/pre-execute", async (exec,next) => exec.name === "write" ? {kind:"deny",reason:"ptc-host-denied"}:next());
+      const deny = ctx.on("tools/pre-execute", async (exec, next) =>
+        exec.name === "write"
+          ? { kind: "deny", reason: "ptc-host-denied" }
+          : next(),
+      );
       try {
-        const denied = await ctx.tools.execute({name:"run_code",arguments:{code:'return await tools.write({file_path:"never-write",content:"no"})',description:"Verify nested policy denial"},callId:"ptc-denied",agent,signal:new AbortController().signal});
-        assert.equal(denied.isError,true);
-        assert.match(JSON.stringify(denied),/ptc-host-denied/);
-      } finally { deny(); }
+        const denied = await ctx.tools.execute({
+          name: "run_code",
+          arguments: {
+            code: 'return await tools.write({file_path:"never-write",content:"no"})',
+            description: "Verify nested policy denial",
+          },
+          callId: "ptc-denied",
+          agent,
+          signal: new AbortController().signal,
+        });
+        assert.equal(denied.isError, true);
+        assert.match(JSON.stringify(denied), /ptc-host-denied/);
+      } finally {
+        deny();
+      }
     } finally {
       await scope.dispose();
     }

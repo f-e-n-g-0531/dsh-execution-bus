@@ -12,11 +12,39 @@ import { testHandler, readHandler } from "./handlers.js";
 export const name = "execution-bus";
 export const inject = ["tools", "jobs"];
 export function apply(ctx: Context) {
-  const bus = new ExecutionBus();
+  const bus = new ExecutionBus(undefined, {
+    sessionQueueLimit: 16,
+    maxQueueWaitMs: 120000,
+  });
   bus.register("test", testHandler);
   bus.register("host.read", readHandler);
   const executions = new ExecutionOwner();
   ctx.effect(() => () => executions.close(() => bus.close()));
+  ctx.tools.register({
+    name: "execution_bus_state",
+    description:
+      "Read a bounded metadata-only snapshot of this agent session’s bus tasks. No inputs/results, no cross-session access. Do not poll during an awaited request.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    output: {
+      schema: {},
+      render: (_a, v) => [{ type: "text", text: JSON.stringify(v) }],
+    },
+    async execute(raw: unknown, exec: ToolRunContext) {
+      if (executions.phase !== "open") throw Error("CLOSED");
+      if (!exec.agent) throw Error("OWNING_SESSION_REQUIRED");
+      if (
+        !raw ||
+        typeof raw !== "object" ||
+        Array.isArray(raw) ||
+        Reflect.ownKeys(raw).length
+      )
+        throw Error("INVALID_STATE_QUERY");
+      return bus.inspect({
+        sessionId: String(exec.agent.id),
+        callId: String(exec.callId),
+      });
+    },
+  });
   ctx.tools.register({
     name: "execution_bus",
     description:

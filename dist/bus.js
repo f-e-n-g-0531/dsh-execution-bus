@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from "node:crypto";
 import { assertJson } from "./json.js";
 import { Diagnostics } from "./diagnostics.js";
+import { performance } from "node:perf_hooks";
 export function object(v) {
     if (!v || typeof v !== "object" || Array.isArray(v))
         throw Error("INVALID_OBJECT");
@@ -56,6 +57,7 @@ const terminal = (s) => !["queued", "running"].includes(s);
 /** Volatile single-process bus; no acceptance durability or automatic execution retry. */
 export class ExecutionBus {
     options;
+    admission;
     entries = new Map();
     handlers = new Map();
     queue = [];
@@ -82,8 +84,25 @@ export class ExecutionBus {
         recordLimit: 256,
         resultBytes: 65536,
         retentionMs: 3600000,
-    }) {
+    }, admission = {}) {
         this.options = options;
+        this.admission = admission;
+        const allowed = ["sessionQueueLimit", "maxQueueWaitMs"];
+        if (!admission ||
+            typeof admission !== "object" ||
+            Array.isArray(admission) ||
+            Reflect.ownKeys(admission).some((key) => typeof key !== "string" || !allowed.includes(key)))
+            throw Error("INVALID_ADMISSION_POLICY");
+        for (const key of Reflect.ownKeys(admission)) {
+            const descriptor = Object.getOwnPropertyDescriptor(admission, key);
+            if (!("value" in descriptor) ||
+                !descriptor.enumerable ||
+                !Number.isSafeInteger(descriptor.value) ||
+                descriptor.value < 1 ||
+                descriptor.value > 2147483647)
+                throw Error("INVALID_ADMISSION_POLICY");
+        }
+        this.admission = Object.freeze({ ...admission });
         const keys = [
             "concurrency",
             "queueLimit",
@@ -213,6 +232,10 @@ export class ExecutionBus {
         if (this.entries.size >= this.options.recordLimit ||
             this.queue.length >= this.options.queueLimit)
             throw Error("BACKPRESSURE");
+        if (this.admission.sessionQueueLimit !== undefined &&
+            this.queue.filter((entry) => entry.owner === owner.sessionId).length >=
+                this.admission.sessionQueueLimit)
+            throw Error("SESSION_BACKPRESSURE");
         let resolve;
         const done = new Promise((r) => (resolve = r));
         e = {
@@ -245,6 +268,22 @@ export class ExecutionBus {
         this.telemetry.record(e.trace, "accepted");
         const attached = this.attachment(e, onEvent, m.messageId);
         this.queue.push(e);
+        if (this.admission.maxQueueWaitMs !== undefined) {
+            e.deadline = performance.now() + this.admission.maxQueueWaitMs;
+            const entry = e;
+            const expire = () => {
+                if (entry.view.state !== "queued")
+                    return;
+                const remaining = entry.deadline - performance.now();
+                if (remaining > 0) {
+                    entry.queueTimer = setTimeout(expire, Math.ceil(remaining));
+                    return;
+                }
+                this.removeQueued(entry);
+                this.finish(entry, "failed", undefined, "QUEUE_WAIT_TIMEOUT");
+            };
+            e.queueTimer = setTimeout(expire, this.admission.maxQueueWaitMs);
+        }
         if (!this.readyOwners.includes(e.owner))
             this.readyOwners.push(e.owner);
         queueMicrotask(() => this.pump());
@@ -307,6 +346,61 @@ export class ExecutionBus {
         }
         return this.view(e);
     }
+    removeQueued(e) {
+        this.queue = this.queue.filter((entry) => entry !== e);
+        if (!this.queue.some((entry) => entry.owner === e.owner))
+            this.readyOwners = this.readyOwners.filter((owner) => owner !== e.owner);
+    }
+    /** Trusted host owner required. Never exposes other sessions or business payloads. */
+    inspect(owner) {
+        if (!owner || typeof owner.sessionId !== "string" || !owner.sessionId)
+            throw Error("OWNING_SESSION_REQUIRED");
+        this.sweep();
+        const now = performance.now();
+        const records = [...this.entries.values()].filter((e) => e.owner === owner.sessionId);
+        // Active work must not disappear behind newer terminal history.
+        const active = records.filter((e) => !terminal(e.view.state));
+        const history = records.filter((e) => terminal(e.view.state)).reverse();
+        const selected = [...active, ...history].slice(0, 50);
+        const tasks = selected.map((e) => ({
+            requestId: e.view.requestId,
+            state: e.view.state,
+            delivery: e.view.delivery,
+            cancelRequested: e.view.cancelRequested,
+            error: e.view.error ?? null,
+            progress: e.view.progress ?? null,
+            waitReason: e.view.state === "queued"
+                ? this.running >= this.options.concurrency
+                    ? "concurrency"
+                    : "dispatch"
+                : null,
+            phase: terminal(e.view.state)
+                ? e.view.delivery === "returned"
+                    ? "returned"
+                    : "terminal"
+                : e.view.cancelRequested
+                    ? "cancelling"
+                    : e.view.state,
+            queueMs: Math.max(0, (e.startedAt ?? e.finishedAt ?? now) - e.trace.at),
+            runMs: e.startedAt === undefined
+                ? 0
+                : Math.max(0, (e.finishedAt ?? now) - e.startedAt),
+            remainingQueueMs: e.view.state === "queued" && e.deadline !== undefined
+                ? Math.max(0, e.deadline - now)
+                : null,
+        }));
+        return freezeJson({
+            phase: this.shutdownPhase,
+            policy: { ...this.admission },
+            counts: {
+                queued: records.filter((e) => e.view.state === "queued").length,
+                running: records.filter((e) => e.view.state === "running").length,
+                terminal: records.filter((e) => terminal(e.view.state)).length,
+            },
+            tasks,
+            truncated: records.length > 50,
+        });
+    }
     cancel(e) {
         if (terminal(e.view.state) || e.view.cancelRequested)
             return;
@@ -315,15 +409,18 @@ export class ExecutionBus {
         e.controller.abort();
         this.emit(e, "cancel_requested", {});
         if (e.view.state === "queued") {
-            this.queue = this.queue.filter((x) => x !== e);
-            if (!this.queue.some((entry) => entry.owner === e.owner))
-                this.readyOwners = this.readyOwners.filter((owner) => owner !== e.owner);
+            this.removeQueued(e);
             this.finish(e, "cancelled");
         }
     }
     finish(e, state, result, error, resultBytes = 0) {
         if (terminal(e.view.state))
             return;
+        if (e.queueTimer !== undefined) {
+            clearTimeout(e.queueTimer);
+            e.queueTimer = undefined;
+        }
+        e.finishedAt = performance.now();
         // Prepare the delivery snapshot BEFORE committing an irreversible terminal state.
         let next = { ...e.view, state, sequence: e.view.sequence + 1 };
         if (result !== undefined)
@@ -375,6 +472,15 @@ export class ExecutionBus {
             const e = this.queue.splice(index, 1)[0];
             if (e.view.state !== "queued")
                 continue;
+            if (e.deadline !== undefined && performance.now() >= e.deadline) {
+                this.finish(e, "failed", undefined, "QUEUE_WAIT_TIMEOUT");
+                continue;
+            }
+            if (e.queueTimer !== undefined) {
+                clearTimeout(e.queueTimer);
+                e.queueTimer = undefined;
+            }
+            e.startedAt = performance.now();
             this.running++;
             e.view.state = "running";
             this.telemetry.record(e.trace, "started");

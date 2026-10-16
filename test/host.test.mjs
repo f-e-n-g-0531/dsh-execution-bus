@@ -88,6 +88,36 @@ test("real Cordis ToolRuntime + LocalJobs + read tool component smoke (not model
     1,
     "duplicate attachments must share one host Job",
   );
+  const state = await ctx.tools.execute({
+    name: "execution_bus_state",
+    arguments: {},
+    agent,
+    callId: "state-query",
+    signal: new AbortController().signal,
+  });
+  assert.equal(state.isError, false, JSON.stringify(state));
+  assert.equal(state.value.policy.sessionQueueLimit, 16);
+  assert.equal(state.value.policy.maxQueueWaitMs, 120000);
+  assert.ok(
+    state.value.tasks.every(
+      (task) => !("result" in task) && !("input" in task),
+    ),
+  );
+  const forged = await ctx.tools.execute({
+    name: "execution_bus_state",
+    arguments: { sessionId: "other" },
+    agent,
+    callId: "forged",
+    signal: new AbortController().signal,
+  });
+  assert.equal(forged.isError, true);
+  const anonymousState = await ctx.tools.execute({
+    name: "execution_bus_state",
+    arguments: {},
+    callId: "anonymous-state",
+    signal: new AbortController().signal,
+  });
+  assert.equal(anonymousState.isError, true);
   const controller = new AbortController();
   const aborted = run(
     message("test", { delayMs: 1000, fail: false }),
