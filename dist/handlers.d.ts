@@ -9,7 +9,13 @@ export declare function hostToolHandler(toolName: string, opts: {
 export declare const testHandler: Handler;
 /** 读取：无副作用，幂等，终态结果可复用。 */
 export declare const readHandler: Handler;
+/** 文件名搜索：只读，幂等，终态结果可复用；搜索基数由宿主工具限制。 */
+export declare const globHandler: Handler;
+/** 内容搜索：只读，幂等，终态结果可复用；匹配上限由宿主工具限制。 */
+export declare const grepHandler: Handler;
 /** 写入：有副作用，非幂等，终态结果不可复用。 */
 export declare const writeHandler: Handler;
 /** 编辑：有副作用，非幂等，终态结果不可复用。 */
 export declare const editHandler: Handler;
+/** 命令执行：有副作用，非幂等，终态结果不可复用；后台模式返回 Job ID 不等于完成。 */
+export declare const pwshHandler: Handler;

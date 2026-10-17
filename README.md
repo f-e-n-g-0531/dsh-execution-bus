@@ -4,7 +4,7 @@
 
 “萧何”是产品与模式显示名，执行总线是其技术功能；不新增人物 Agent，不进行角色扮演。仓库 dsh-execution-bus、npm 包名、execution_bus 工具名及 execution-bus-test 预设 ID 保持不变。历史版本发布说明保留当时名称。
 
-DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **0.7.0**
+DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **0.8.0**
 
 > 萧何模式从宿主已声明的 PTC 组合派生，保留日常工具，再叠加可选执行总线。已验证隔离的真实 Node PTC → 原 read + 总线调用，以及脚本模型内存会话；真实模型、桌面界面与实际沙箱仍未验收。**不支持重启后恢复任务。**
 
@@ -85,10 +85,13 @@ flowchart TD
 |---|---|---|
 | `test`（诊断，非业务） | 仅在明确诊断时检查延迟、进度、成功、失败和取消 | `delayMs`：0–30000；`fail`：布尔值 |
 | `host.read` | 经由 DSH 现有 `read` 工具读取文本 | `file_path`；可选 `offset` 和 `limit`，最多 100 行 |
+| `host.glob` | 经由 DSH 现有 `glob` 工具按路径模式查找文件（只读） | `pattern`；可选 `path` |
+| `host.grep` | 经由 DSH 现有 `grep` 工具检索文件内容（只读） | `pattern`；可选 `path`、`include`（单个正向 glob） |
 | `host.edit` | 经由 DSH 现有 `edit` 工具替换文本（有副作用） | `file_path`、`old_string`、`new_string`；可选 `replace_all` |
 | `host.write` | 经由 DSH 现有 `write` 工具写入文本（有副作用） | `file_path`、`content` |
+| `host.pwsh` | 经由 DSH 现有 `pwsh` 工具执行 PowerShell 命令（有副作用） | `description`、`command`；可选 `timeoutMs`、`workdir`、`run_in_background`、`sandbox_permissions`、`justification` |
 
-`host.read`、`host.edit` 与 `host.write` 在出队时重新进入宿主工具管线，沿用宿主当前权限、会话工作目录及输出限制。`host.edit`/`host.write` 有副作用，显式声明非幂等：同一 requestId 的终态结果不可复用，重复提交返回 `MUTATING_REUSE_DENIED`。插件不自行启动命令、不提供任意远程执行服务，也不会强制将现有工具改成总线调用。
+`host.*` 在出队时重新进入宿主工具管线，沿用宿主当前权限、会话工作目录、沙箱与输出限制。`host.read`/`host.glob`/`host.grep` 只读且幂等，同一 requestId 的终态结果可复用；`host.edit`/`host.write`/`host.pwsh` 有副作用，显式声明非幂等：同一 requestId 的终态结果不可复用，重复提交返回 `MUTATING_REUSE_DENIED`。`host.pwsh` 的后台模式只返回宿主 Job ID，不代表命令完成。插件不自行实现文件或命令执行端，只转发到宿主现有工具；也不提供任意远程执行服务，不会强制将现有工具改成总线调用。
 
 ## 选择“萧何”预设
 
@@ -105,7 +108,7 @@ flowchart TD
 
 **0.3.0 起不再是只读验证模式。** 加载时读取宿主 `ptc` 预设的组合声明快照，保留原工具、平台表达式、禁用项和配置，只追加萧何总线与说明。不再强制 native 呈现或添加只读白名单；终端、写入、搜索、技能等能力是否可用，取决于原 PTC 配置和宿主服务。其他预设和默认模式不被修改，原 PTC 会话看不到新增总线。
 
-普通任务仍通过 `run_code` 调用原工具；**总线目前只支持 test、host.read、host.edit 和 host.write，不接管任意命令、安装或全部工具**。例如更新插件应使用原终端能力并遵守宿主授权；专用插件管理工具若在源 PTC 中禁用，萧何不会擅自启用。命令受理、返回 Job ID 不等于执行完成。
+普通任务仍通过 `run_code` 调用原工具；**总线目前只支持 test 与 host.read/host.glob/host.grep/host.edit/host.write/host.pwsh，不接管其他工具、安装或全部能力**。例如更新插件应使用原终端能力并遵守宿主授权；专用插件管理工具若在源 PTC 中禁用，萧何不会擅自启用。命令受理或返回 Job ID 不等于执行完成。
 
 升级提示：预设 ID 保持兼容，但从旧版只读模式升级后能力范围扩大，使用者须审阅后加载；本次不自动升级日常配置。它不是进程沙箱，同一预设会话共享总线容量，结果按会话隔离。派生是加载时快照，不自动跟随源预设热编辑；源 PTC 更新后应按宿主正常流程重新加载派生行，旧会话遵循宿主版本保留规则。
 
@@ -115,9 +118,9 @@ flowchart TD
 
 ## 安装前先确认
 
-- 兼容目标：**DSH 0.2.0-rc.2 / Cordis 4.0.4**，Node.js 22 或以上。其他宿主版本未承诺兼容。
+- 兼容目标：**DSH 0.2.1-rc.2 / Cordis 4.0.4**，Node.js 22 或以上。其他宿主版本未承诺兼容。
 - 建议先选择**隔离的 DSH 配置**试用，不直接更改日常环境。
-- 目标组合需要可见的工具注册表、Job 服务、现有 Job 控制工具；读取任务还需要宿主 `read`。
+- 目标组合需要可见的工具注册表、Job 服务、现有 Job 控制工具；读取、搜索、编辑、写入或命令任务还需要宿主对应的 `read`/`glob`/`grep`/`edit`/`write`/`pwsh` 工具。
 - 安装 npm 包不等于插件已经加载；**只有当前会话能看到 `execution_bus` 工具，才可直接调用。**
 
 ### 安装步骤
@@ -126,7 +129,7 @@ flowchart TD
 2. 在你选定的隔离 DSH 配置依赖目录安装固定版本，不要在 DSH 程序安装目录执行：
 
    ```powershell
-   npm install --ignore-scripts @feng0531/dsh-execution-bus@0.7.0
+   npm install --ignore-scripts @feng0531/dsh-execution-bus@0.8.0
    ```
 
    这是 npm 目录示例。若目标配置使用 pnpm，应沿用其包管理器，不混用锁文件。遇到宿主 peer 版本冲突就停止，不用强制安装绕过。
@@ -269,7 +272,7 @@ npm run test:install    # 临时目录安装，不操作日常 DSH
 
 - [协议和投递语义](<docs/protocol.md>)：字段、状态、重复处理与取消规则。
 - [宿主兼容性与源码调用链](<docs/host-compatibility.md>)：为什么可以等待，为什么不能跨重启恢复。
-- [验证记录](<docs/validation.md>)、[0.7.0 发布说明](<docs/releases/0.7.0.md>)：已验证与未验证范围。
+- [验证记录](<docs/validation.md>)、[0.8.0 发布说明](<docs/releases/0.8.0.md>)：已验证与未验证范围。
 - [同类项目源码整合](<docs/INTEGRATION.md>)：固定来源、采用范围、许可与验证边界。
 - [维护者发布流程](<docs/RELEASING.md>)：标签 CI、安装包校验与正式发布门禁。
 

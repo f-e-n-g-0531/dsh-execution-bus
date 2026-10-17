@@ -41,9 +41,9 @@ export const STATE_PARAMETERS = {
   additionalProperties: false,
 } as const;
 export const REQUEST_DESCRIPTION =
-  "萧何 / Xiao He. Submit a version 1 request and WAIT for its terminal result in this tool call. Reuse requestId only for the same logical operation. Business handlers: host.read {file_path,offset?,limit?<=100}; host.edit {file_path,old_string,new_string,replace_all?}; host.write {file_path,content} (mutating, terminal reuse denied). Diagnostic handler only: test {delayMs:0..30000,fail:boolean}; never use it to perform real work. Control status/result/cancel use empty payload. Acceptance is volatile, not success. No polling or restart resume.";
+  "萧何 / Xiao He. Submit a version 1 request and WAIT for its terminal result in this tool call. Reuse requestId only for the same logical operation. Business handlers: host.read {file_path,offset?,limit?<=100}, host.glob {pattern,path?}, host.grep {pattern,path?,include?} (read-only, terminal reuse allowed); host.edit {file_path,old_string,new_string,replace_all?}, host.write {file_path,content}, host.pwsh {description,command,timeoutMs?,workdir?,run_in_background?,sandbox_permissions?,justification?} (mutating, terminal reuse denied). Diagnostic handler only: test {delayMs:0..30000,fail:boolean}; never use it to perform real work. Control status/result/cancel use empty payload. Acceptance is volatile, not success. No polling or restart resume.";
 export const MODE_INSTRUCTIONS =
-  "你正在萧何模式中。这不是角色扮演。保留宿主 PTC 的日常工具能力与权限规则。普通编辑、搜索、命令、安装和其他工作使用原工具，不要声称此模式只读。execution_bus 是可选协调入口，实际业务 Handler 为 host.read、host.edit 与 host.write（host.edit/host.write 有副作用，终态结果不可复用）；test 仅用于用户明确要求的诊断，不做真实工作，不要强制所有任务走总线。通过 run_code 调用 await tools.execution_bus(...)，受原有时间预算约束。每会话排队上限 " +
+  "你正在萧何模式中。这不是角色扮演。保留宿主 PTC 的日常工具能力与权限规则。普通编辑、搜索、命令、安装和其他工作使用原工具，不要声称此模式只读。execution_bus 是可选协调入口，实际业务 Handler 为 host.read、host.glob、host.grep（只读，可复用终态结果）与 host.edit、host.write、host.pwsh（有副作用，终态结果不可复用）；test 仅用于用户明确要求的诊断，不做真实工作，不要强制所有任务走总线。通过 run_code 调用 await tools.execution_bus(...)，受原有时间预算约束。每会话排队上限 " +
   ADMISSION_DEFAULTS.sessionQueueLimit +
   "，排队超过 " +
   ADMISSION_DEFAULTS.maxQueueWaitMs / 1000 +

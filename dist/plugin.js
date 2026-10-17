@@ -3,15 +3,18 @@ import { ADMISSION_DEFAULTS, REQUEST_DESCRIPTION, REQUEST_PARAMETERS, STATE_PARA
 import { ExecutionOwner } from "./execution.js";
 import { ExecutionBus, parse } from "./bus.js";
 import { ERRORS } from "./error-codes.js";
-import { testHandler, readHandler, editHandler, writeHandler, } from "./handlers.js";
+import { testHandler, readHandler, globHandler, grepHandler, editHandler, writeHandler, pwshHandler, } from "./handlers.js";
 export const name = "execution-bus";
 export const inject = ["tools", "jobs"];
 export function apply(ctx) {
     const bus = new ExecutionBus(undefined, ADMISSION_DEFAULTS);
     bus.register("test", testHandler);
     bus.register("host.read", readHandler);
+    bus.register("host.glob", globHandler);
+    bus.register("host.grep", grepHandler);
     bus.register("host.edit", editHandler);
     bus.register("host.write", writeHandler);
+    bus.register("host.pwsh", pwshHandler);
     const executions = new ExecutionOwner();
     ctx.effect(() => () => executions.close(() => bus.close()));
     ctx.tools.register({

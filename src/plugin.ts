@@ -20,8 +20,11 @@ import type { Message, Owner, RecordView } from "./bus.js";
 import {
   testHandler,
   readHandler,
+  globHandler,
+  grepHandler,
   editHandler,
   writeHandler,
+  pwshHandler,
 } from "./handlers.js";
 
 /** bus.submit 的一次附着：accepted + 等待/取消/解除/交付标记。 */
@@ -33,8 +36,11 @@ export function apply(ctx: Context) {
   const bus = new ExecutionBus(undefined, ADMISSION_DEFAULTS);
   bus.register("test", testHandler);
   bus.register("host.read", readHandler);
+  bus.register("host.glob", globHandler);
+  bus.register("host.grep", grepHandler);
   bus.register("host.edit", editHandler);
   bus.register("host.write", writeHandler);
+  bus.register("host.pwsh", pwshHandler);
   const executions = new ExecutionOwner();
   ctx.effect(() => () => executions.close(() => bus.close()));
 

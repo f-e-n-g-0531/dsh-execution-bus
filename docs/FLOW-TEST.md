@@ -33,7 +33,7 @@ npm run test:install
 - 合作取消、晚取消、未知结果不自动重跑。
 - 深层/非 JSON 结果拒绝，结果和通知不可变，异步观察者拒绝隔离。
 - 已受理 Handler 与替换注册并存，旧注销函数不破坏新注册。
-- 宿主 read 真正经过工具管线；前置拒绝仍生效。
+- 宿主 read/glob/grep/edit/write/pwsh 真正经过工具管线；前置拒绝仍生效（搜索与命令的转发测试使用宿主工具桩，不代表真实工具实现）。
 - Job 先行移除、等待/清理异常与卸载交错。
 - 派生预设成功激活、原 ptc 声明不变、普通 Agent 不可见总线、write/edit 保留且宿主策略可拒绝。
 - 真实 Node PTC 进程调用原 read 与总线；测试使用显式非约束策略，不代表桌面沙箱通过。
@@ -42,7 +42,7 @@ npm run test:install
 
 ## 测试之外仍需注意
 
-- 宿主 read 的错误目前被适配层统一映射为 `HOST_READ_FAILED`；在取消后可能保守记为 `unknown`，不能把它当作取消已确认。
+- 宿主工具调用失败在转发层使用固定码（host.read 为 `HOST_READ_FAILED`，其余为 `HOST_TOOL_FAILED`），进入总线后统一结算为 `failed` / `HANDLER_FAILED`，错误原文不保存；取消后可能保守记为 `unknown`，不能把它当作取消已确认。
 - 相同逻辑请求的取消是请求级取消，不能简单用 Promise.race 放弃执行来改成等待者级取消。
 - 当前没有远端 Handler 传输或持久化恢复；测试没有提供这些能力。
 

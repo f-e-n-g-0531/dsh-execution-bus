@@ -95,6 +95,55 @@ export const readHandler: Handler = hostToolHandler("read", {
   }),
 });
 
+function validateGlob(input: Record<string, unknown>) {
+  if (
+    Object.keys(input).some((k) => !["pattern", "path"].includes(k)) ||
+    typeof input.pattern !== "string" ||
+    input.pattern.trim().length === 0 ||
+    (input.path !== undefined &&
+      (typeof input.path !== "string" || input.path.trim().length === 0))
+  )
+    throw Error(ERRORS.INVALID_GLOB_INPUT);
+}
+
+/** 文件名搜索：只读，幂等，终态结果可复用；搜索基数由宿主工具限制。 */
+export const globHandler: Handler = hostToolHandler("glob", {
+  idempotent: true,
+  validate: validateGlob,
+});
+
+function validateGrep(input: Record<string, unknown>) {
+  if (
+    Object.keys(input).some(
+      (k) => !["pattern", "path", "include"].includes(k),
+    ) ||
+    typeof input.pattern !== "string" ||
+    input.pattern.length === 0 ||
+    (input.path !== undefined &&
+      (typeof input.path !== "string" || input.path.trim().length === 0))
+  )
+    throw Error(ERRORS.INVALID_GREP_INPUT);
+  if (input.include === undefined) return;
+  const include = input.include;
+  if (typeof include !== "string" || include.trim().length === 0)
+    throw Error(ERRORS.INVALID_GREP_INPUT);
+  // 与宿主 grep 契约一致：只接受单个正向 glob，不支持取反或顶层逗号列表。
+  if (include.startsWith("!")) throw Error(ERRORS.INVALID_GREP_INPUT);
+  let braceDepth = 0;
+  for (const char of include) {
+    if (char === "{") braceDepth++;
+    else if (char === "}") braceDepth = Math.max(0, braceDepth - 1);
+    else if (char === "," && braceDepth === 0)
+      throw Error(ERRORS.INVALID_GREP_INPUT);
+  }
+}
+
+/** 内容搜索：只读，幂等，终态结果可复用；匹配上限由宿主工具限制。 */
+export const grepHandler: Handler = hostToolHandler("grep", {
+  idempotent: true,
+  validate: validateGrep,
+});
+
 function validateWrite(input: Record<string, unknown>) {
   if (
     Object.keys(input).some((k) => !["file_path", "content"].includes(k)) ||
@@ -116,4 +165,56 @@ export const writeHandler: Handler = hostToolHandler("write", {
 export const editHandler: Handler = hostToolHandler("edit", {
   idempotent: false,
   validate: validateEdit,
+});
+
+/** 与宿主 pwsh 工具一致的提权目标；沙箱组合未提供提权面时由宿主拒绝。 */
+const PWSH_ESCALATION_TARGETS = Object.freeze([
+  "workspace-write",
+  "danger-full-access",
+]);
+
+function validatePwsh(input: Record<string, unknown>) {
+  if (
+    Object.keys(input).some(
+      (k) =>
+        ![
+          "description",
+          "command",
+          "timeoutMs",
+          "workdir",
+          "run_in_background",
+          "sandbox_permissions",
+          "justification",
+        ].includes(k),
+    ) ||
+    typeof input.command !== "string" ||
+    input.command.trim().length === 0 ||
+    typeof input.description !== "string" ||
+    input.description.trim().length === 0 ||
+    (input.timeoutMs !== undefined &&
+      (!Number.isFinite(input.timeoutMs) || Number(input.timeoutMs) <= 0)) ||
+    (input.workdir !== undefined && typeof input.workdir !== "string") ||
+    (input.run_in_background !== undefined &&
+      typeof input.run_in_background !== "boolean")
+  )
+    throw Error(ERRORS.INVALID_PWSH_INPUT);
+  const permissions = input.sandbox_permissions,
+    justification = input.justification;
+  if (
+    (permissions !== undefined && justification === undefined) ||
+    (justification !== undefined && permissions === undefined) ||
+    (permissions !== undefined &&
+      (typeof permissions !== "string" ||
+        !PWSH_ESCALATION_TARGETS.includes(permissions))) ||
+    (justification !== undefined &&
+      (typeof justification !== "string" ||
+        justification.trim().length === 0))
+  )
+    throw Error(ERRORS.INVALID_PWSH_INPUT);
+}
+
+/** 命令执行：有副作用，非幂等，终态结果不可复用；后台模式返回 Job ID 不等于完成。 */
+export const pwshHandler: Handler = hostToolHandler("pwsh", {
+  idempotent: false,
+  validate: validatePwsh,
 });
