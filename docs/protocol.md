@@ -116,4 +116,4 @@ core 实例的 `diagnostics()` 返回只读用途的独立快照：阶段计数�
 
 包的 `./core` 导出 ExecutionBus、Handler、Capability 类型。Handler 只接收输入、requestId、signal、progress 和可选最小 capability，不接收聊天历史。register 返回绑定唯一注册令牌的幂等注销函数，不会误删后来同名注册；已受理请求继续持有原 Handler。
 
-内置 test 和 host.read 没有非幂等写能力。当前没有 ctx.executionBus 服务、远端传输、跨插件动态注册或外部副作用对账契约。扩展有副作用 Handler 前必须另行设计授权、幂等与崩溃对账，不能仅依赖本版请求键。
+内置 test 与 host.read 没有副作用；host.edit 与 host.write 是非幂等写 Handler，通过 `Handler.idempotent=false` 显式声明，其终态结果复用被 `MUTATING_REUSE_DENIED` 拒绝，运行中的重复附着仍只等待同一执行。当前没有 ctx.executionBus 服务、远端传输、跨插件动态注册或外部副作用对账契约。扩展有副作用 Handler 前必须显式声明幂等并另行设计授权与崩溃对账，不能仅依赖本版请求键。

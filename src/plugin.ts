@@ -17,7 +17,12 @@ declare module "@deepseek-ai/dsh-jobs" {
 import { ExecutionBus, parse } from "./bus.js";
 import { ERRORS } from "./error-codes.js";
 import type { Message, Owner, RecordView } from "./bus.js";
-import { testHandler, readHandler } from "./handlers.js";
+import {
+  testHandler,
+  readHandler,
+  editHandler,
+  writeHandler,
+} from "./handlers.js";
 
 /** bus.submit 的一次附着：accepted + 等待/取消/解除/交付标记。 */
 type Submission = ReturnType<ExecutionBus["submit"]>;
@@ -28,6 +33,8 @@ export function apply(ctx: Context) {
   const bus = new ExecutionBus(undefined, ADMISSION_DEFAULTS);
   bus.register("test", testHandler);
   bus.register("host.read", readHandler);
+  bus.register("host.edit", editHandler);
+  bus.register("host.write", writeHandler);
   const executions = new ExecutionOwner();
   ctx.effect(() => () => executions.close(() => bus.close()));
 
@@ -81,27 +88,16 @@ export function apply(ctx: Context) {
     const m: Message = parse(raw);
     if (m.type !== "request") return bus.command(owner, m);
 
+    // 宿主工具转发：仅 host.* handler 注入对应工具的 capability。
+    const hostTool = hostToolFor(m.payload.handler);
     let projection: ExecutionHandle | undefined;
     const attached = bus.submit(
       owner,
       m,
       (event) => projection?.progress(event),
-      // 宿主 read 能力：出队时重新进入宿主工具管线，沿用宿主权限与工作目录。
-      async (input, signal) => {
-        const result = await ctx.tools.execute({
-          name: "read",
-          callId: (String(exec.callId) +
-            ":bus:" +
-            randomUUID()) as typeof exec.callId,
-          rootCallId: exec.rootCallId,
-          parent: exec.token,
-          agent,
-          arguments: input,
-          signal,
-        });
-        if (result.isError) throw Error(ERRORS.HOST_READ_FAILED);
-        return result.value;
-      },
+      hostTool
+        ? makeHostInvoke(exec, agent, hostTool.name, hostTool.errorCode)
+        : undefined,
     );
 
     // 1) 终态复用：已有执行直接读结果，不是新工作受理、不再申请 Job。
@@ -119,6 +115,43 @@ export function apply(ctx: Context) {
 
     // 3) 挂接取消生命周期，等待投影结算后返回执行快照。
     return await awaitProjection(exec, attached, execution);
+  }
+
+  /** 把 host.<tool> handler 名映射到宿主工具名与失败错误码。 */
+  function hostToolFor(handler: unknown) {
+    if (typeof handler !== "string" || !handler.startsWith("host."))
+      return undefined;
+    const name = handler.slice("host.".length);
+    if (!name) return undefined;
+    return {
+      name,
+      errorCode:
+        name === "read" ? ERRORS.HOST_READ_FAILED : ERRORS.HOST_TOOL_FAILED,
+    };
+  }
+
+  /** 为一类宿主工具构造转发能力：出队时重新进入宿主工具管线，沿用宿主权限与工作目录。 */
+  function makeHostInvoke(
+    exec: ToolRunContext,
+    agent: NonNullable<ToolRunContext["agent"]>,
+    toolName: string,
+    errorCode: string,
+  ) {
+    return async (input: Record<string, unknown>, signal: AbortSignal) => {
+      const result = await ctx.tools.execute({
+        name: toolName,
+        callId: (String(exec.callId) +
+          ":bus:" +
+          randomUUID()) as typeof exec.callId,
+        rootCallId: exec.rootCallId,
+        parent: exec.token,
+        agent,
+        arguments: input,
+        signal,
+      });
+      if (result.isError) throw Error(errorCode);
+      return result.value;
+    };
   }
 
   // —— 三个职责单一的拆分函数（闭包内共享 ctx/bus/executions） ——

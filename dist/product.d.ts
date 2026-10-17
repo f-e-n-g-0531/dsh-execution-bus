@@ -52,5 +52,5 @@ export declare const STATE_PARAMETERS: {
     readonly properties: {};
     readonly additionalProperties: false;
 };
-export declare const REQUEST_DESCRIPTION = "\u8427\u4F55 / Xiao He. Submit a version 1 request and WAIT for its terminal result in this tool call. Reuse requestId only for the same logical operation. Business handler: host.read {file_path,offset?,limit?<=100}. Diagnostic handler only: test {delayMs:0..30000,fail:boolean}; never use it to perform real work. Control status/result/cancel use empty payload. Acceptance is volatile, not success. No polling or restart resume.";
+export declare const REQUEST_DESCRIPTION = "\u8427\u4F55 / Xiao He. Submit a version 1 request and WAIT for its terminal result in this tool call. Reuse requestId only for the same logical operation. Business handlers: host.read {file_path,offset?,limit?<=100}; host.edit {file_path,old_string,new_string,replace_all?}; host.write {file_path,content} (mutating, terminal reuse denied). Diagnostic handler only: test {delayMs:0..30000,fail:boolean}; never use it to perform real work. Control status/result/cancel use empty payload. Acceptance is volatile, not success. No polling or restart resume.";
 export declare const MODE_INSTRUCTIONS: string;
