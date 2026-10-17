@@ -21,6 +21,9 @@ export type Event = {
 };
 export type Capability = (input: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>;
 export interface Handler {
+    /** 是否可安全复用终态结果。省略默认 true（可复用，向后兼容）；
+     *  显式 false = 有副作用，终态结果复用将被拒绝（运行中等待仍放行）。 */
+    readonly idempotent?: boolean;
     validate(input: Record<string, unknown>): void;
     run(input: Record<string, unknown>, ctx: {
         signal: AbortSignal;

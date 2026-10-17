@@ -3,6 +3,7 @@ import type { Handler } from "./bus.js";
 import { ERRORS } from "./error-codes.js";
 import { HANDLER_LIMITS } from "./product.js";
 export const testHandler: Handler = {
+  idempotent: true,
   validate(input) {
     if (
       Object.keys(input).some((k) => !["delayMs", "fail"].includes(k)) ||
@@ -25,6 +26,7 @@ export const testHandler: Handler = {
   },
 };
 export const readHandler: Handler = {
+  idempotent: true,
   validate(input) {
     if (
       Object.keys(input).some(

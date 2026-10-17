@@ -68,8 +68,8 @@ export function verifyReport(r, p) {
   });
   for (const target of Object.values(p.exports))
     assert.ok(paths.has(target.slice(2)));
-  assert.equal(p.peerDependencies["@deepseek-ai/dsh-tools"], "0.2.0-rc.2");
-  assert.equal(p.peerDependencies["@deepseek-ai/dsh-jobs"], "0.2.0-rc.2");
+  assert.equal(p.peerDependencies["@deepseek-ai/dsh-tools"], "0.2.1-rc.2");
+  assert.equal(p.peerDependencies["@deepseek-ai/dsh-jobs"], "0.2.1-rc.2");
   return paths.size;
 }
 if (process.argv[1]?.endsWith("verify-package.mjs")) {

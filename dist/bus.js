@@ -177,6 +177,10 @@ export class ExecutionBus {
     reuseInvocation(e, m, fingerprint, onEvent) {
         if (e.fingerprint !== fingerprint)
             throw Error(ERRORS.REQUEST_CONFLICT);
+        // 仅显式声明非幂等（idempotent:false）的 handler，终态结果才不可复用：
+        // 返回"已执行"会掩盖副作用状态。运行中的重复 attach 仍放行，不会二次执行。
+        if (e.handler.idempotent === false && isTerminal(e.view.state))
+            throw Error(ERRORS.MUTATING_REUSE_DENIED);
         const previous = e.messages.get(m.messageId);
         if (previous && previous !== canonical(m))
             throw Error(ERRORS.MESSAGE_CONFLICT);

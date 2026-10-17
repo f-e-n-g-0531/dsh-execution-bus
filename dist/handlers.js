@@ -2,6 +2,7 @@ import { setTimeout } from "node:timers/promises";
 import { ERRORS } from "./error-codes.js";
 import { HANDLER_LIMITS } from "./product.js";
 export const testHandler = {
+    idempotent: true,
     validate(input) {
         if (Object.keys(input).some((k) => !["delayMs", "fail"].includes(k)) ||
             !Number.isSafeInteger(input.delayMs) ||
@@ -23,6 +24,7 @@ export const testHandler = {
     },
 };
 export const readHandler = {
+    idempotent: true,
     validate(input) {
         if (Object.keys(input).some((k) => !["file_path", "offset", "limit"].includes(k)) ||
             typeof input.file_path !== "string" ||

@@ -56,6 +56,15 @@ test(
     new SystemPrompt(ctx, {});
     new ToolRuntime(ctx, { mode: "native" });
     new SessionProjectionRegistry(ctx);
+  // 0.2.1-rc.2 起宿主要求 workingDirectory 服务；夹具 Agent 无法构造真实 Session 投影，
+  // 这里注入与宿主工具链兼容的最小 stub（只读场景），不改变被测插件逻辑。
+  ctx.provide("workingDirectory");
+  ctx.set("workingDirectory", {
+    defaultDirectory: process.cwd(),
+    get: () => process.cwd(),
+    ensure: async () => process.cwd(),
+    set: async () => process.cwd(),
+  });
     new LocalFS(ctx, LocalFS.Config({ cwd: process.cwd() }));
     new Jobs(ctx, Jobs.Config({}));
     new Loader(ctx, { baseUrl: pathToFileURL(process.cwd() + "/").href });
