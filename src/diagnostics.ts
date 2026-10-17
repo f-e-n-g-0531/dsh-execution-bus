@@ -10,7 +10,8 @@ export type TraceStage =
   | "job_created"
   | "job_released"
   | "job_error"
-  | "reused";
+  | "reused"
+  | "unique_reused";
 export interface Trace {
   operation: number;
   stage: TraceStage;

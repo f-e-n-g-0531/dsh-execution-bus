@@ -11,12 +11,20 @@ export function hostToolHandler(
     idempotent: boolean;
     validate(input: Record<string, unknown>): void;
     prepare?(input: Record<string, unknown>): Record<string, unknown>;
+    queue?: string;
+    maxConcurrency?: number;
+    resources?(input: Record<string, unknown>): readonly string[];
+    dedupe?: "payload";
   },
 ): Handler {
   // toolName 只表达意图；实际宿主工具已由宿主层按 handler 名绑定到 capability。
   void toolName;
   return {
     idempotent: opts.idempotent,
+    queue: opts.queue,
+    maxConcurrency: opts.maxConcurrency,
+    resources: opts.resources,
+    dedupe: opts.dedupe,
     validate: opts.validate,
     async run(input, ctx) {
       if (!ctx.invoke) throw Error(ERRORS.HOST_CAPABILITY_REQUIRED);
@@ -27,6 +35,7 @@ export function hostToolHandler(
 
 export const testHandler: Handler = {
   idempotent: true,
+  queue: "diagnostic",
   validate(input) {
     if (
       Object.keys(input).some((k) => !["delayMs", "fail"].includes(k)) ||
@@ -85,9 +94,16 @@ function validateEdit(input: Record<string, unknown>) {
     throw Error(ERRORS.INVALID_EDIT_INPUT);
 }
 
-/** 读取：无副作用，幂等，终态结果可复用。 */
+/** 同一路径的文件写入/编辑互斥；路径按调用原文作为资源键（不做跨平台归一化）。 */
+function fileResource(input: Record<string, unknown>): readonly string[] {
+  return ["file:" + String(input.file_path)];
+}
+
+/** 读取：无副作用，幂等，终态结果可复用；可按 payload 指纹做唯一任务。 */
 export const readHandler: Handler = hostToolHandler("read", {
   idempotent: true,
+  queue: "fs",
+  dedupe: "payload",
   validate: validateRead,
   prepare: (input) => ({
     ...input,
@@ -109,6 +125,8 @@ function validateGlob(input: Record<string, unknown>) {
 /** 文件名搜索：只读，幂等，终态结果可复用；搜索基数由宿主工具限制。 */
 export const globHandler: Handler = hostToolHandler("glob", {
   idempotent: true,
+  queue: "fs",
+  dedupe: "payload",
   validate: validateGlob,
 });
 
@@ -141,6 +159,8 @@ function validateGrep(input: Record<string, unknown>) {
 /** 内容搜索：只读，幂等，终态结果可复用；匹配上限由宿主工具限制。 */
 export const grepHandler: Handler = hostToolHandler("grep", {
   idempotent: true,
+  queue: "fs",
+  dedupe: "payload",
   validate: validateGrep,
 });
 
@@ -158,12 +178,16 @@ function validateWrite(input: Record<string, unknown>) {
 /** 写入：有副作用，非幂等，终态结果不可复用。 */
 export const writeHandler: Handler = hostToolHandler("write", {
   idempotent: false,
+  queue: "fs",
+  resources: fileResource,
   validate: validateWrite,
 });
 
 /** 编辑：有副作用，非幂等，终态结果不可复用。 */
 export const editHandler: Handler = hostToolHandler("edit", {
   idempotent: false,
+  queue: "fs",
+  resources: fileResource,
   validate: validateEdit,
 });
 
@@ -216,5 +240,6 @@ function validatePwsh(input: Record<string, unknown>) {
 /** 命令执行：有副作用，非幂等，终态结果不可复用；后台模式返回 Job ID 不等于完成。 */
 export const pwshHandler: Handler = hostToolHandler("pwsh", {
   idempotent: false,
+  queue: "command",
   validate: validatePwsh,
 });

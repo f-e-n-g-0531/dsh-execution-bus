@@ -8,6 +8,10 @@ export function hostToolHandler(toolName, opts) {
     void toolName;
     return {
         idempotent: opts.idempotent,
+        queue: opts.queue,
+        maxConcurrency: opts.maxConcurrency,
+        resources: opts.resources,
+        dedupe: opts.dedupe,
         validate: opts.validate,
         async run(input, ctx) {
             if (!ctx.invoke)
@@ -18,6 +22,7 @@ export function hostToolHandler(toolName, opts) {
 }
 export const testHandler = {
     idempotent: true,
+    queue: "diagnostic",
     validate(input) {
         if (Object.keys(input).some((k) => !["delayMs", "fail"].includes(k)) ||
             !Number.isSafeInteger(input.delayMs) ||
@@ -61,9 +66,15 @@ function validateEdit(input) {
         (input.replace_all !== undefined && typeof input.replace_all !== "boolean"))
         throw Error(ERRORS.INVALID_EDIT_INPUT);
 }
-/** 读取：无副作用，幂等，终态结果可复用。 */
+/** 同一路径的文件写入/编辑互斥；路径按调用原文作为资源键（不做跨平台归一化）。 */
+function fileResource(input) {
+    return ["file:" + String(input.file_path)];
+}
+/** 读取：无副作用，幂等，终态结果可复用；可按 payload 指纹做唯一任务。 */
 export const readHandler = hostToolHandler("read", {
     idempotent: true,
+    queue: "fs",
+    dedupe: "payload",
     validate: validateRead,
     prepare: (input) => ({
         ...input,
@@ -81,6 +92,8 @@ function validateGlob(input) {
 /** 文件名搜索：只读，幂等，终态结果可复用；搜索基数由宿主工具限制。 */
 export const globHandler = hostToolHandler("glob", {
     idempotent: true,
+    queue: "fs",
+    dedupe: "payload",
     validate: validateGlob,
 });
 function validateGrep(input) {
@@ -111,6 +124,8 @@ function validateGrep(input) {
 /** 内容搜索：只读，幂等，终态结果可复用；匹配上限由宿主工具限制。 */
 export const grepHandler = hostToolHandler("grep", {
     idempotent: true,
+    queue: "fs",
+    dedupe: "payload",
     validate: validateGrep,
 });
 function validateWrite(input) {
@@ -124,11 +139,15 @@ function validateWrite(input) {
 /** 写入：有副作用，非幂等，终态结果不可复用。 */
 export const writeHandler = hostToolHandler("write", {
     idempotent: false,
+    queue: "fs",
+    resources: fileResource,
     validate: validateWrite,
 });
 /** 编辑：有副作用，非幂等，终态结果不可复用。 */
 export const editHandler = hostToolHandler("edit", {
     idempotent: false,
+    queue: "fs",
+    resources: fileResource,
     validate: validateEdit,
 });
 /** 与宿主 pwsh 工具一致的提权目标；沙箱组合未提供提权面时由宿主拒绝。 */
@@ -170,5 +189,6 @@ function validatePwsh(input) {
 /** 命令执行：有副作用，非幂等，终态结果不可复用；后台模式返回 Job ID 不等于完成。 */
 export const pwshHandler = hostToolHandler("pwsh", {
     idempotent: false,
+    queue: "command",
     validate: validatePwsh,
 });

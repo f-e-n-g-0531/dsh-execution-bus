@@ -21,6 +21,33 @@
 | [cc-multi-process-mcp / 234823f1](https://github.com/L-x-C/cc-multi-process-mcp/tree/234823f15616d7e9c759072e940396d939f823c2) | main.py 的进程检测、信号回收、同步/异步执行、结果文件和清理路径 | 不引入自建进程池或轮询。源码的 skip_permissions 默认和 /tmp 存储不适合本插件宿主边界；未发现 LICENSE 文件，不复制代码 |
 
 这是相关路径的定向阅读，不是五仓全量逐文件安全审核。参考快照在开发目录，明确忽略，不进入源码提交或 npm 包。
+## 0.12.0 追加整合：调度隔离、资源互斥、唯一任务与属性测试
+
+本轮以 0.11.3 为基线，读取以下公开文档/README（2026-10-18，文档站点与仓库链接；未复制源码，未新增运行依赖），只采用与插件边界相符的机制：
+
+| 来源 | 实际阅读内容 | 采用与不采用 |
+|---|---|---|
+| [Temporal Workflow Id / Reuse Policy](https://docs.temporal.io/workflow-execution/workflowid-runid) | Workflow Id 唯一性、Run Id 区分、关闭后复用策略 | 参考“稳定逻辑编号 + 复用策略”分层；不引入持久化运行历史 |
+| [Restate 文档](https://docs.restate.dev/)（BUSL-1.1，仅文档） | exactly-once、按 scope 的并发/流量控制、virtual object 串行化 | 参考“按类别/资源隔离并发”；不复制代码，不引入其运行时 |
+| [DBOS 文档](https://docs.dbos.dev/) | durable queues、exactly-once、事务入队 | 仅对照边界；无持久化宿主契约，不实现 |
+| [Oban 文档](https://oban.hexdocs.pm/Oban.html)（Apache-2.0） | 队列独立并发上限、唯一任务、10 级优先级 | 实现 Handler.queue 类别 + 优先级 + 等待老化；不引入数据库/自动重试 |
+| [BullMQ README](https://github.com/taskforcesh/bullmq)（MIT） | priorities、concurrency、rate limiter、stalled jobs | 参考优先级/舱壁；不引入 Redis/停滞重排 |
+| [Resilience4j README](https://github.com/resilience4j/resilience4j)（Apache-2.0） | Bulkhead、TimeLimiter | 实现 Handler.maxConcurrency 舱壁；超时暂只做 longRunning 诊断 |
+| [fast-check](https://github.com/dubzzz/fast-check)（MIT，devDependency） | 属性测试 API | 新增随机序列不变量回归；仅开发依赖，不进入 tgz |
+
+本轮实现（0.12.0）：
+
+1. Handler 调度声明：queue、maxConcurrency、resources(input)、dedupe:"payload"；register 时校验。
+2. 调度：同会话内按类别优先级（fs < diagnostic < command < default）+ 等待老化（每 30 秒削平一级，最多两级）选择；跨会话仍按会话轮转；Handler.maxConcurrency 作为舱壁。
+3. 资源互斥：Handler.resources 返回稳定字符串键（host.edit/host.write 使用 file:<file_path>）；同一总线实例内同键串行，失败/取消/关闭释放；排队期限仍然有效。
+4. 唯一任务：幂等 Handler 声明 dedupe:"payload"（host.read/glob/grep）；同会话同 handler+payload 已有 succeeded 终态时，新 requestId 直接复用快照并带 reused:true；失败结果不缓存。
+5. 诊断：execution_bus_state 任务增加 longRunning（30 秒阈值）；waitReason 增加 resource。
+6. 测试：新增 8 项调度/唯一/资源回归、2 项 fast-check 属性回归与 2 项插件级 Handler 回归。
+
+不采用：Oban/BullMQ 的数据库/Redis 持久化、自动重试、停滞重排；Temporal/DBOS 的持久化执行与跨重启恢复（缺宿主契约）；Restate 源码（BUSL-1.1）。资源互斥仅在单个总线实例内有效，不是 OS 文件锁或跨进程保证。
+
+许可：本轮未复制第三方源码；fast-check 作为 devDependency 使用（MIT），不进入 tgz；Restate 文档仅作机制参考（BUSL-1.1）。
+
 
 ## 许可与实现归属
 

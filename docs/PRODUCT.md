@@ -12,6 +12,8 @@
 
 0.11.0 根据 pilot 收紧为收益导向触发：重复提交/重试去重、预算结束后继续/跨步骤取回、多等待者同一执行才用总线，时长本身不是理由；新增简化调用（requestId+handler+input，messageId 自动生成）与控制（requestId+type），完整 v1 消息仍兼容；快照在复用时带 reused:true，并新增只读的会话采用率统计脚本。
 
+0.12.0 补充调度隔离：Handler 可声明调度类别、舱壁、资源键与 payload 唯一任务；内置写 Handler 按文件路径互斥，只读 Handler 的相同输入可在不同 requestId 间复用成功结果；状态快照增加 longRunning 与 resource 等待原因。参考来源与许可见 [整合说明](<INTEGRATION.md>)，未引入第三方运行依赖；fast-check 仅用于开发属性测试。
+
 ## 入口及配置层次
 
 | 入口 | 谁使用 | 责任 |

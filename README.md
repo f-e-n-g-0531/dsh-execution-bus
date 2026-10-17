@@ -4,7 +4,7 @@
 
 “萧何”是产品与模式显示名，执行总线是其技术功能；不新增人物 Agent，不进行角色扮演。仓库 dsh-execution-bus、npm 包名、execution_bus 工具名及 execution-bus-test 预设 ID 保持不变。历史版本发布说明保留当时名称。
 
-DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **0.11.3**
+DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **0.12.0**
 
 > 萧何模式从宿主已声明的 PTC 组合派生，保留日常工具，再叠加可选执行总线。已验证隔离的真实 Node PTC → 原 read + 总线调用，以及脚本模型内存会话；真实模型、桌面界面与实际沙箱仍未验收。**不支持重启后恢复任务。**
 
@@ -130,7 +130,7 @@ flowchart TD
 2. 在你选定的隔离 DSH 配置依赖目录安装固定版本，不要在 DSH 程序安装目录执行：
 
    ```powershell
-   npm install --ignore-scripts @feng0531/dsh-execution-bus@0.11.3
+   npm install --ignore-scripts @feng0531/dsh-execution-bus@0.12.0
    ```
 
    这是 npm 目录示例。若目标配置使用 pnpm，应沿用其包管理器，不混用锁文件。遇到宿主 peer 版本冲突就停止，不用强制安装绕过。
@@ -204,6 +204,13 @@ PTC 是 DSH 的程序化工具调用入口。在 `run_code` 内使用 `await too
 **0.11.0 起，总线改为收益导向触发并支持简化调用。** 只在能获得协调收益时使用：同一逻辑操作可能重复提交或需要重试去重（沿用 requestId）、任务需要在 `run_code` 预算结束后继续/跨步骤取回、或多个步骤与等待者需要同一执行结果；**“操作耗时长”本身不是理由**，一次性长命令请用原工具或宿主后台 Job。工具入口支持简化调用 `{requestId, handler, input}`（messageId 可省略、自动生成）和控制 `{requestId, type:"status"|"result"|"cancel"}`，完整 v1 消息仍被接受；返回快照在复用时带 `reused: true`。工具声明仍是按 Handler 的判别联合，PTC SDK 与原生声明里可直接看到每个 Handler 的必填字段。
 
 **跨步骤取回的正确姿势（0.11.1 补充）：** 同一 `run_code` 程序内，未完成的 request 会阻塞后发工具调用的结果提交（宿主按提交顺序结算）；不要在同一个程序里“启动后立刻 status 轮询”。启动步骤只发请求并尽早结束程序，下一步再用同一 `requestId` 的 `status`/`result`（或重发同一 request）附着取回——pilot 实测单次执行、返回 `reused:true`。
+
+### 调度与互斥（0.12.0）
+
+- **队列类别**：内置 Handler 分为 `fs`（read/glob/grep/edit/write）、`command`（pwsh）、`diagnostic`（test）。同会话内按类别优先级 + 等待老化选择：长命令不会长期压住文件/搜索类任务，等待超过阈值会逐步削平类别差距。
+- **舱壁**：Handler 可声明 `maxConcurrency`，同一 Handler 运行数受限；`execution_bus_state` 的 `waitReason` 会显示 `concurrency`/`dispatch`/`resource`，运行超过 30 秒的任务标记 `longRunning`。
+- **资源互斥**：`host.edit`/`host.write` 按 `file_path` 资源键在**同一总线实例内**串行，避免同文件并发写；失败/取消/关闭都会释放。它是插件内互斥，不是 OS 文件锁或跨进程保证。
+- **唯一任务**：`host.read`/`host.glob`/`host.grep` 声明 payload 去重；同会话同输入且已有成功结果时，新 requestId 直接复用并返回 `reused:true`（失败结果不缓存，不会把失败当成功复用）。
 
 **0.9.0 起，预算到期不再连带取消已受理执行。** `run_code` 因时间预算到期或程序结束时，宿主会中断其中的工具子调用；总线把这种中断视为**只停止等待**：已受理执行与宿主 Job 继续，程序返回预算错误后，可在后续 `run_code` 中用同一 `requestId` 的 `status`/`result` 取回结果，或用 `cancel` 取消。用户主动中断、会话取消、沙箱模式变化等其他原因仍会请求取消整个执行。该识别依赖 DSH 0.2.1-rc.2 的中断原因字符串（见[宿主兼容性](<docs/host-compatibility.md>)），不是宿主公开稳定契约；进程退出仍会丢失全部内存状态，保留期一小时。
 
@@ -280,7 +287,7 @@ npm run test:install    # 临时目录安装，不操作日常 DSH
 
 - [协议和投递语义](<docs/protocol.md>)：字段、状态、重复处理与取消规则。
 - [宿主兼容性与源码调用链](<docs/host-compatibility.md>)：为什么可以等待，为什么不能跨重启恢复。
-- [验证记录](<docs/validation.md>)、[0.11.3 发布说明](<docs/releases/0.11.3.md>)：已验证与未验证范围。
+- [验证记录](<docs/validation.md>)、[0.12.0 发布说明](<docs/releases/0.12.0.md>)：已验证与未验证范围。
 - [同类项目源码整合](<docs/INTEGRATION.md>)：固定来源、采用范围、许可与验证边界。
 - [维护者发布流程](<docs/RELEASING.md>)：标签 CI、安装包校验与正式发布门禁。
 

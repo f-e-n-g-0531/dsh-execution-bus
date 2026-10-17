@@ -5,9 +5,13 @@ export declare function hostToolHandler(toolName: string, opts: {
     idempotent: boolean;
     validate(input: Record<string, unknown>): void;
     prepare?(input: Record<string, unknown>): Record<string, unknown>;
+    queue?: string;
+    maxConcurrency?: number;
+    resources?(input: Record<string, unknown>): readonly string[];
+    dedupe?: "payload";
 }): Handler;
 export declare const testHandler: Handler;
-/** 读取：无副作用，幂等，终态结果可复用。 */
+/** 读取：无副作用，幂等，终态结果可复用；可按 payload 指纹做唯一任务。 */
 export declare const readHandler: Handler;
 /** 文件名搜索：只读，幂等，终态结果可复用；搜索基数由宿主工具限制。 */
 export declare const globHandler: Handler;

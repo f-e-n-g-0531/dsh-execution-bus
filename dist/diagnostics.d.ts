@@ -1,4 +1,4 @@
-export type TraceStage = "accepted" | "started" | "cancel_requested" | "terminal" | "returned" | "job_created" | "job_released" | "job_error" | "reused";
+export type TraceStage = "accepted" | "started" | "cancel_requested" | "terminal" | "returned" | "job_created" | "job_released" | "job_error" | "reused" | "unique_reused";
 export interface Trace {
     operation: number;
     stage: TraceStage;
@@ -30,6 +30,7 @@ export declare class Diagnostics {
             job_released?: number | undefined;
             job_error?: number | undefined;
             reused?: number | undefined;
+            unique_reused?: number | undefined;
         };
         traces: {
             operation: number;

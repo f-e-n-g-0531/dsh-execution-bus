@@ -23,6 +23,12 @@ export declare const HANDLER_LIMITS: Readonly<{
     readPathChars: 2048;
     diagnosticDelayMs: 30000;
 }>;
+/** 调度策略：类别优先级 + 等待老化 + 长任务诊断阈值。 */
+export declare const SCHEDULER_POLICY: Readonly<{
+    longRunningMs: 30000;
+    queueAgingMs: 30000;
+    queueClassOrder: Readonly<Record<string, number>>;
+}>;
 export declare const REQUEST_PARAMETERS: {
     readonly oneOf: readonly [...{
         type: "object";

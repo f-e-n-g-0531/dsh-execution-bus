@@ -110,7 +110,7 @@ core 不传配置时用默认值；显式配置必须完整包含 concurrency、
 
 期限使用单调时钟，计时器及出队前均检查，超期只将 queued 结算 failed / QUEUE_WAIT_TIMEOUT，不调用 Handler、不设置 cancelRequested、不重试，沿原 done/Job 返回。开始运行、取消或关闭时清除计时器。事件循环繁忙会令通知晚于期限，但不会让超期任务出队执行。已运行任务继续遵守原执行/取消规则。
 
-execution_bus_state 工具仅接受 {}，从宿主 Agent 取 sessionId，拒绝匿名或自报身份，关闭后拒绝查询。它读取 core inspect 的不可变快照，不创建 Job、不改变消息额度；查询会做正常终态 TTL 清理。不包含输入/输出，不访问其他会话。最多 50 条、活跃优先，其后按受理次序倒序列出终态；总数未截断，truncated 提示列表截断。元数据含 requestId、state、delivery、cancelRequested、固定 error/progress、waitReason、queueMs/runMs/remainingQueueMs。phase terminal 只表示执行终态且尚未标记返回，不代表可推断宿主 Job 清理进度。
+execution_bus_state 工具仅接受 {}，从宿主 Agent 取 sessionId，拒绝匿名或自报身份，关闭后拒绝查询。它读取 core inspect 的不可变快照，不创建 Job、不改变消息额度；查询会做正常终态 TTL 清理。不包含输入/输出，不访问其他会话。最多 50 条、活跃优先，其后按受理次序倒序列出终态；总数未截断，truncated 提示列表截断。元数据含 requestId、state、delivery、cancelRequested、固定 error/progress、waitReason（concurrency/dispatch/resource）、longRunning（运行超过 30 秒）、queueMs/runMs/remainingQueueMs。phase terminal 只表示执行终态且尚未标记返回，不代表可推断宿主 Job 清理进度。
 
 core inspect(trustedOwner) 要求非空 sessionId，但不提供鉴权，可信身份和访问控制属于嵌入宿主。勿把 core 的任意 owner 参数直接暴露给远端。状态不是持久审计/模型消费回执，不应循环调用。
 
@@ -127,5 +127,7 @@ core 实例的 `diagnostics()` 返回只读用途的独立快照：阶段计数�
 0.10.0 起，模型可见的工具体声明把 `payload` 改为按 Handler 的判别联合（每个 `host.*`/test 的 `input` 字段与必填项）；这是提示与 SDK 类型层的变化，wire 结构、校验、错误码与保存语义不变。
 
 0.11.0 起，模型可传简化输入：请求 `{requestId, handler, input, messageId?}`、控制 `{requestId, type, messageId?}`；插件在进入总线前补齐完整 v1 消息，完整 v1 消息仍被接受。返回快照在附着已有执行时追加可选 `reused:true`，只表示复用了逻辑执行，不代表外部副作用对账。
+
+0.12.0 扩展 Handler 可选声明：`queue`（调度类别，内置 fs/diagnostic/command）、`maxConcurrency`（同一 Handler 舱壁）、`resources(input)`（资源键串行）、`dedupe:"payload"`（幂等 Handler 的唯一任务复用）。调度和资源锁只在单个总线实例内生效；资源键是调用方提供的字符串，不是 OS 文件锁或跨进程保证。唯一任务只复用 succeeded 终态，失败/取消/unknown 不缓存；命中时返回快照带 `reused:true`，且不会再次执行 Handler。
 
 内置 test、host.read、host.glob 与 host.grep 没有副作用；host.edit、host.write 与 host.pwsh 是非幂等写/命令 Handler，通过 `Handler.idempotent=false` 显式声明，其终态结果复用被 `MUTATING_REUSE_DENIED` 拒绝，运行中的重复附着仍只等待同一执行。0.8.0 新增宿主工具输入错误码 INVALID_GLOB_INPUT、INVALID_GREP_INPUT 与 INVALID_PWSH_INPUT；协议既有错误码不改名。host.pwsh 的后台结果只是宿主 Job ID，不是完成回执。当前没有 ctx.executionBus 服务、远端传输、跨插件动态注册或外部副作用对账契约。扩展有副作用 Handler 前必须显式声明幂等并另行设计授权与崩溃对账，不能仅依赖本版请求键。

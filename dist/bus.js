@@ -4,7 +4,7 @@ import { Diagnostics } from "./diagnostics.js";
 import { ERRORS } from "./error-codes.js";
 import { assertJson } from "./json.js";
 import { LIMITS } from "./limits.js";
-import { CORE_DEFAULTS } from "./product.js";
+import { CORE_DEFAULTS, SCHEDULER_POLICY } from "./product.js";
 import { canonical, freezeJson, object, parse } from "./protocol.js";
 export { object, parse };
 const isTerminal = (s) => !["queued", "running"].includes(s);
@@ -16,11 +16,17 @@ function hashPayload(payload) {
 export class ExecutionBus {
     options;
     admission;
+    scheduler;
     entries = new Map();
     handlers = new Map();
     queue = [];
     readyOwners = [];
     running = 0;
+    runningByHandler = new Map();
+    /** 资源键 → 占用它的运行中 Entry；有副作用 Handler 据此互斥。 */
+    resourceLocks = new Map();
+    /** payload 指纹 → 已成功或运行中的 Entry，用于唯一任务复用。 */
+    dedupeIndex = new Map();
     retainedResultBytes = 0;
     closed = false;
     telemetry = new Diagnostics();
@@ -36,9 +42,36 @@ export class ExecutionBus {
     }
     closing;
     shutdownPhase = "open";
-    constructor(options = CORE_DEFAULTS, admission = {}) {
+    constructor(options = CORE_DEFAULTS, admission = {}, scheduler = SCHEDULER_POLICY) {
         this.options = options;
         this.admission = admission;
+        this.scheduler = scheduler;
+        const schedulerKeys = ["queueClassOrder", "queueAgingMs", "longRunningMs"];
+        if (!scheduler ||
+            typeof scheduler !== "object" ||
+            Array.isArray(scheduler) ||
+            Reflect.ownKeys(scheduler).some((key) => typeof key !== "string" || !schedulerKeys.includes(key)))
+            throw Error(ERRORS.INVALID_OPTIONS);
+        if (!Number.isSafeInteger(scheduler.queueAgingMs) ||
+            scheduler.queueAgingMs < 1 ||
+            !Number.isSafeInteger(scheduler.longRunningMs) ||
+            scheduler.longRunningMs < 1)
+            throw Error(ERRORS.INVALID_OPTIONS);
+        const order = scheduler.queueClassOrder;
+        if (!order || typeof order !== "object" || Array.isArray(order))
+            throw Error(ERRORS.INVALID_OPTIONS);
+        for (const [className, rank] of Object.entries(order))
+            if (typeof className !== "string" ||
+                className.length === 0 ||
+                className.length > 64 ||
+                !Number.isSafeInteger(rank) ||
+                rank < 0)
+                throw Error(ERRORS.INVALID_OPTIONS);
+        this.scheduler = Object.freeze({
+            queueClassOrder: Object.freeze({ ...order }),
+            queueAgingMs: scheduler.queueAgingMs,
+            longRunningMs: scheduler.longRunningMs,
+        });
         const allowed = ["sessionQueueLimit", "maxQueueWaitMs"];
         if (!admission ||
             typeof admission !== "object" ||
@@ -79,6 +112,19 @@ export class ExecutionBus {
     register(name, handler) {
         if (this.handlers.has(name))
             throw Error(ERRORS.DUPLICATE_HANDLER);
+        if (!handler ||
+            typeof handler !== "object" ||
+            (handler.queue !== undefined &&
+                (typeof handler.queue !== "string" ||
+                    handler.queue.length === 0 ||
+                    handler.queue.length > 64)) ||
+            (handler.maxConcurrency !== undefined &&
+                (!Number.isSafeInteger(handler.maxConcurrency) ||
+                    handler.maxConcurrency < 1)) ||
+            (handler.dedupe !== undefined && handler.dedupe !== "payload") ||
+            (handler.dedupe === "payload" && handler.idempotent !== true) ||
+            (handler.resources !== undefined && typeof handler.resources !== "function"))
+            throw Error(ERRORS.INVALID_HANDLER_OPTIONS);
         const registration = { handler, token: Symbol(name) };
         this.handlers.set(name, registration);
         let disposed = false;
@@ -145,6 +191,10 @@ export class ExecutionBus {
                 this.retainedResultBytes -= e.resultBytes;
                 this.entries.delete(k);
             }
+        const live = new Set(this.entries.values());
+        for (const [key, e] of this.dedupeIndex)
+            if (!live.has(e))
+                this.dedupeIndex.delete(key);
     }
     submit(owner, raw, onEvent, invoke) {
         if (this.closed)
@@ -199,6 +249,26 @@ export class ExecutionBus {
         if (!handler)
             throw Error(ERRORS.UNKNOWN_HANDLER);
         handler.validate(parts.input);
+        const dedupeKey = handler.dedupe === "payload"
+            ? JSON.stringify([owner.sessionId, parts.handler, fingerprint])
+            : undefined;
+        if (dedupeKey !== undefined) {
+            const target = this.dedupeIndex.get(dedupeKey);
+            if (target !== undefined &&
+                target.view.state === "succeeded" &&
+                isTerminal(target.view.state)) {
+                try {
+                    const unique = this.syntheticUnique(owner, m, parts, key, fingerprint, handler, target, dedupeKey);
+                    return this.attachment(unique, onEvent, m.messageId, true);
+                }
+                catch (error) {
+                    if (error instanceof Error && error.message === ERRORS.BACKPRESSURE)
+                        throw error;
+                    // 结果不可克隆时退回正常执行，避免把唯一缓存错误变成请求失败。
+                }
+            }
+        }
+        const resources = this.resourcesFor(handler, parts.input);
         if (this.entries.size >= this.options.recordLimit ||
             this.queue.length >= this.options.queueLimit)
             throw Error(ERRORS.BACKPRESSURE);
@@ -216,6 +286,10 @@ export class ExecutionBus {
             owner: owner.sessionId,
             fingerprint,
             handler,
+            handlerName: parts.handler,
+            queueClass: handler.queue ?? "default",
+            resources,
+            dedupeKey,
             input: structuredClone(parts.input),
             view: {
                 requestId: m.requestId,
@@ -235,6 +309,8 @@ export class ExecutionBus {
             messages: new Map([[m.messageId, canonical(m)]]),
         };
         this.entries.set(key, e);
+        if (dedupeKey !== undefined)
+            this.dedupeIndex.set(dedupeKey, e);
         this.telemetry.record(e.trace, "accepted");
         const attached = this.attachment(e, onEvent, m.messageId);
         this.queue.push(e);
@@ -261,6 +337,112 @@ export class ExecutionBus {
             this.finish(e, "failed", undefined, "QUEUE_WAIT_TIMEOUT");
         };
         e.queueTimer = setTimeout(expire, this.admission.maxQueueWaitMs);
+    }
+    /** 计算并校验 Handler 的资源键；失败则请求不进入队列。 */
+    resourcesFor(handler, input) {
+        if (handler.resources === undefined)
+            return [];
+        let raw;
+        try {
+            raw = handler.resources(input);
+        }
+        catch {
+            throw Error(ERRORS.INVALID_RESOURCES);
+        }
+        if (!Array.isArray(raw) || raw.length > 8)
+            throw Error(ERRORS.INVALID_RESOURCES);
+        const resources = [];
+        for (const resource of raw) {
+            if (typeof resource !== "string" ||
+                resource.length === 0 ||
+                resource.length > 256)
+                throw Error(ERRORS.INVALID_RESOURCES);
+            if (!resources.includes(resource))
+                resources.push(resource);
+        }
+        resources.sort();
+        return resources;
+    }
+    /** 唯一任务命中已成功终态时，构造一个不再执行 Handler 的只读结果记录。 */
+    syntheticUnique(owner, m, parts, key, fingerprint, handler, target, dedupeKey) {
+        if (this.entries.size >= this.options.recordLimit)
+            throw Error(ERRORS.BACKPRESSURE);
+        const snapshot = freezeJson(structuredClone({
+            requestId: m.requestId,
+            state: "succeeded",
+            sequence: 1,
+            cancelRequested: false,
+            delivery: "pending",
+            result: target.view.result,
+        }));
+        let resolve;
+        const done = new Promise((r) => (resolve = r));
+        const e = {
+            trace: this.telemetry.begin(),
+            resultBytes: 0,
+            invoke: undefined,
+            correlationId: m.messageId,
+            owner: owner.sessionId,
+            fingerprint,
+            handler,
+            handlerName: parts.handler,
+            queueClass: handler.queue ?? "default",
+            resources: [],
+            dedupeKey,
+            input: structuredClone(parts.input),
+            view: { ...snapshot, sequence: 1 },
+            controller: new AbortController(),
+            done,
+            resolve,
+            listeners: new Set(),
+            notifications: [],
+            dispatching: false,
+            sourceSequence: 0,
+            created: Date.now(),
+            messages: new Map([[m.messageId, canonical(m)]]),
+        };
+        this.entries.set(key, e);
+        this.telemetry.record(e.trace, "accepted");
+        this.telemetry.record(e.trace, "unique_reused");
+        e.resolve(snapshot);
+        return e;
+    }
+    releaseResources(e) {
+        for (const resource of e.resources)
+            if (this.resourceLocks.get(resource) === e)
+                this.resourceLocks.delete(resource);
+    }
+    /** 是否有空闲槽位供此 Entry 开始执行（Handler 舱壁 + 资源互斥）。 */
+    eligible(e, now) {
+        void now;
+        const limit = e.handler.maxConcurrency;
+        if (limit !== undefined &&
+            (this.runningByHandler.get(e.handler) ?? 0) >= limit)
+            return false;
+        for (const resource of e.resources)
+            if (this.resourceLocks.has(resource))
+                return false;
+        return true;
+    }
+    /** 类别优先级 + 等待老化：分数越低越先出队，长时间等待会逐步压过类别差异。 */
+    effectivePriority(e, now) {
+        const rank = this.scheduler.queueClassOrder[e.queueClass] ?? 3;
+        const boost = Math.min(2, Math.floor(Math.max(0, now - e.trace.at) / this.scheduler.queueAgingMs));
+        // 老化只削平类别差距，不把优先级推到负值；同分时按队列先后（FIFO）决出。
+        return Math.max(0, rank - boost);
+    }
+    /** 对已到期的排队任务结算 QUEUE_WAIT_TIMEOUT，再从队列移除。 */
+    expireQueued(now) {
+        for (const e of [...this.queue]) {
+            if (e.view.state !== "queued") {
+                this.removeQueued(e);
+                continue;
+            }
+            if (e.deadline !== undefined && now >= e.deadline) {
+                this.removeQueued(e);
+                this.finish(e, "failed", undefined, "QUEUE_WAIT_TIMEOUT");
+            }
+        }
     }
     attachment(e, onEvent, id, reused = false) {
         // 每次附着独立占配额，即使调用方复用同一个回调。
@@ -349,8 +531,14 @@ export class ExecutionBus {
             waitReason: e.view.state === "queued"
                 ? this.running >= this.options.concurrency
                     ? "concurrency"
-                    : "dispatch"
+                    : this.eligible(e, now)
+                        ? "dispatch"
+                        : "resource"
                 : null,
+            longRunning: e.view.state === "running" &&
+                e.startedAt !== undefined &&
+                (e.finishedAt ?? now) - e.startedAt >=
+                    this.scheduler.longRunningMs,
             phase: isTerminal(e.view.state)
                 ? e.view.delivery === "returned"
                     ? "returned"
@@ -393,6 +581,11 @@ export class ExecutionBus {
     finish(e, state, result, error, resultBytes = 0) {
         if (isTerminal(e.view.state))
             return;
+        this.releaseResources(e);
+        if (e.dedupeKey !== undefined &&
+            this.dedupeIndex.get(e.dedupeKey) === e &&
+            state !== "succeeded")
+            this.dedupeIndex.delete(e.dedupeKey);
         if (e.queueTimer !== undefined) {
             clearTimeout(e.queueTimer);
             e.queueTimer = undefined;
@@ -435,44 +628,66 @@ export class ExecutionBus {
         if (!e.dispatching)
             e.listeners.clear();
     }
-    /** 按会话轮转挑选下一个出队项：各会话内部 FIFO，跨会话公平。 */
-    nextQueuedIndex() {
-        let index = -1;
-        while (this.readyOwners.length && index < 0) {
+    /** 按会话轮转选择下一个可执行项：会话内按类别优先级 + 老化，跨会话公平。 */
+    nextQueuedIndex(now) {
+        const owners = this.readyOwners.length;
+        for (let n = 0; n < owners; n++) {
             const owner = this.readyOwners.shift();
-            const i = this.queue.findIndex((entry) => entry.owner === owner);
-            if (i >= 0) {
-                index = i;
-                // 找到后，若该会话仍有其它排队任务，保留其轮次避免单个会话饥饿。
-                if (this.queue.some((entry, j) => j !== i && entry.owner === owner))
-                    this.readyOwners.push(owner);
+            let chosen = -1;
+            let chosenScore = Infinity;
+            for (let i = 0; i < this.queue.length; i++) {
+                const e = this.queue[i];
+                if (e.owner !== owner || !this.eligible(e, now))
+                    continue;
+                const score = this.effectivePriority(e, now);
+                if (score < chosenScore) {
+                    chosen = i;
+                    chosenScore = score;
+                }
             }
+            if (chosen < 0) {
+                // 该会话暂时全部被舱壁/资源阻塞；保留轮次，等释放后重新争取。
+                if (this.queue.some((entry) => entry.owner === owner))
+                    this.readyOwners.push(owner);
+                continue;
+            }
+            if (this.queue.some((entry, i) => i !== chosen && entry.owner === owner))
+                this.readyOwners.push(owner);
+            return chosen;
         }
-        return index < 0 ? 0 : index;
+        return -1;
     }
     pump() {
-        while (!this.closed &&
-            this.running < this.options.concurrency &&
-            this.queue.length) {
-            const index = this.nextQueuedIndex();
+        while (!this.closed) {
+            const now = performance.now();
+            this.expireQueued(now);
+            if (this.running >= this.options.concurrency || this.queue.length === 0)
+                return;
+            const index = this.nextQueuedIndex(now);
+            if (index < 0)
+                return;
             const e = this.queue.splice(index, 1)[0];
             if (e.view.state !== "queued")
                 continue;
-            if (e.deadline !== undefined && performance.now() >= e.deadline) {
-                this.finish(e, "failed", undefined, "QUEUE_WAIT_TIMEOUT");
-                continue;
-            }
             if (e.queueTimer !== undefined) {
                 clearTimeout(e.queueTimer);
                 e.queueTimer = undefined;
             }
             e.startedAt = performance.now();
             this.running++;
+            this.runningByHandler.set(e.handler, (this.runningByHandler.get(e.handler) ?? 0) + 1);
+            for (const resource of e.resources)
+                this.resourceLocks.set(resource, e);
             e.view.state = "running";
             this.telemetry.record(e.trace, "started");
             this.emit(e, "started", {});
             void this.run(e).finally(() => {
                 this.running--;
+                const remaining = (this.runningByHandler.get(e.handler) ?? 1) - 1;
+                if (remaining > 0)
+                    this.runningByHandler.set(e.handler, remaining);
+                else
+                    this.runningByHandler.delete(e.handler);
                 this.pump();
             });
         }
@@ -545,6 +760,9 @@ export class ExecutionBus {
             await Promise.all(entries.map((e) => e.done));
             this.handlers.clear();
             this.entries.clear();
+            this.dedupeIndex.clear();
+            this.resourceLocks.clear();
+            this.runningByHandler.clear();
             this.retainedResultBytes = 0;
             this.queue = [];
             this.readyOwners = [];

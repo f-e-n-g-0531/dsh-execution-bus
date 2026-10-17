@@ -49,6 +49,7 @@ export declare class ExecutionOwner {
             job_released?: number | undefined;
             job_error?: number | undefined;
             reused?: number | undefined;
+            unique_reused?: number | undefined;
         };
         traces: {
             operation: number;

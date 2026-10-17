@@ -23,6 +23,17 @@ export const HANDLER_LIMITS = Object.freeze({
   readPathChars: 2048,
   diagnosticDelayMs: 30000,
 });
+/** 调度策略：类别优先级 + 等待老化 + 长任务诊断阈值。 */
+export const SCHEDULER_POLICY = Object.freeze({
+  longRunningMs: 30000,
+  queueAgingMs: 30000,
+  queueClassOrder: Object.freeze({
+    fs: 0,
+    diagnostic: 1,
+    command: 2,
+    default: 3,
+  }) as Readonly<Record<string, number>>,
+});
 /** 每个 Handler 的模型可见输入声明。只用于工具 schema/SDK 生成；运行时仍由 Handler.validate 严格校验。 */
 const INPUT_SCHEMAS = {
   test: {
