@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Context } from "@deepseek-ai/cordis";
 import { ToolRuntime } from "@deepseek-ai/dsh-tools";
-import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
+import SystemPrompt, { renderPrompt } from "@deepseek-ai/dsh-system-prompt";
 import Jobs from "@deepseek-ai/dsh-jobs-local";
 import LocalFS from "@deepseek-ai/dsh-fs-local";
 import Subprocess from "@deepseek-ai/dsh-subprocess-local";
@@ -56,6 +56,12 @@ test(
     files.apply(scope.ctx, files.Config({}));
     scope.ctx.tools.presentAs("ptc");
     mode.apply(scope.ctx);
+    // PTC SDK 声明应把 execution_bus 的 payload 渲染成 Handler 判别联合。
+    const assembly = await ctx.systemPrompt.assemble({ agent, scope: agent });
+    const prompt = renderPrompt(assembly);
+    assert.match(prompt, /interface ToolArgsMap/);
+    assert.match(prompt, /handler: "host\.read"/);
+    assert.match(prompt, /sandbox_permissions\?: "workspace-write"/);
     const before = [];
     ctx.on("tools/pre-execute", async (exec, next) => {
       before.push(exec.name);
