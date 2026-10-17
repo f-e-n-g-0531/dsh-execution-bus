@@ -37,7 +37,8 @@ async function fixture() {
       throw Error("fixture has no confinement backend");
     },
   });
-  new NodePtc(ctx, NodePtc.Config({ timeoutMs: 2000, maxTimeoutMs: 10000 }));
+  // CI（尤其 Windows/Node22）冷启动 PTC 子进程可能到秒级，预算需留出受理时间。
+  new NodePtc(ctx, NodePtc.Config({ timeoutMs: 8000, maxTimeoutMs: 30000 }));
   const agent = {
     id: "ptc-detached",
     session: { header: { cwd: process.cwd() }, append() {} },
@@ -109,20 +110,20 @@ async function waitState(control, id, expected, timeoutMs = 4000) {
 
 test(
   "真实 PTC 预算到期：已受理总线执行继续并可用同 requestId 取回",
-  { timeout: 20000 },
+  { timeout: 30000 },
   async () => {
     const { ctx, agent, scope, run, control } = await fixture();
     try {
       const result = await run({
-        code: 'return await tools.execution_bus({protocolVersion:1,messageId:"m1",requestId:"ptc-detach",type:"request",payload:{handler:"test",input:{delayMs:5000,fail:false}}});',
+        code: 'return await tools.execution_bus({protocolVersion:1,messageId:"m1",requestId:"ptc-detach",type:"request",payload:{handler:"test",input:{delayMs:12000,fail:false}}});',
         description: "bus wait exceeds run_code budget",
       });
       assert.equal(result.isError, true, JSON.stringify(result));
       assert.match(JSON.stringify(result), /timeout/, JSON.stringify(result));
-      assert.equal(await waitJob(ctx, agent), true, "execution was not accepted before budget expiry");
+      assert.equal(await waitJob(ctx, agent, 8000), true, "execution was not accepted before budget expiry");
       const seen = await waitState(control, "ptc-detach", ["queued", "running"]);
       assert.equal(seen.isError, false, JSON.stringify(seen));
-      const done = await waitState(control, "ptc-detach", ["succeeded"], 8000);
+      const done = await waitState(control, "ptc-detach", ["succeeded"], 12000);
       assert.equal(done.value.state, "succeeded", JSON.stringify(done.value));
       assert.deepEqual(done.value.result, { ok: true });
     } finally {
