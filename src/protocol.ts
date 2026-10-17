@@ -54,6 +54,8 @@ export interface RecordView {
   result?: unknown;
   error?: string;
   progress?: number;
+  /** true 表示本次调用附着到已存在的逻辑执行，而不是新建执行（0.11.0 新增，可选）。 */
+  reused?: true;
 }
 
 export function object(v: unknown): Record<string, unknown> {

@@ -38,6 +38,52 @@ function isPtcProgramEnd(signal: AbortSignal) {
   return signal.aborted && signal.reason === PTC_PROGRAM_SETTLED;
 }
 
+const REQUEST_KEYS = new Set(["requestId", "messageId", "handler", "input"]);
+const CONTROL_KEYS = new Set(["requestId", "messageId", "type"]);
+
+/** 工具入口兼容两种形状：0.11.0 简化调用 {requestId,handler,input,messageId?}
+ *  或 {requestId,type,messageId?}，以及完整 v1 消息。简化形状在进入总线前补齐协议字段。 */
+function normalizeToolInput(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const input = raw as Record<string, unknown>;
+  if (Object.hasOwn(input, "protocolVersion")) return raw;
+  if (
+    Object.keys(input).some(
+      (key) => !REQUEST_KEYS.has(key) && !CONTROL_KEYS.has(key),
+    ) ||
+    typeof input.requestId !== "string"
+  )
+    throw Error(ERRORS.INVALID_REQUEST);
+  const messageId =
+    typeof input.messageId === "string" ? input.messageId : randomUUID();
+  if (Object.hasOwn(input, "handler")) {
+    if (
+      Object.hasOwn(input, "type") ||
+      typeof input.handler !== "string"
+    )
+      throw Error(ERRORS.INVALID_REQUEST);
+    return {
+      protocolVersion: 1,
+      messageId,
+      requestId: input.requestId,
+      type: "request",
+      payload: { handler: input.handler, input: input.input },
+    };
+  }
+  if (
+    typeof input.type !== "string" ||
+    !["status", "result", "cancel"].includes(input.type)
+  )
+    throw Error(ERRORS.INVALID_REQUEST);
+  return {
+    protocolVersion: 1,
+    messageId,
+    requestId: input.requestId,
+    type: input.type,
+    payload: {},
+  };
+}
+
 export const name = "execution-bus";
 export const inject = ["tools", "jobs"];
 export function apply(ctx: Context) {
@@ -99,7 +145,7 @@ export function apply(ctx: Context) {
       sessionId: String(agent.id),
       callId: String(exec.callId),
     };
-    const m: Message = parse(raw);
+    const m: Message = parse(normalizeToolInput(raw));
     if (m.type !== "request") return bus.command(owner, m);
 
     // 宿主工具转发：仅 host.* handler 注入对应工具的 capability。
@@ -179,7 +225,7 @@ export function apply(ctx: Context) {
     try {
       const value = await attached.done;
       attached.returned();
-      return value;
+      return markReused(value, attached);
     } finally {
       attached.detach();
     }
@@ -212,6 +258,11 @@ export function apply(ctx: Context) {
     }
   }
 
+  /** 本次调用是否复用了已有执行；仅在真复用时追加标记，保持首次快照形状不变。 */
+  function markReused(view: RecordView, attached: Submission): RecordView {
+    return attached.reused ? { ...view, reused: true } : view;
+  }
+
   /** 外层取消映射：PTC 程序结束（含预算到期）只停止本次等待，已受理执行与
    *  宿主 Job 保留，同会话可用同 requestId 的 status/result 取回；其他取消原因
    *  （用户/会话中断）仍请求取消整个执行。 */
@@ -241,11 +292,11 @@ export function apply(ctx: Context) {
         settled,
         detachedView.then((view) => ({ kind: "detached" as const, view })),
       ]);
-      if (outcome.kind === "detached") return outcome.view;
+      if (outcome.kind === "detached") return markReused(outcome.view, attached);
       if (outcome.kind === "error") throw outcome.error;
       const value = await attached.done;
       attached.returned();
-      return value;
+      return markReused(value, attached);
     } finally {
       exec.signal.removeEventListener("abort", abort);
       attached.detach();

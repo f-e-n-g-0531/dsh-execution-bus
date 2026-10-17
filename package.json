@@ -1,6 +1,6 @@
 {
   "name": "@feng0531/dsh-execution-bus",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "type": "module",
   "private": false,
   "license": "SEE LICENSE IN LICENSE",
@@ -47,7 +47,8 @@
     "verify:package": "node scripts/verify-package.mjs",
     "test:install": "node scripts/test-install.mjs",
     "pack:candidate": "node scripts/pack.mjs",
-    "verify:release": "node scripts/release-preflight.mjs"
+    "verify:release": "node scripts/release-preflight.mjs",
+    "metrics:sessions": "node scripts/session-metrics.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.4",

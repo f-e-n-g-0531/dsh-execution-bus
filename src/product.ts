@@ -108,44 +108,39 @@ const HANDLER_NAMES = [
   "host.pwsh",
   "test",
 ] as const;
-/** request 的 {handler,input} 判别联合；控制消息为空对象。 */
-export const PAYLOAD_SCHEMA = {
-  description:
-    "request 必须匹配某个 Handler 的 {handler,input}；status/result/cancel 的 payload 必须为空对象 {}。",
+/** 简化调用（0.11.0）：{requestId, handler, input} 或 {requestId, type}；
+ *  完整 v1 消息仍被运行时接受，但不再进入模型可见 schema。 */
+const REQUEST_ID_PROP = { type: "string" } as const;
+const MESSAGE_ID_PROP = { type: "string" } as const;
+export const REQUEST_PARAMETERS = {
   oneOf: [
     ...HANDLER_NAMES.map((handler) => ({
       type: "object" as const,
       additionalProperties: false as const,
-      required: ["handler", "input"],
+      required: ["requestId", "handler", "input"],
       properties: {
+        requestId: REQUEST_ID_PROP,
+        messageId: MESSAGE_ID_PROP,
         handler: { type: "string" as const, const: handler },
         input: INPUT_SCHEMAS[handler],
       },
     })),
-    { type: "object" as const, additionalProperties: false as const, properties: {} },
+    {
+      type: "object" as const,
+      additionalProperties: false as const,
+      required: ["requestId", "type"],
+      properties: {
+        requestId: REQUEST_ID_PROP,
+        messageId: MESSAGE_ID_PROP,
+        type: {
+          type: "string" as const,
+          enum: ["status", "result", "cancel"],
+          description:
+            "Read the saved snapshot or request cancellation for this requestId.",
+        },
+      },
+    },
   ],
-} as const;
-export const REQUEST_PARAMETERS = {
-  type: "object",
-  additionalProperties: false,
-  required: ["protocolVersion", "messageId", "requestId", "type", "payload"],
-  properties: {
-    protocolVersion: { type: "integer", const: 1 },
-    messageId: {
-      type: "string",
-      description: "Unique id of this message; reuse only when redelivering the same message.",
-    },
-    requestId: {
-      type: "string",
-      description: "Stable id of one logical operation; reuse it when the same operation is submitted again.",
-    },
-    type: {
-      type: "string",
-      enum: ["request", "status", "result", "cancel"],
-      description: "request submits work; status/result read the saved snapshot; cancel requests cancellation.",
-    },
-    payload: PAYLOAD_SCHEMA,
-  },
 } as const;
 export const STATE_PARAMETERS = {
   type: "object",
@@ -153,9 +148,9 @@ export const STATE_PARAMETERS = {
   additionalProperties: false,
 } as const;
 export const REQUEST_DESCRIPTION =
-  "萧何 / Xiao He. Submit a version 1 request and WAIT for its terminal result in this tool call. Use only when a host operation is expected to exceed ~30s, may be retried as the same logical operation (reuse requestId), must outlive a run_code budget end, or several steps must await one execution; otherwise call the original tool directly. messageId is per message; requestId is per logical operation. Control status/result/cancel use an empty payload; their snapshot is read-only. A PTC program end (including run_code budget expiry) only stops waiting: accepted work continues and the same requestId can be retrieved with status/result or cancelled. Diagnostic handler only: test {delayMs:0..30000,fail:boolean}; never use it to perform real work. Acceptance is volatile, not success. No polling or restart resume.";
+  "萧何 / Xiao He. Submit a request and WAIT for its terminal snapshot; the simplified call takes {requestId, handler, input} (messageId optional) and control calls take {requestId, type:\"status\"|\"result\"|\"cancel\"}. Use only when coordination helps: the same logical operation may be retried or deduplicated (reuse requestId), work must outlive a run_code budget end, or multiple steps must await one execution. Duration alone is not a reason — for a one-off long command use the original tool or its background Job. A PTC program end only stops waiting: accepted work continues and the same requestId can be retrieved with type:\"result\" or cancelled. The snapshot may contain reused:true when this call attached to an existing execution. The full v1 envelope is still accepted. Diagnostic handler only: test {delayMs:0..30000,fail:boolean}; never use it for real work. Acceptance is volatile, not success. No polling or restart resume.";
 export const MODE_INSTRUCTIONS =
-  "你正在萧何模式中。这不是角色扮演。保留宿主 PTC 的日常工具能力与权限规则。普通编辑、搜索、命令、安装和其他工作使用原工具，不要声称此模式只读。execution_bus 是可选协调入口，只在以下情况使用：预计单次宿主操作超过约 30 秒；同一逻辑操作可能重复提交或需要重试核对（沿用 requestId）；任务需要在 run_code 时间预算结束后继续或取回结果；多个步骤需要等待同一执行。其余情况直接用原工具，不要为简单调用增加总线包装。实际业务 Handler 为 host.read、host.glob、host.grep（只读，可复用终态结果）与 host.edit、host.write、host.pwsh（有副作用，终态结果不可复用）；test 仅用于用户明确要求的诊断，不做真实工作。示例：await tools.execution_bus({protocolVersion:1,messageId:\"<消息编号>\",requestId:\"<逻辑操作编号>\",type:\"request\",payload:{handler:\"host.read\",input:{file_path:\"README.md\"}}})；messageId 每条消息唯一，同一逻辑操作重发沿用 requestId。通过 run_code 调用 await tools.execution_bus(...)，受原有时间预算约束。每会话排队上限 " +
+  "你正在萧何模式中。这不是角色扮演。保留宿主 PTC 的日常工具能力与权限规则。普通编辑、搜索、命令、安装和其他工作使用原工具，不要声称此模式只读。execution_bus 只在能获得协调收益时使用：① 同一逻辑操作可能重复提交或需要重试核对（沿用同一 requestId，只执行一次）；② 任务需要在 run_code 时间预算结束后继续或跨步骤取回；③ 多个步骤/等待者需要同一执行结果。仅\"操作耗时长\"不是理由：一次性长命令用原工具或宿主后台 Job。其余普通任务直接用原工具，不要为简单调用增加包装。实际业务 Handler 为 host.read、host.glob、host.grep（只读，可复用终态结果）与 host.edit、host.write、host.pwsh（有副作用，终态结果不可复用）；test 仅用于用户明确要求的诊断，不做真实工作。简化调用示例：await tools.execution_bus({requestId:\"<逻辑操作编号>\", handler:\"host.pwsh\", input:{description:\"运行测试\", command:\"pnpm test\", timeoutMs:120000}})；预算中断后用 await tools.execution_bus({requestId:\"<同一编号>\", type:\"result\"}) 取回；同一逻辑操作重发沿用 requestId，messageId 可省略（自动生成）。返回快照出现 reused:true 表示本次调用复用了已有执行。通过 run_code 调用，受原有时间预算约束。每会话排队上限 " +
   ADMISSION_DEFAULTS.sessionQueueLimit +
   "，排队超过 " +
   ADMISSION_DEFAULTS.maxQueueWaitMs / 1000 +

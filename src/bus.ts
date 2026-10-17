@@ -267,7 +267,7 @@ export class ExecutionBus {
     if (!previous && e.messages.size >= LIMITS.messageAccountLimit)
       throw Error(ERRORS.MESSAGE_LIMIT);
     // 先取得附着，再提交消息身份：附着被拒（WAITER_LIMIT）时无副作用。
-    const attached = this.attachment(e, onEvent, m.messageId);
+    const attached = this.attachment(e, onEvent, m.messageId, true);
     if (!previous) e.messages.set(m.messageId, canonical(m));
     this.telemetry.record(e.trace, "reused");
     return attached;
@@ -356,6 +356,7 @@ export class ExecutionBus {
     e: Entry,
     onEvent: ((e: Event) => void) | undefined,
     id: string,
+    reused = false,
   ) {
     // 每次附着独立占配额，即使调用方复用同一个回调。
     const listener = onEvent ? (event: Event) => onEvent(event) : undefined;
@@ -375,6 +376,8 @@ export class ExecutionBus {
     return {
       accepted,
       done: e.done,
+      /** 本次附着是否复用已有逻辑执行（结果标记可见性用）。 */
+      reused,
       /** 当前快照：供仅在停止等待时使用，不改变交付标记。 */
       snapshot: () => this.view(e),
       cancel: () => this.cancel(e),

@@ -41,6 +41,8 @@ export interface RecordView {
     result?: unknown;
     error?: string;
     progress?: number;
+    /** true 表示本次调用附着到已存在的逻辑执行，而不是新建执行（0.11.0 新增，可选）。 */
+    reused?: true;
 }
 export declare function object(v: unknown): Record<string, unknown>;
 /** 规范排序后的稳定摘要，只用于同 requestId 的冲突比较，不用于跨请求去重。 */

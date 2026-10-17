@@ -38,7 +38,7 @@
 
 **工具 request 不提前返回 accepted 或仅 taskId。** 它异步等待后返回执行快照；校验、容量、宿主服务等也可能令外层工具调用返回错误，而非执行快照。
 
-快照字段：`requestId`、`state`、`sequence`、`cancelRequested`、`delivery`，以及可选 `result`、`error`、`progress`。`status`、`result`、`cancel` 均返回当前快照；`result` 在运行中也只返回当前状态，不额外等待。
+快照字段：`requestId`、`state`、`sequence`、`cancelRequested`、`delivery`，以及可选 `result`、`error`、`progress`；0.11.0 起，附着到已有执行的返回快照可带可选 `reused:true`。`status`、`result`、`cancel` 均返回当前快照；`result` 在运行中也只返回当前状态，不额外等待。
 
 core 的 `submit()` 返回 `accepted`、`done` Promise、只读 `snapshot()` 及取消/解除通知/返回标记句柄。accepted 只是内存受理或已有记录的快照，`durable:false`，不代表执行成功；终态重取也不代表重新执行。0.9.0 的 `snapshot()` 只供停止等待时读取当前视图，不改变交付标记。
 
@@ -123,5 +123,7 @@ core 实例的 `diagnostics()` 返回只读用途的独立快照：阶段计数�
 包的 `./core` 导出 ExecutionBus、Handler、Capability 类型。Handler 只接收输入、requestId、signal、progress 和可选最小 capability，不接收聊天历史。register 返回绑定唯一注册令牌的幂等注销函数，不会误删后来同名注册；已受理请求继续持有原 Handler。
 
 0.10.0 起，模型可见的工具体声明把 `payload` 改为按 Handler 的判别联合（每个 `host.*`/test 的 `input` 字段与必填项）；这是提示与 SDK 类型层的变化，wire 结构、校验、错误码与保存语义不变。
+
+0.11.0 起，模型可传简化输入：请求 `{requestId, handler, input, messageId?}`、控制 `{requestId, type, messageId?}`；插件在进入总线前补齐完整 v1 消息，完整 v1 消息仍被接受。返回快照在附着已有执行时追加可选 `reused:true`，只表示复用了逻辑执行，不代表外部副作用对账。
 
 内置 test、host.read、host.glob 与 host.grep 没有副作用；host.edit、host.write 与 host.pwsh 是非幂等写/命令 Handler，通过 `Handler.idempotent=false` 显式声明，其终态结果复用被 `MUTATING_REUSE_DENIED` 拒绝，运行中的重复附着仍只等待同一执行。0.8.0 新增宿主工具输入错误码 INVALID_GLOB_INPUT、INVALID_GREP_INPUT 与 INVALID_PWSH_INPUT；协议既有错误码不改名。host.pwsh 的后台结果只是宿主 Job ID，不是完成回执。当前没有 ctx.executionBus 服务、远端传输、跨插件动态注册或外部副作用对账契约。扩展有副作用 Handler 前必须显式声明幂等并另行设计授权与崩溃对账，不能仅依赖本版请求键。
