@@ -1,62 +1,29 @@
-import { randomUUID, createHash } from "node:crypto";
-import { assertJson } from "./json.js";
-import { Diagnostics } from "./diagnostics.js";
+import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { Diagnostics } from "./diagnostics.js";
+import { ERRORS } from "./error-codes.js";
+import { assertJson } from "./json.js";
+import { LIMITS } from "./limits.js";
 import { CORE_DEFAULTS } from "./product.js";
+import { canonical, freezeJson, object, parse } from "./protocol.js";
+import type {
+  Capability,
+  Event,
+  Handler,
+  Message,
+  Owner,
+  RecordView,
+  State,
+} from "./protocol.js";
+
+export { object, parse };
+export type { Capability, Event, Handler, Message, Owner, RecordView, State };
+
 export interface AdmissionPolicy {
   sessionQueueLimit?: number;
   maxQueueWaitMs?: number;
 }
-export type State =
-  | "queued"
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "cancelled"
-  | "unknown";
-export type Owner = { sessionId: string; callId: string };
-export type Message = {
-  protocolVersion: 1;
-  messageId: string;
-  requestId: string;
-  type: "request" | "status" | "result" | "cancel";
-  payload: Record<string, unknown>;
-};
-export type Event = {
-  protocolVersion: 1;
-  messageId: string;
-  requestId: string;
-  correlationId: string;
-  sequence: number;
-  type: string;
-  payload: Record<string, unknown>;
-};
-export type Capability = (
-  input: Record<string, unknown>,
-  signal: AbortSignal,
-) => Promise<unknown>;
-export interface Handler {
-  validate(input: Record<string, unknown>): void;
-  run(
-    input: Record<string, unknown>,
-    ctx: {
-      signal: AbortSignal;
-      progress: (sequence: number, percent: number) => void;
-      requestId: string;
-      invoke?: Capability;
-    },
-  ): Promise<unknown>;
-}
-export interface RecordView {
-  requestId: string;
-  state: State;
-  sequence: number;
-  cancelRequested: boolean;
-  delivery: "pending" | "returned";
-  result?: unknown;
-  error?: string;
-  progress?: number;
-}
+
 interface Entry {
   trace: { operation: number; at: number };
   resultBytes: number;
@@ -81,66 +48,20 @@ interface Entry {
   created: number;
   messages: Map<string, string>;
 }
-export function object(v: unknown): Record<string, unknown> {
-  if (!v || typeof v !== "object" || Array.isArray(v))
-    throw Error("INVALID_OBJECT");
-  return v as Record<string, unknown>;
+
+interface RequestParts {
+  handler: string;
+  input: Record<string, unknown>;
+  payload: Record<string, unknown>;
 }
-function canonical(v: unknown): string {
-  if (v === null || typeof v !== "object") return JSON.stringify(v);
-  if (Array.isArray(v)) return "[" + v.map(canonical).join(",") + "]";
-  return (
-    "{" +
-    Object.keys(v)
-      .sort()
-      .map(
-        (k) =>
-          JSON.stringify(k) +
-          ":" +
-          canonical((v as Record<string, unknown>)[k]),
-      )
-      .join(",") +
-    "}"
-  );
+
+const isTerminal = (s: State) => !["queued", "running"].includes(s);
+
+/** 对 payload 做规范排序后的 SHA-256 摘要，仅用于同 requestId 的冲突比较。 */
+function hashPayload(payload: Record<string, unknown>): string {
+  return createHash("sha256").update(canonical(payload)).digest("hex");
 }
-export function parse(raw: unknown): Message {
-  assertJson(raw);
-  const m = object(raw);
-  if (
-    Object.keys(m).some(
-      (k) =>
-        ![
-          "protocolVersion",
-          "messageId",
-          "requestId",
-          "type",
-          "payload",
-        ].includes(k),
-    )
-  )
-    throw Error("UNKNOWN_FIELD");
-  if (m.protocolVersion !== 1) throw Error("UNSUPPORTED_VERSION");
-  for (const k of ["messageId", "requestId"])
-    if (
-      typeof m[k] !== "string" ||
-      !/^[a-zA-Z0-9_.:-]{1,128}$/.test(m[k] as string)
-    )
-      throw Error("INVALID_ID");
-  if (!["request", "status", "result", "cancel"].includes(m.type as string))
-    throw Error("UNSUPPORTED_TYPE");
-  object(m.payload);
-  if (Buffer.byteLength(JSON.stringify(m)) > 16384)
-    throw Error("MESSAGE_TOO_LARGE");
-  return structuredClone(m) as Message;
-}
-function freezeJson<T>(value: T): T {
-  if (value && typeof value === "object") {
-    for (const child of Object.values(value)) freezeJson(child);
-    Object.freeze(value);
-  }
-  return value;
-}
-const terminal = (s: State) => !["queued", "running"].includes(s);
+
 /** Volatile single-process bus; no acceptance durability or automatic execution retry. */
 export class ExecutionBus {
   private entries = new Map<string, Entry>();
@@ -151,6 +72,7 @@ export class ExecutionBus {
   private retainedResultBytes = 0;
   private closed = false;
   private telemetry = new Diagnostics();
+
   diagnostics() {
     return {
       ...this.telemetry.snapshot(),
@@ -161,8 +83,10 @@ export class ExecutionBus {
       retainedResultBytes: this.retainedResultBytes,
     };
   }
+
   private closing?: Promise<void>;
   private shutdownPhase: "open" | "cancelling" | "draining" | "closed" = "open";
+
   constructor(
     readonly options: {
       concurrency: number;
@@ -182,7 +106,7 @@ export class ExecutionBus {
         (key) => typeof key !== "string" || !allowed.includes(key),
       )
     )
-      throw Error("INVALID_ADMISSION_POLICY");
+      throw Error(ERRORS.INVALID_ADMISSION_POLICY);
     for (const key of Reflect.ownKeys(admission)) {
       const descriptor = Object.getOwnPropertyDescriptor(admission, key)!;
       if (
@@ -192,7 +116,7 @@ export class ExecutionBus {
         descriptor.value < 1 ||
         descriptor.value > 2147483647
       )
-        throw Error("INVALID_ADMISSION_POLICY");
+        throw Error(ERRORS.INVALID_ADMISSION_POLICY);
     }
     this.admission = Object.freeze({ ...admission });
     const keys = [
@@ -214,13 +138,14 @@ export class ExecutionBus {
         );
       })
     )
-      throw Error("INVALID_OPTIONS");
+      throw Error(ERRORS.INVALID_OPTIONS);
     this.options = Object.freeze({ ...options });
     for (const v of Object.values(this.options))
-      if (!Number.isSafeInteger(v) || v < 1) throw Error("INVALID_OPTIONS");
+      if (!Number.isSafeInteger(v) || v < 1) throw Error(ERRORS.INVALID_OPTIONS);
   }
+
   register(name: string, handler: Handler) {
-    if (this.handlers.has(name)) throw Error("DUPLICATE_HANDLER");
+    if (this.handlers.has(name)) throw Error(ERRORS.DUPLICATE_HANDLER);
     const registration = { handler, token: Symbol(name) };
     this.handlers.set(name, registration);
     let disposed = false;
@@ -231,10 +156,12 @@ export class ExecutionBus {
         this.handlers.delete(name);
     };
   }
+
   private key(o: Owner, id: string) {
-    if (!o.sessionId || !o.callId) throw Error("UNTRUSTED_CONTEXT");
+    if (!o.sessionId || !o.callId) throw Error(ERRORS.UNTRUSTED_CONTEXT);
     return JSON.stringify([o.sessionId, id]);
   }
+
   private emit(
     e: Entry,
     type: string,
@@ -251,8 +178,7 @@ export class ExecutionBus {
       type,
       payload,
     });
-    // Snapshot and enqueue before invoking user code: nested cancellation cannot
-    // overtake the current event for later observers. Removed listeners are skipped.
+    // 在调用用户代码前快照并排队：嵌套取消无法抢到当前事件。
     e.notifications.push({ event, listeners: [...e.listeners] });
     if (e.dispatching) return;
     e.dispatching = true;
@@ -268,84 +194,116 @@ export class ExecutionBus {
       }
     } finally {
       e.dispatching = false;
-      if (terminal(e.view.state)) e.listeners.clear();
+      if (isTerminal(e.view.state)) e.listeners.clear();
     }
   }
+
   private view(e: Entry) {
     return structuredClone(e.view);
   }
+
   private get(o: Owner, id: string) {
     const e = this.entries.get(this.key(o, id));
-    if (!e) throw Error("NOT_FOUND");
+    if (!e) throw Error(ERRORS.NOT_FOUND);
     return e;
   }
+
   sweep(now = Date.now()) {
     for (const [k, e] of this.entries)
-      if (
-        terminal(e.view.state) &&
-        now - e.created > this.options.retentionMs
-      ) {
+      if (isTerminal(e.view.state) && now - e.created > this.options.retentionMs) {
         this.retainedResultBytes -= e.resultBytes;
         this.entries.delete(k);
       }
   }
+
   submit(
     owner: Owner,
     raw: unknown,
     onEvent?: (e: Event) => void,
     invoke?: Capability,
   ) {
-    if (this.closed) throw Error("CLOSED");
+    if (this.closed) throw Error(ERRORS.CLOSED);
     const m = parse(raw);
-    if (m.type !== "request") throw Error("EXPECTED_REQUEST");
+    if (m.type !== "request") throw Error(ERRORS.EXPECTED_REQUEST);
+    const parts = this.requestParts(m);
+    const key = this.key(owner, m.requestId);
+    const fingerprint = hashPayload(parts.payload);
+    this.sweep();
+    const existing = this.entries.get(key);
+    return existing
+      ? this.reuseInvocation(existing, m, fingerprint, onEvent)
+      : this.admitInvocation(owner, m, parts, key, fingerprint, invoke, onEvent);
+  }
+
+  /** 校验并拆解 request 的 payload，返回 handler 名、入参与原文。 */
+  private requestParts(m: Message): RequestParts {
     const p = m.payload;
     if (
       Object.keys(p).some((k) => !["handler", "input"].includes(k)) ||
       typeof p.handler !== "string"
     )
-      throw Error("INVALID_REQUEST");
-    const input = object(p.input);
-    const key = this.key(owner, m.requestId),
-      fp = createHash("sha256").update(canonical(p)).digest("hex");
-    this.sweep();
-    let e = this.entries.get(key);
-    if (e) {
-      if (e.fingerprint !== fp) throw Error("REQUEST_CONFLICT");
-      const previous = e.messages.get(m.messageId);
-      if (previous && previous !== canonical(m))
-        throw Error("MESSAGE_CONFLICT");
-      if (!previous && e.messages.size >= 128) throw Error("MESSAGE_LIMIT");
-      // Acquire the attachment before committing its message identity. Rejection is side-effect free.
-      const attached = this.attachment(e, onEvent, m.messageId);
-      if (!previous) e.messages.set(m.messageId, canonical(m));
-      this.telemetry.record(e.trace, "reused");
-      return attached;
-    }
-    const handler = this.handlers.get(p.handler)?.handler;
-    if (!handler) throw Error("UNKNOWN_HANDLER");
-    handler.validate(input);
+      throw Error(ERRORS.INVALID_REQUEST);
+    return {
+      handler: p.handler,
+      input: object(p.input),
+      payload: p,
+    };
+  }
+
+  /** 同一 requestId 的重复提交：校验一致性后复用执行或结果。 */
+  private reuseInvocation(
+    e: Entry,
+    m: Message,
+    fingerprint: string,
+    onEvent: ((e: Event) => void) | undefined,
+  ) {
+    if (e.fingerprint !== fingerprint) throw Error(ERRORS.REQUEST_CONFLICT);
+    const previous = e.messages.get(m.messageId);
+    if (previous && previous !== canonical(m)) throw Error(ERRORS.MESSAGE_CONFLICT);
+    if (!previous && e.messages.size >= LIMITS.messageAccountLimit)
+      throw Error(ERRORS.MESSAGE_LIMIT);
+    // 先取得附着，再提交消息身份：附着被拒（WAITER_LIMIT）时无副作用。
+    const attached = this.attachment(e, onEvent, m.messageId);
+    if (!previous) e.messages.set(m.messageId, canonical(m));
+    this.telemetry.record(e.trace, "reused");
+    return attached;
+  }
+
+  /** 受理全新请求：校验 Handler、检查容量、构建记录并入队。 */
+  private admitInvocation(
+    owner: Owner,
+    m: Message,
+    parts: RequestParts,
+    key: string,
+    fingerprint: string,
+    invoke: Capability | undefined,
+    onEvent: ((e: Event) => void) | undefined,
+  ) {
+    const handler = this.handlers.get(parts.handler)?.handler;
+    if (!handler) throw Error(ERRORS.UNKNOWN_HANDLER);
+    handler.validate(parts.input);
     if (
       this.entries.size >= this.options.recordLimit ||
       this.queue.length >= this.options.queueLimit
     )
-      throw Error("BACKPRESSURE");
+      throw Error(ERRORS.BACKPRESSURE);
     if (
       this.admission.sessionQueueLimit !== undefined &&
       this.queue.filter((entry) => entry.owner === owner.sessionId).length >=
         this.admission.sessionQueueLimit
     )
-      throw Error("SESSION_BACKPRESSURE");
+      throw Error(ERRORS.SESSION_BACKPRESSURE);
     let resolve!: (v: RecordView) => void;
     const done = new Promise<RecordView>((r) => (resolve = r));
-    e = {
+    const e: Entry = {
       trace: this.telemetry.begin(),
       resultBytes: 0,
       invoke,
       correlationId: m.messageId,
       owner: owner.sessionId,
-      fingerprint: fp,
+      fingerprint,
       handler,
-      input: structuredClone(input),
+      input: structuredClone(parts.input),
       view: {
         requestId: m.requestId,
         state: "queued",
@@ -367,34 +325,38 @@ export class ExecutionBus {
     this.telemetry.record(e.trace, "accepted");
     const attached = this.attachment(e, onEvent, m.messageId);
     this.queue.push(e);
-    if (this.admission.maxQueueWaitMs !== undefined) {
-      e.deadline = performance.now() + this.admission.maxQueueWaitMs;
-      const entry = e;
-      const expire = () => {
-        if (entry.view.state !== "queued") return;
-        const remaining = entry.deadline! - performance.now();
-        if (remaining > 0) {
-          entry.queueTimer = setTimeout(expire, Math.ceil(remaining));
-          return;
-        }
-        this.removeQueued(entry);
-        this.finish(entry, "failed", undefined, "QUEUE_WAIT_TIMEOUT");
-      };
-      e.queueTimer = setTimeout(expire, this.admission.maxQueueWaitMs);
-    }
+    this.scheduleQueueDeadline(e);
     if (!this.readyOwners.includes(e.owner)) this.readyOwners.push(e.owner);
     queueMicrotask(() => this.pump());
     return attached;
   }
+
+  /** 若启用了排队期限，登记到期结算为 QUEUE_WAIT_TIMEOUT 的计时器。 */
+  private scheduleQueueDeadline(e: Entry) {
+    if (this.admission.maxQueueWaitMs === undefined) return;
+    e.deadline = performance.now() + this.admission.maxQueueWaitMs;
+    const expire = () => {
+      if (e.view.state !== "queued") return;
+      const remaining = e.deadline! - performance.now();
+      if (remaining > 0) {
+        e.queueTimer = setTimeout(expire, Math.ceil(remaining));
+        return;
+      }
+      this.removeQueued(e);
+      this.finish(e, "failed", undefined, "QUEUE_WAIT_TIMEOUT");
+    };
+    e.queueTimer = setTimeout(expire, this.admission.maxQueueWaitMs);
+  }
+
   private attachment(
     e: Entry,
     onEvent: ((e: Event) => void) | undefined,
     id: string,
   ) {
-    // Each attachment owns its registration, even when callers reuse one function.
+    // 每次附着独立占配额，即使调用方复用同一个回调。
     const listener = onEvent ? (event: Event) => onEvent(event) : undefined;
-    if (listener && !terminal(e.view.state)) {
-      if (e.listeners.size >= 32) throw Error("WAITER_LIMIT");
+    if (listener && !isTerminal(e.view.state)) {
+      if (e.listeners.size >= LIMITS.waiterLimit) throw Error(ERRORS.WAITER_LIMIT);
       e.listeners.add(listener);
     }
     const accepted: Event = {
@@ -420,20 +382,21 @@ export class ExecutionBus {
       },
     };
   }
+
   command(owner: Owner, raw: unknown) {
     const m = parse(raw);
-    if (m.type === "request") throw Error("EXPECTED_CONTROL");
-    if (Object.keys(m.payload).length) throw Error("INVALID_CONTROL");
+    if (m.type === "request") throw Error(ERRORS.EXPECTED_CONTROL);
+    if (Object.keys(m.payload).length) throw Error(ERRORS.INVALID_CONTROL);
     this.sweep();
     const e = this.get(owner, m.requestId);
     const previous = e.messages.get(m.messageId),
       fingerprint = canonical(m);
-    if (previous && previous !== fingerprint) throw Error("MESSAGE_CONFLICT");
+    if (previous && previous !== fingerprint) throw Error(ERRORS.MESSAGE_CONFLICT);
     if (!previous) {
-      // Keep one emergency control slot: read traffic must never prevent cancellation.
-      if (e.messages.size >= 128) {
-        if (m.type !== "cancel") throw Error("MESSAGE_LIMIT");
-        if (e.view.cancelRequested || terminal(e.view.state))
+      // 保留一个应急控制槽：读流量绝不能阻塞取消。
+      if (e.messages.size >= LIMITS.messageAccountLimit) {
+        if (m.type !== "cancel") throw Error(ERRORS.MESSAGE_LIMIT);
+        if (e.view.cancelRequested || isTerminal(e.view.state))
           return this.view(e);
       }
       e.messages.set(m.messageId, fingerprint);
@@ -441,24 +404,26 @@ export class ExecutionBus {
     }
     return this.view(e);
   }
+
   private removeQueued(e: Entry) {
     this.queue = this.queue.filter((entry) => entry !== e);
     if (!this.queue.some((entry) => entry.owner === e.owner))
       this.readyOwners = this.readyOwners.filter((owner) => owner !== e.owner);
   }
+
   /** Trusted host owner required. Never exposes other sessions or business payloads. */
   inspect(owner: Owner) {
     if (!owner || typeof owner.sessionId !== "string" || !owner.sessionId)
-      throw Error("OWNING_SESSION_REQUIRED");
+      throw Error(ERRORS.OWNING_SESSION_REQUIRED);
     this.sweep();
     const now = performance.now();
     const records = [...this.entries.values()].filter(
       (e) => e.owner === owner.sessionId,
     );
-    // Active work must not disappear behind newer terminal history.
-    const active = records.filter((e) => !terminal(e.view.state));
-    const history = records.filter((e) => terminal(e.view.state)).reverse();
-    const selected = [...active, ...history].slice(0, 50);
+    // 活跃任务不得被更新的终态历史挤到列表之外。
+    const active = records.filter((e) => !isTerminal(e.view.state));
+    const history = records.filter((e) => isTerminal(e.view.state)).reverse();
+    const selected = [...active, ...history].slice(0, LIMITS.inspectTaskLimit);
     const tasks = selected.map((e) => ({
       requestId: e.view.requestId,
       state: e.view.state,
@@ -472,7 +437,7 @@ export class ExecutionBus {
             ? "concurrency"
             : "dispatch"
           : null,
-      phase: terminal(e.view.state)
+      phase: isTerminal(e.view.state)
         ? e.view.delivery === "returned"
           ? "returned"
           : "terminal"
@@ -495,14 +460,15 @@ export class ExecutionBus {
       counts: {
         queued: records.filter((e) => e.view.state === "queued").length,
         running: records.filter((e) => e.view.state === "running").length,
-        terminal: records.filter((e) => terminal(e.view.state)).length,
+        terminal: records.filter((e) => isTerminal(e.view.state)).length,
       },
       tasks,
-      truncated: records.length > 50,
+      truncated: records.length > LIMITS.inspectTaskLimit,
     });
   }
+
   private cancel(e: Entry) {
-    if (terminal(e.view.state) || e.view.cancelRequested) return;
+    if (isTerminal(e.view.state) || e.view.cancelRequested) return;
     e.view.cancelRequested = true;
     this.telemetry.record(e.trace, "cancel_requested");
     e.controller.abort();
@@ -512,6 +478,7 @@ export class ExecutionBus {
       this.finish(e, "cancelled");
     }
   }
+
   private finish(
     e: Entry,
     state: State,
@@ -519,14 +486,15 @@ export class ExecutionBus {
     error?: string,
     resultBytes = 0,
   ) {
-    if (terminal(e.view.state)) return;
+    if (isTerminal(e.view.state)) return;
     if (e.queueTimer !== undefined) {
       clearTimeout(e.queueTimer);
       e.queueTimer = undefined;
     }
     e.finishedAt = performance.now();
-    // Prepare the delivery snapshot BEFORE committing an irreversible terminal state.
-    let next: RecordView = { ...e.view, state, sequence: e.view.sequence + 1 };
+    // 终态事件是下一个序号；先用它构建快照，避免把不可逆终态提交到视图之外。
+    const terminalSequence = e.view.sequence + 1;
+    let next: RecordView = { ...e.view, state, sequence: terminalSequence };
     if (result !== undefined) next.result = result;
     if (error) next.error = error;
     let snapshot: RecordView;
@@ -538,7 +506,7 @@ export class ExecutionBus {
       next = {
         requestId: e.view.requestId,
         state,
-        sequence: e.view.sequence + 1,
+        sequence: terminalSequence,
         cancelRequested: e.view.cancelRequested,
         delivery: e.view.delivery,
         error: "RESULT_NOT_RETAINED",
@@ -548,30 +516,39 @@ export class ExecutionBus {
     e.resultBytes = resultBytes;
     this.retainedResultBytes += resultBytes;
     e.created = Date.now();
-    e.view = { ...next, sequence: next.sequence - 1 };
+    // emit() 会再自增序号；先整体回退一档，使终态事件恰好落在 terminalSequence，
+    // 与上面交付给等待者的快照序号完全一致。
+    e.view = { ...next, sequence: terminalSequence - 1 };
     this.telemetry.record(e.trace, "terminal");
     e.resolve(snapshot);
     this.emit(e, state, { state });
-    // A reentrant terminal notification may still be queued behind this batch.
+    // 重入的终态通知可能仍排在本批之后。
     if (!e.dispatching) e.listeners.clear();
   }
+
+  /** 按会话轮转挑选下一个出队项：各会话内部 FIFO，跨会话公平。 */
+  private nextQueuedIndex(): number {
+    let index = -1;
+    while (this.readyOwners.length && index < 0) {
+      const owner = this.readyOwners.shift()!;
+      const i = this.queue.findIndex((entry) => entry.owner === owner);
+      if (i >= 0) {
+        index = i;
+        // 找到后，若该会话仍有其它排队任务，保留其轮次避免单个会话饥饿。
+        if (this.queue.some((entry, j) => j !== i && entry.owner === owner))
+          this.readyOwners.push(owner);
+      }
+    }
+    return index < 0 ? 0 : index;
+  }
+
   private pump() {
     while (
       !this.closed &&
       this.running < this.options.concurrency &&
       this.queue.length
     ) {
-      let index = -1;
-      while (this.readyOwners.length && index < 0) {
-        const owner = this.readyOwners.shift()!;
-        index = this.queue.findIndex((entry) => entry.owner === owner);
-        if (
-          index >= 0 &&
-          this.queue.some((entry, i) => i !== index && entry.owner === owner)
-        )
-          this.readyOwners.push(owner);
-      }
-      if (index < 0) index = 0;
+      const index = this.nextQueuedIndex();
       const e = this.queue.splice(index, 1)[0];
       if (e.view.state !== "queued") continue;
       if (e.deadline !== undefined && performance.now() >= e.deadline) {
@@ -593,6 +570,7 @@ export class ExecutionBus {
       });
     }
   }
+
   private async run(e: Entry) {
     try {
       const result = await e.handler.run(e.input, {
@@ -657,6 +635,7 @@ export class ExecutionBus {
       );
     }
   }
+
   close(): Promise<void> {
     if (this.closing) return this.closing;
     this.closed = true;

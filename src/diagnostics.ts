@@ -1,4 +1,6 @@
 import { performance } from "node:perf_hooks";
+import { LIMITS } from "./limits.js";
+
 export type TraceStage =
   | "accepted"
   | "started"
@@ -17,7 +19,7 @@ export interface Trace {
 /** In-memory numeric metadata only: never accepts request/session strings, input, output or error text. */
 export class Diagnostics {
   private next = 0;
-  private events: (Trace | undefined)[] = new Array(128);
+  private events: (Trace | undefined)[] = new Array(LIMITS.traceRingSize);
   private cursor = 0;
   private size = 0;
   private counts: Partial<Record<TraceStage, number>> = {};
@@ -31,14 +33,17 @@ export class Diagnostics {
       stage,
       elapsedMs: Math.max(0, performance.now() - context.at),
     };
-    this.cursor = (this.cursor + 1) % 128;
-    this.size = Math.min(this.size + 1, 128);
+    this.cursor = (this.cursor + 1) % LIMITS.traceRingSize;
+    this.size = Math.min(this.size + 1, LIMITS.traceRingSize);
   }
   snapshot() {
     return {
       counts: { ...this.counts },
       traces: Array.from({ length: this.size }, (_, index) => ({
-        ...this.events[(this.cursor - this.size + 128 + index) % 128]!,
+        ...this.events[
+          (this.cursor - this.size + LIMITS.traceRingSize + index) %
+            LIMITS.traceRingSize
+        ]!,
       })),
     };
   }

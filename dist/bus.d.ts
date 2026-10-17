@@ -1,50 +1,11 @@
+import { object, parse } from "./protocol.js";
+import type { Capability, Event, Handler, Message, Owner, RecordView, State } from "./protocol.js";
+export { object, parse };
+export type { Capability, Event, Handler, Message, Owner, RecordView, State };
 export interface AdmissionPolicy {
     sessionQueueLimit?: number;
     maxQueueWaitMs?: number;
 }
-export type State = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "unknown";
-export type Owner = {
-    sessionId: string;
-    callId: string;
-};
-export type Message = {
-    protocolVersion: 1;
-    messageId: string;
-    requestId: string;
-    type: "request" | "status" | "result" | "cancel";
-    payload: Record<string, unknown>;
-};
-export type Event = {
-    protocolVersion: 1;
-    messageId: string;
-    requestId: string;
-    correlationId: string;
-    sequence: number;
-    type: string;
-    payload: Record<string, unknown>;
-};
-export type Capability = (input: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>;
-export interface Handler {
-    validate(input: Record<string, unknown>): void;
-    run(input: Record<string, unknown>, ctx: {
-        signal: AbortSignal;
-        progress: (sequence: number, percent: number) => void;
-        requestId: string;
-        invoke?: Capability;
-    }): Promise<unknown>;
-}
-export interface RecordView {
-    requestId: string;
-    state: State;
-    sequence: number;
-    cancelRequested: boolean;
-    delivery: "pending" | "returned";
-    result?: unknown;
-    error?: string;
-    progress?: number;
-}
-export declare function object(v: unknown): Record<string, unknown>;
-export declare function parse(raw: unknown): Message;
 /** Volatile single-process bus; no acceptance durability or automatic execution retry. */
 export declare class ExecutionBus {
     readonly options: {
@@ -108,6 +69,14 @@ export declare class ExecutionBus {
         detach: () => void;
         returned: () => void;
     };
+    /** 校验并拆解 request 的 payload，返回 handler 名、入参与原文。 */
+    private requestParts;
+    /** 同一 requestId 的重复提交：校验一致性后复用执行或结果。 */
+    private reuseInvocation;
+    /** 受理全新请求：校验 Handler、检查容量、构建记录并入队。 */
+    private admitInvocation;
+    /** 若启用了排队期限，登记到期结算为 QUEUE_WAIT_TIMEOUT 的计时器。 */
+    private scheduleQueueDeadline;
     private attachment;
     command(owner: Owner, raw: unknown): RecordView;
     private removeQueued;
@@ -140,6 +109,8 @@ export declare class ExecutionBus {
     };
     private cancel;
     private finish;
+    /** 按会话轮转挑选下一个出队项：各会话内部 FIFO，跨会话公平。 */
+    private nextQueuedIndex;
     private pump;
     private run;
     close(): Promise<void>;

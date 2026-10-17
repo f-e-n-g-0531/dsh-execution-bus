@@ -1,16 +1,17 @@
 import { setTimeout } from "node:timers/promises";
 import type { Handler } from "./bus.js";
-import { LIMITS } from "./product.js";
+import { ERRORS } from "./error-codes.js";
+import { HANDLER_LIMITS } from "./product.js";
 export const testHandler: Handler = {
   validate(input) {
     if (
       Object.keys(input).some((k) => !["delayMs", "fail"].includes(k)) ||
       !Number.isSafeInteger(input.delayMs) ||
       Number(input.delayMs) < 0 ||
-      Number(input.delayMs) > LIMITS.diagnosticDelayMs ||
+      Number(input.delayMs) > HANDLER_LIMITS.diagnosticDelayMs ||
       typeof input.fail !== "boolean"
     )
-      throw Error("INVALID_TEST_INPUT");
+      throw Error(ERRORS.INVALID_TEST_INPUT);
   },
   async run(input, ctx) {
     for (let i = 1; i <= 5; i++) {
@@ -19,7 +20,7 @@ export const testHandler: Handler = {
       });
       ctx.progress(i, i * 20);
     }
-    if (input.fail) throw Error("CONTROLLED_FAILURE");
+    if (input.fail) throw Error(ERRORS.CONTROLLED_FAILURE);
     return { ok: true };
   },
 };
@@ -31,22 +32,22 @@ export const readHandler: Handler = {
       ) ||
       typeof input.file_path !== "string" ||
       !input.file_path ||
-      input.file_path.length > LIMITS.readPathChars
+      input.file_path.length > HANDLER_LIMITS.readPathChars
     )
-      throw Error("INVALID_READ_INPUT");
+      throw Error(ERRORS.INVALID_READ_INPUT);
     for (const k of ["offset", "limit"])
       if (
         input[k] !== undefined &&
         (!Number.isSafeInteger(input[k]) || Number(input[k]) < 1)
       )
-        throw Error("INVALID_READ_INPUT");
-    if (Number(input.limit ?? LIMITS.readLines) > LIMITS.readLines)
-      throw Error("READ_LIMIT");
+        throw Error(ERRORS.INVALID_READ_INPUT);
+    if (Number(input.limit ?? HANDLER_LIMITS.readLines) > HANDLER_LIMITS.readLines)
+      throw Error(ERRORS.READ_LIMIT);
   },
   async run(input, ctx) {
-    if (!ctx.invoke) throw Error("HOST_CAPABILITY_REQUIRED");
+    if (!ctx.invoke) throw Error(ERRORS.HOST_CAPABILITY_REQUIRED);
     return ctx.invoke(
-      { ...input, limit: input.limit ?? LIMITS.readLines },
+      { ...input, limit: input.limit ?? HANDLER_LIMITS.readLines },
       ctx.signal,
     );
   },

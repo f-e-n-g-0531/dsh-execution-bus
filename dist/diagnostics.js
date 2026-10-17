@@ -1,8 +1,9 @@
 import { performance } from "node:perf_hooks";
+import { LIMITS } from "./limits.js";
 /** In-memory numeric metadata only: never accepts request/session strings, input, output or error text. */
 export class Diagnostics {
     next = 0;
-    events = new Array(128);
+    events = new Array(LIMITS.traceRingSize);
     cursor = 0;
     size = 0;
     counts = {};
@@ -16,14 +17,15 @@ export class Diagnostics {
             stage,
             elapsedMs: Math.max(0, performance.now() - context.at),
         };
-        this.cursor = (this.cursor + 1) % 128;
-        this.size = Math.min(this.size + 1, 128);
+        this.cursor = (this.cursor + 1) % LIMITS.traceRingSize;
+        this.size = Math.min(this.size + 1, LIMITS.traceRingSize);
     }
     snapshot() {
         return {
             counts: { ...this.counts },
             traces: Array.from({ length: this.size }, (_, index) => ({
-                ...this.events[(this.cursor - this.size + 128 + index) % 128],
+                ...this.events[(this.cursor - this.size + LIMITS.traceRingSize + index) %
+                    LIMITS.traceRingSize],
             })),
         };
     }

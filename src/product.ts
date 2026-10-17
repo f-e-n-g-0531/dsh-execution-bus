@@ -18,7 +18,7 @@ export const ADMISSION_DEFAULTS = Object.freeze({
   sessionQueueLimit: 16,
   maxQueueWaitMs: 120000,
 });
-export const LIMITS = Object.freeze({
+export const HANDLER_LIMITS = Object.freeze({
   readLines: 100,
   readPathChars: 2048,
   diagnosticDelayMs: 30000,

@@ -4,31 +4,33 @@ import { entryListSchema } from "@deepseek-ai/cordis-plugin-include";
 import { load } from "js-yaml";
 import { setTimeout as pause } from "node:timers/promises";
 import { PRODUCT } from "./product.js";
+import { ERRORS } from "./error-codes.js";
 export const PRESET_ID = PRODUCT.presetId;
+/** 校验派生源组合：拒绝已含总线，以及缺少公开基准地址的相对模块/include 子文件。 */
+function validateDerivation(rows) {
+    for (const row of rows) {
+        if (row.id === "xiao-he-execution-bus" ||
+            row.name?.startsWith("@feng0531/dsh-execution-bus"))
+            throw Error(ERRORS.PTC_PRESET_ALREADY_CONTAINS_BUS);
+        // readDocument 不发布声明方的 baseUrl，不能把相对模块/include
+        // 静默重定位到 registrar 的不同上下文。
+        if (row.name?.startsWith(".") ||
+            row.name === "@deepseek-ai/cordis-plugin-include")
+            throw Error(ERRORS.PTC_PRESET_RELATIVE_BASE_UNSUPPORTED);
+        if (row.group && Array.isArray(row.config))
+            validateDerivation(row.config);
+    }
+}
 /** Capture the host-declared composition without evaluating !!js or changing disabled rows. */
 export function derivePreset(content) {
     if (Buffer.byteLength(content) > 1048576)
-        throw Error("PTC_PRESET_TOO_LARGE");
+        throw Error(ERRORS.PTC_PRESET_TOO_LARGE);
     const plugins = load(content, { schema: entryListSchema });
     const problem = entryListProblem(plugins);
     if (problem)
         throw Error("Invalid PTC preset: " + problem);
     const rows = plugins;
-    const inspect = (entries) => {
-        for (const row of entries) {
-            if (row.id === "xiao-he-execution-bus" ||
-                row.name?.startsWith("@feng0531/dsh-execution-bus"))
-                throw Error("PTC_PRESET_ALREADY_CONTAINS_BUS");
-            // readDocument does not publish the declaring baseUrl. Do not silently
-            // rebase relative modules/includes into the registrar's different context.
-            if (row.name?.startsWith(".") ||
-                row.name === "@deepseek-ai/cordis-plugin-include")
-                throw Error("PTC_PRESET_RELATIVE_BASE_UNSUPPORTED");
-            if (row.group && Array.isArray(row.config))
-                inspect(row.config);
-        }
-    };
-    inspect(rows);
+    validateDerivation(rows);
     return {
         id: PRESET_ID,
         name: PRODUCT.name,
@@ -68,7 +70,7 @@ export default class XiaoHePreset {
             }
         }
         if (!document)
-            throw Error("PTC_PRESET_UNAVAILABLE");
+            throw Error(ERRORS.PTC_PRESET_UNAVAILABLE);
         yield await this.ctx.agentPresets.register(derivePreset(document.content));
     }
 }

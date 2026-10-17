@@ -18,7 +18,7 @@ export declare const ADMISSION_DEFAULTS: Readonly<{
     sessionQueueLimit: 16;
     maxQueueWaitMs: 120000;
 }>;
-export declare const LIMITS: Readonly<{
+export declare const HANDLER_LIMITS: Readonly<{
     readLines: 100;
     readPathChars: 2048;
     diagnosticDelayMs: 30000;

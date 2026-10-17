@@ -8,6 +8,19 @@ import type { SessionId } from "@deepseek-ai/dsh-session";
 import type { RecordView, Event } from "./bus.js";
 import { setTimeout as pause } from "node:timers/promises";
 import { Diagnostics } from "./diagnostics.js";
+import { ERRORS } from "./error-codes.js";
+/** 把执行终态映射为宿主 Job 的结果状态。 */
+function jobOutcome(state: RecordView["state"]): JobOutcome {
+  return {
+    status:
+      state === "succeeded"
+        ? "completed"
+        : state === "cancelled"
+          ? "killed"
+          : "failed",
+    detail: state,
+  };
+}
 export interface ExecutionAttachment {
   done: Promise<RecordView>;
   cancel(): void;
@@ -28,15 +41,7 @@ export class ExecutionHandle {
     this.trace = telemetry.begin();
     this.completion = execution.done;
     const outcome = this.completion.then(
-      (v): JobOutcome => ({
-        status:
-          v.state === "succeeded"
-            ? "completed"
-            : v.state === "cancelled"
-              ? "killed"
-              : "failed",
-        detail: v.state,
-      }),
+      (v): JobOutcome => jobOutcome(v.state),
     );
     this.job = jobs.start({
       kind: "execution-bus",
@@ -73,43 +78,55 @@ export class ExecutionHandle {
   }
   private async waitAndClean() {
     try {
-      for (;;) {
-        const view = await this.jobs.wait(this.job, 60000, this.owner);
-        if (view.status !== "running" && view.status !== "stopping") break;
-      }
+      await this.awaitTerminal();
       this.jobs.remove(this.job, this.owner);
       this.telemetry.record(this.trace, "job_released");
     } catch (error) {
       this.telemetry.record(this.trace, "job_error");
-      const removed = this.absent(error);
-      // Retain the original execution, including while its caller/owner is being disposed.
-      await this.completion;
-      if (removed) this.telemetry.record(this.trace, "job_released");
-      if (!removed) {
-        for (let attempt = 0; attempt < 20; attempt++) {
-          try {
-            const view = this.jobs
-              .list(this.owner)
-              .find((v) => v.id === this.job && v.owner === this.owner);
-            if (!view) {
-              this.telemetry.record(this.trace, "job_released");
-              break;
-            }
-            if (view.status !== "running" && view.status !== "stopping") {
-              this.jobs.remove(this.job, this.owner);
-              this.telemetry.record(this.trace, "job_released");
-              break;
-            }
-          } catch {
-            break;
-          }
-          await pause(10);
-        }
-        throw error;
-      }
+      await this.recoverOnWaitError(error);
     } finally {
       this.progressHandle = undefined;
     }
+  }
+
+  /** 等待宿主 Job 到达终态（离开 running/stopping）。 */
+  private async awaitTerminal() {
+    for (;;) {
+      const view = await this.jobs.wait(this.job, 60000, this.owner);
+      if (view.status !== "running" && view.status !== "stopping") return;
+    }
+  }
+
+  /** wait 失败后的有界恢复：清理已终态的 Job，但仍向上保留原始错误可见性。 */
+  private async recoverOnWaitError(error: unknown) {
+    const alreadyRemoved = this.absent(error);
+    // 保留原执行结果，即便其调用者/owner 正在被释放。
+    await this.completion;
+    // Job 已不在列表时仅记录释放，不把 wait 错误视为未处理的清理失败。
+    if (alreadyRemoved) {
+      this.telemetry.record(this.trace, "job_released");
+      return;
+    }
+    for (let attempt = 0; attempt < 20; attempt++) {
+      try {
+        const view = this.jobs
+          .list(this.owner)
+          .find((v) => v.id === this.job && v.owner === this.owner);
+        if (!view) {
+          this.telemetry.record(this.trace, "job_released");
+          break;
+        }
+        if (view.status !== "running" && view.status !== "stopping") {
+          this.jobs.remove(this.job, this.owner);
+          this.telemetry.record(this.trace, "job_released");
+          break;
+        }
+      } catch {
+        break;
+      }
+      await pause(10);
+    }
+    throw error;
   }
 }
 export type ShutdownPhase =
@@ -130,10 +147,9 @@ export class ExecutionOwner {
     owner: SessionId,
     execution: ExecutionAttachment,
   ) {
-    if (this.phase !== "open") throw Error("CLOSED");
-    if (this.handles.has(key)) throw Error("DUPLICATE_EXECUTION_HANDLE");
+    this.assertAdmittable(key);
     const handle = new ExecutionHandle(jobs, owner, execution, this.telemetry);
-    this.add(key, handle);
+    this.attach(key, handle);
     return handle;
   }
   diagnostics() {
@@ -152,8 +168,18 @@ export class ExecutionOwner {
     return this.handles.get(key);
   }
   add(key: string, handle: ExecutionHandle) {
-    if (this.phase !== "open") throw Error("CLOSED");
-    if (this.handles.has(key)) throw Error("DUPLICATE_EXECUTION_HANDLE");
+    this.assertAdmittable(key);
+    this.attach(key, handle);
+  }
+
+  /** 拒绝关闭后或重复 key 的准入；create/add 共用这一道守卫。 */
+  private assertAdmittable(key: string) {
+    if (this.phase !== "open") throw Error(ERRORS.CLOSED);
+    if (this.handles.has(key)) throw Error(ERRORS.DUPLICATE_EXECUTION_HANDLE);
+  }
+
+  /** 登记 handle，并在其结算后从表中移除该登记。 */
+  private attach(key: string, handle: ExecutionHandle) {
     this.handles.set(key, handle);
     const release = () => {
       if (this.handles.get(key) === handle) this.handles.delete(key);

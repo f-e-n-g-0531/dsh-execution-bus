@@ -22,6 +22,10 @@ export declare class ExecutionHandle {
     progress(event: Event): void;
     private absent;
     private waitAndClean;
+    /** 等待宿主 Job 到达终态（离开 running/stopping）。 */
+    private awaitTerminal;
+    /** wait 失败后的有界恢复：清理已终态的 Job，但仍向上保留原始错误可见性。 */
+    private recoverOnWaitError;
 }
 export type ShutdownPhase = "open" | "stopping" | "draining" | "releasing" | "closed";
 /** Owns host projections and active deliveries, not a second execution state machine. */
@@ -56,6 +60,10 @@ export declare class ExecutionOwner {
     get phase(): ShutdownPhase;
     get(key: string): ExecutionHandle | undefined;
     add(key: string, handle: ExecutionHandle): void;
+    /** 拒绝关闭后或重复 key 的准入；create/add 共用这一道守卫。 */
+    private assertAdmittable;
+    /** 登记 handle，并在其结算后从表中移除该登记。 */
+    private attach;
     track<T>(delivery: Promise<T>): Promise<T>;
     close(drainCore: () => Promise<void>): Promise<void>;
 }
