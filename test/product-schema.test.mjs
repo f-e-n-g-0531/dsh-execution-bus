@@ -95,6 +95,9 @@ test("模式提示改为收益导向触发并给出简化调用示例", () => {
   assert.match(MODE_INSTRUCTIONS, /requestId/);
   assert.match(MODE_INSTRUCTIONS, /reused:true/);
   assert.match(MODE_INSTRUCTIONS, /tools\.execution_bus\(/);
+  assert.match(MODE_INSTRUCTIONS, /未完成的 request/);
+  assert.match(MODE_INSTRUCTIONS, /尽早结束程序/);
+  assert.match(REQUEST_DESCRIPTION, /same run_code program/);
   assert.match(REQUEST_DESCRIPTION, /Duration alone is not a reason/);
   assert.match(REQUEST_DESCRIPTION, /reused:true/);
   assert.match(REQUEST_DESCRIPTION, /Diagnostic handler only/);
