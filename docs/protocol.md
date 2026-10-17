@@ -40,7 +40,7 @@
 
 快照字段：`requestId`、`state`、`sequence`、`cancelRequested`、`delivery`，以及可选 `result`、`error`、`progress`。`status`、`result`、`cancel` 均返回当前快照；`result` 在运行中也只返回当前状态，不额外等待。
 
-core 的 `submit()` 返回 `accepted`、`done` Promise 和取消/解除通知/返回标记句柄。accepted 只是内存受理或已有记录的快照，`durable:false`，不代表执行成功；终态重取也不代表重新执行。
+core 的 `submit()` 返回 `accepted`、`done` Promise、只读 `snapshot()` 及取消/解除通知/返回标记句柄。accepted 只是内存受理或已有记录的快照，`durable:false`，不代表执行成功；终态重取也不代表重新执行。0.9.0 的 `snapshot()` 只供停止等待时读取当前视图，不改变交付标记。
 
 通知包含版本、消息 ID、请求 ID、关联 ID（correlationId）、请求内序号、类型与 payload。accepted 的 correlationId 对应本次提交消息，序号是当前快照；后续事件关联首次请求 messageId，新增序号。类型包括 started、progress、cancel_requested 和 succeeded、failed、cancelled、unknown 四种终态事件。
 
@@ -67,6 +67,12 @@ queued → running → succeeded / failed / cancelled / unknown
 `cancelRequested` 只表示发出了 AbortSignal，不代表停止或回滚。取消后正常返回且结果可保存，成功可获胜；取消后其他异常保守记为 unknown。取消某个正在等待的重复调用，会请求取消整个逻辑执行，不是仅退出该等待者。
 
 执行完成与结果交付分开。`pending`/`returned` 只是插件返回路径的标记；done 快照保留当时值，后续查询可看到更新。**returned 不证明宿主磁盘提交或模型已消费**。外层取消/后置策略仍可能改变返回值。
+
+### 外层调用结束与时间预算（0.9.0）
+
+PTC 程序结束（含 `run_code` 时间预算到期）时，宿主以固定原因中断其中的工具子调用。总线对**已受理**请求只解除本次等待，不请求取消：执行与宿主 Job 继续，同一会话可用同一 requestId 的 `status`/`result` 取回（受记录保留期限制），或发送 `cancel`。用户/会话主动中断、沙箱模式变化等其他原因仍请求取消整个执行。
+
+这条区分依据 DSH 0.2.1-rc.2 的内部中断原因字符串（`run_code settled`），不是宿主公开稳定契约；未知原因按取消处理。分离等待不改变内存与保留期边界：进程退出仍丢失全部状态，`returned` 仍不证明模型已取回结果。
 
 错误也须分层：Handler 异常原文不进入保存结果，使用 HANDLER_FAILED 等固定码；不合法、过大或快照不可保存结果为 unknown / RESULT_NOT_RETAINED。宿主 wait/remove 等服务错误可能作为外层工具错误传出，不能笼统声称所有错误都已脱敏或都是固定码。不要把宿主服务错误文本当成业务执行失败凭据。
 

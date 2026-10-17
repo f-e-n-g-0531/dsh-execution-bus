@@ -37,6 +37,7 @@ npm run test:install
 - Job 先行移除、等待/清理异常与卸载交错。
 - 派生预设成功激活、原 ptc 声明不变、普通 Agent 不可见总线、write/edit 保留且宿主策略可拒绝。
 - 真实 Node PTC 进程调用原 read 与总线；测试使用显式非约束策略，不代表桌面沙箱通过。
+- 真实 Node PTC 预算到期后，已受理总线执行继续并可同 requestId 取回；外部中断仍请求取消执行。
 
 以上是场景摘要，不表示真实模型/宿主 GUI 已通过。
 
@@ -45,6 +46,7 @@ npm run test:install
 - 宿主工具调用失败在转发层使用固定码（host.read 为 `HOST_READ_FAILED`，其余为 `HOST_TOOL_FAILED`），进入总线后统一结算为 `failed` / `HANDLER_FAILED`，错误原文不保存；取消后可能保守记为 `unknown`，不能把它当作取消已确认。
 - 相同逻辑请求的取消是请求级取消，不能简单用 Promise.race 放弃执行来改成等待者级取消。
 - 当前没有远端 Handler 传输或持久化恢复；测试没有提供这些能力。
+- 预算分离等待依据 DSH 0.2.1-rc.2 的内部中断原因字符串；换宿主版本需重新验证，未知原因保守按取消处理。
 
 ## 要直接在聊天会话中试用
 

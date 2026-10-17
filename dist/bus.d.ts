@@ -65,6 +65,8 @@ export declare class ExecutionBus {
     submit(owner: Owner, raw: unknown, onEvent?: (e: Event) => void, invoke?: Capability): {
         accepted: Event;
         done: Promise<RecordView>;
+        /** 当前快照：供仅在停止等待时使用，不改变交付标记。 */
+        snapshot: () => RecordView;
         cancel: () => void;
         detach: () => void;
         returned: () => void;

@@ -4,6 +4,12 @@ import { ExecutionOwner } from "./execution.js";
 import { ExecutionBus, parse } from "./bus.js";
 import { ERRORS } from "./error-codes.js";
 import { testHandler, readHandler, globHandler, grepHandler, editHandler, writeHandler, pwshHandler, } from "./handlers.js";
+/** DSH 0.2.1-rc.2 的 PTC 在程序结束（含时间预算到期）时用它作为子调用中断原因；
+ *  用户/会话取消使用调用方提供的原因，不匹配该固定字符串。 */
+const PTC_PROGRAM_SETTLED = "run_code settled";
+function isPtcProgramEnd(signal) {
+    return signal.aborted && signal.reason === PTC_PROGRAM_SETTLED;
+}
 export const name = "execution-bus";
 export const inject = ["tools", "jobs"];
 export function apply(ctx) {
@@ -148,14 +154,33 @@ export function apply(ctx) {
             throw Error(ERRORS.HOST_JOB_UNAVAILABLE);
         }
     }
-    /** 把宿主工具调用的取消映射到执行，并等待投影结算后返回快照。 */
+    /** 外层取消映射：PTC 程序结束（含预算到期）只停止本次等待，已受理执行与
+     *  宿主 Job 保留，同会话可用同 requestId 的 status/result 取回；其他取消原因
+     *  （用户/会话中断）仍请求取消整个执行。 */
     async function awaitProjection(exec, attached, execution) {
-        const abort = () => attached.cancel();
+        let release;
+        const detachedView = new Promise((resolve) => (release = resolve));
+        const abort = () => {
+            if (!isPtcProgramEnd(exec.signal)) {
+                attached.cancel();
+                return;
+            }
+            attached.detach();
+            release(attached.snapshot());
+        };
         exec.signal.addEventListener("abort", abort, { once: true });
         if (exec.signal.aborted)
             abort();
+        const settled = execution.settled.then(() => ({ kind: "settled" }), (error) => ({ kind: "error", error }));
         try {
-            await execution.settled;
+            const outcome = await Promise.race([
+                settled,
+                detachedView.then((view) => ({ kind: "detached", view })),
+            ]);
+            if (outcome.kind === "detached")
+                return outcome.view;
+            if (outcome.kind === "error")
+                throw outcome.error;
             const value = await attached.done;
             attached.returned();
             return value;

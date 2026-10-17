@@ -282,6 +282,8 @@ export class ExecutionBus {
         return {
             accepted,
             done: e.done,
+            /** 当前快照：供仅在停止等待时使用，不改变交付标记。 */
+            snapshot: () => this.view(e),
             cancel: () => this.cancel(e),
             detach: () => {
                 if (listener)
