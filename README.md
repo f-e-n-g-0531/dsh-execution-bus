@@ -4,6 +4,10 @@
 
 **（实验性/已冻结参考实现）** 让模型发出一次执行请求，由程序负责排队、等待和收取结果。
 
+## 声明式运行时（1.0 迁移中）
+
+本仓库已加入**声明式运行时**：模型提交 DAG 计划（`runtime_run`），运行时负责并行调度、只读步骤重试、超时、结果落盘与重启恢复（`runtime_status/runtime_result/runtime_cancel/runtime_resume`）。旧 `execution_bus` 暂保留为兼容，下一版本移除并统一文档。设计、schema 与边界见 [声明式运行时](<docs/DECLARATIVE-RUNTIME.md>)；本阶段新增 15 项回归，全量 **143** 项测试通过。
+
 “萧何”是产品与模式显示名，执行总线是其技术功能；不新增人物 Agent，不进行角色扮演。仓库 dsh-execution-bus、npm 包名、execution_bus 工具名及 execution-bus-test 预设 ID 保持不变。历史版本发布说明保留当时名称。
 
 DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **0.12.1**

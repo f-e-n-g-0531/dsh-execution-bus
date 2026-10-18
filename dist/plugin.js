@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { ADMISSION_DEFAULTS, REQUEST_DESCRIPTION, REQUEST_PARAMETERS, STATE_PARAMETERS, } from "./product.js";
+import { ADMISSION_DEFAULTS, REQUEST_DESCRIPTION, REQUEST_PARAMETERS, RUNTIME_CANCEL_DESCRIPTION, RUNTIME_RESULT_DESCRIPTION, RUNTIME_RESUME_DESCRIPTION, RUNTIME_RUN_DESCRIPTION, RUNTIME_RUN_ID_PARAMETERS, RUNTIME_RUN_PARAMETERS, RUNTIME_STATE_PARAMETERS, RUNTIME_STATUS_DESCRIPTION, RUNTIME_STATUS_PARAMETERS, STATE_PARAMETERS, } from "./product.js";
+import { RuntimeService } from "./runtime/service.js";
 import { ExecutionOwner } from "./execution.js";
 import { ExecutionBus, parse } from "./bus.js";
 import { ERRORS } from "./error-codes.js";
@@ -60,6 +61,33 @@ export function apply(ctx) {
     bus.register("host.pwsh", pwshHandler);
     const executions = new ExecutionOwner();
     ctx.effect(() => () => executions.close(() => bus.close()));
+    const runtime = new RuntimeService(ctx);
+    ctx.effect(() => () => runtime.dispose());
+    const registerRuntimeTool = (name, description, parameters, execute) => {
+        ctx.tools.register({
+            name,
+            description,
+            parameters,
+            output: {
+                schema: {},
+                render: (_args, value) => [
+                    { type: "text", text: JSON.stringify(value) },
+                ],
+            },
+            async execute(raw, exec) {
+                if (executions.phase !== "open")
+                    throw Error(ERRORS.CLOSED);
+                return execute(raw, exec);
+            },
+        });
+    };
+    registerRuntimeTool("runtime_run", RUNTIME_RUN_DESCRIPTION, RUNTIME_RUN_PARAMETERS, (raw, exec) => runtime.run(raw, exec));
+    registerRuntimeTool("runtime_status", RUNTIME_STATUS_DESCRIPTION, RUNTIME_STATUS_PARAMETERS, (raw, exec) => runtime.status(raw, exec));
+    registerRuntimeTool("runtime_result", RUNTIME_RESULT_DESCRIPTION, RUNTIME_RUN_ID_PARAMETERS, (raw, exec) => runtime.result(raw, exec));
+    registerRuntimeTool("runtime_cancel", RUNTIME_CANCEL_DESCRIPTION, RUNTIME_RUN_ID_PARAMETERS, (raw, exec) => runtime.cancel(raw, exec));
+    registerRuntimeTool("runtime_resume", RUNTIME_RESUME_DESCRIPTION, RUNTIME_RUN_ID_PARAMETERS, (raw, exec) => runtime.resume(raw, exec));
+    // RUNTIME_STATE_PARAMETERS 保留导出给后续只读快照工具使用。
+    void RUNTIME_STATE_PARAMETERS;
     ctx.tools.register({
         name: "execution_bus_state",
         description: "Read a bounded metadata-only snapshot of this agent session’s bus tasks. No inputs/results, no cross-session access. Do not poll during an awaited request.",
