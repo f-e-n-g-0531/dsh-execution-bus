@@ -1,4 +1,4 @@
-# 同类项目源码参考与整合（0.5.0）
+# 同类项目源码参考与整合（0.5.0–0.12.1）
 
 ## 本轮交付
 
@@ -38,7 +38,7 @@
 本轮实现（0.12.0）：
 
 1. Handler 调度声明：queue、maxConcurrency、resources(input)、dedupe:"payload"；register 时校验。
-2. 调度：同会话内按类别优先级（fs < diagnostic < command < default）+ 等待老化（每 30 秒削平一级，最多两级）选择；跨会话仍按会话轮转；Handler.maxConcurrency 作为舱壁。
+2. 调度：同会话内按类别优先级（fs < diagnostic < command < default）+ 等待老化（每 30 秒提升一级，不封顶，最低到 0）选择；跨会话仍按会话轮转；Handler.maxConcurrency 作为舱壁。0.12.1 修正老化封顶导致的 default 类饥饿。
 3. 资源互斥：Handler.resources 返回稳定字符串键（host.edit/host.write 使用 file:<file_path>）；同一总线实例内同键串行，失败/取消/关闭释放；排队期限仍然有效。
 4. 唯一任务：幂等 Handler 声明 dedupe:"payload"（host.read/glob/grep）；同会话同 handler+payload 已有 succeeded 终态时，新 requestId 直接复用快照并带 reused:true；失败结果不缓存。
 5. 诊断：execution_bus_state 任务增加 longRunning（30 秒阈值）；waitReason 增加 resource。

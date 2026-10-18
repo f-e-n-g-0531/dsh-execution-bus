@@ -101,9 +101,14 @@ export declare class ExecutionBus {
     /** 唯一任务命中已成功终态时，构造一个不再执行 Handler 的只读结果记录。 */
     private syntheticUnique;
     private releaseResources;
+    /** 优先类别表按自有属性查；未知类别回退 default 权重，避免原型链 NaN。 */
+    private classRank;
+    /** 当前阻塞来源：Handler 舱壁优先于资源锁；undefined 表示可运行。 */
+    private blockedBy;
     /** 是否有空闲槽位供此 Entry 开始执行（Handler 舱壁 + 资源互斥）。 */
     private eligible;
-    /** 类别优先级 + 等待老化：分数越低越先出队，长时间等待会逐步压过类别差异。 */
+    /** 类别优先级 + 等待老化：等待越久提升越多（不封顶），最低到 0；
+     *  同分时按队列先后（FIFO）决出，避免低优先类别饥饿。 */
     private effectivePriority;
     /** 对已到期的排队任务结算 QUEUE_WAIT_TIMEOUT，再从队列移除。 */
     private expireQueued;

@@ -59,7 +59,7 @@ async function fixture() {
   return { scope, run, calls, peak: () => editPeak };
 }
 
-test("内置只读 Handler 按 payload 唯一复用：不同 requestId 相同输入只执行一次", async () => {
+test("内置只读 Handler 不启用 payload 去重：不同 requestId 相同输入会重新执行", async () => {
   const { scope, run, calls } = await fixture();
   try {
     const input = { file_path: "README.md", limit: 2 };
@@ -71,12 +71,11 @@ test("内置只读 Handler 按 payload 唯一复用：不同 requestId 相同输
     const second = await run({ requestId: "unique-2", handler: "host.read", input });
     assert.equal(second.isError, false, JSON.stringify(second));
     assert.equal(second.value.state, "succeeded");
-    assert.equal(second.value.reused, true);
-    assert.deepEqual(second.value.result, first.value.result);
-    assert.equal(calls.read, 1);
+    assert.equal(second.value.reused, undefined, "0.12.1 起内置 host.* 不缓存旧文件内容");
+    assert.equal(calls.read, 2);
     const third = await run({ requestId: "unique-3", handler: "host.read", input: { file_path: "README.md", limit: 3 } });
     assert.equal(third.value.state, "succeeded");
-    assert.equal(calls.read, 2);
+    assert.equal(calls.read, 3);
   } finally {
     await scope.dispose();
   }

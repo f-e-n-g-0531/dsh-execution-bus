@@ -12,6 +12,10 @@ const isTerminal = (s) => !["queued", "running"].includes(s);
 function hashPayload(payload) {
     return createHash("sha256").update(canonical(payload)).digest("hex");
 }
+/** 消息身份只保存摘要，避免为每个 messageId 保留完整消息文本占用内存。 */
+function hashMessage(m) {
+    return createHash("sha256").update(canonical(m)).digest("hex");
+}
 /** Volatile single-process bus; no acceptance durability or automatic execution retry. */
 export class ExecutionBus {
     options;
@@ -52,25 +56,44 @@ export class ExecutionBus {
             Array.isArray(scheduler) ||
             Reflect.ownKeys(scheduler).some((key) => typeof key !== "string" || !schedulerKeys.includes(key)))
             throw Error(ERRORS.INVALID_OPTIONS);
-        if (!Number.isSafeInteger(scheduler.queueAgingMs) ||
-            scheduler.queueAgingMs < 1 ||
-            !Number.isSafeInteger(scheduler.longRunningMs) ||
-            scheduler.longRunningMs < 1)
+        for (const key of Reflect.ownKeys(scheduler)) {
+            const descriptor = Object.getOwnPropertyDescriptor(scheduler, key);
+            if (!("value" in descriptor) || !descriptor.enumerable)
+                throw Error(ERRORS.INVALID_OPTIONS);
+        }
+        // 只读取一次：拒绝 accessor，避免校验值与落库值不一致。
+        const queueAgingMs = scheduler.queueAgingMs;
+        const longRunningMs = scheduler.longRunningMs;
+        const rawOrder = scheduler.queueClassOrder;
+        if (!Number.isSafeInteger(queueAgingMs) ||
+            queueAgingMs < 1 ||
+            !Number.isSafeInteger(longRunningMs) ||
+            longRunningMs < 1 ||
+            !rawOrder ||
+            typeof rawOrder !== "object" ||
+            Array.isArray(rawOrder))
             throw Error(ERRORS.INVALID_OPTIONS);
-        const order = scheduler.queueClassOrder;
-        if (!order || typeof order !== "object" || Array.isArray(order))
-            throw Error(ERRORS.INVALID_OPTIONS);
-        for (const [className, rank] of Object.entries(order))
-            if (typeof className !== "string" ||
-                className.length === 0 ||
+        const order = Object.create(null);
+        for (const className of Reflect.ownKeys(rawOrder)) {
+            if (typeof className !== "string")
+                throw Error(ERRORS.INVALID_OPTIONS);
+            if (["__proto__", "constructor", "prototype"].includes(className))
+                throw Error(ERRORS.INVALID_OPTIONS);
+            const descriptor = Object.getOwnPropertyDescriptor(rawOrder, className);
+            if (!("value" in descriptor) || !descriptor.enumerable)
+                throw Error(ERRORS.INVALID_OPTIONS);
+            const rank = descriptor.value;
+            if (className.length === 0 ||
                 className.length > 64 ||
                 !Number.isSafeInteger(rank) ||
                 rank < 0)
                 throw Error(ERRORS.INVALID_OPTIONS);
+            order[className] = rank;
+        }
         this.scheduler = Object.freeze({
-            queueClassOrder: Object.freeze({ ...order }),
-            queueAgingMs: scheduler.queueAgingMs,
-            longRunningMs: scheduler.longRunningMs,
+            queueClassOrder: Object.freeze(order),
+            queueAgingMs: queueAgingMs,
+            longRunningMs: longRunningMs,
         });
         const allowed = ["sessionQueueLimit", "maxQueueWaitMs"];
         if (!admission ||
@@ -114,10 +137,14 @@ export class ExecutionBus {
             throw Error(ERRORS.DUPLICATE_HANDLER);
         if (!handler ||
             typeof handler !== "object" ||
+            typeof handler.validate !== "function" ||
+            typeof handler.run !== "function" ||
+            (handler.idempotent !== undefined && typeof handler.idempotent !== "boolean") ||
             (handler.queue !== undefined &&
                 (typeof handler.queue !== "string" ||
                     handler.queue.length === 0 ||
-                    handler.queue.length > 64)) ||
+                    handler.queue.length > 64 ||
+                    ["__proto__", "constructor", "prototype"].includes(handler.queue))) ||
             (handler.maxConcurrency !== undefined &&
                 (!Number.isSafeInteger(handler.maxConcurrency) ||
                     handler.maxConcurrency < 1)) ||
@@ -125,7 +152,17 @@ export class ExecutionBus {
             (handler.dedupe === "payload" && handler.idempotent !== true) ||
             (handler.resources !== undefined && typeof handler.resources !== "function"))
             throw Error(ERRORS.INVALID_HANDLER_OPTIONS);
-        const registration = { handler, token: Symbol(name) };
+        // 注册时快照并冻结调度/复用选项，运行期修改原对象不再影响已注册行为。
+        const fixed = Object.freeze({
+            idempotent: handler.idempotent,
+            queue: handler.queue,
+            maxConcurrency: handler.maxConcurrency,
+            dedupe: handler.dedupe,
+            resources: handler.resources?.bind(handler),
+            validate: handler.validate.bind(handler),
+            run: handler.run.bind(handler),
+        });
+        const registration = { handler: fixed, token: Symbol(name) };
         this.handlers.set(name, registration);
         let disposed = false;
         return () => {
@@ -232,14 +269,14 @@ export class ExecutionBus {
         if (e.handler.idempotent === false && isTerminal(e.view.state))
             throw Error(ERRORS.MUTATING_REUSE_DENIED);
         const previous = e.messages.get(m.messageId);
-        if (previous && previous !== canonical(m))
+        if (previous && previous !== hashMessage(m))
             throw Error(ERRORS.MESSAGE_CONFLICT);
         if (!previous && e.messages.size >= LIMITS.messageAccountLimit)
             throw Error(ERRORS.MESSAGE_LIMIT);
         // 先取得附着，再提交消息身份：附着被拒（WAITER_LIMIT）时无副作用。
         const attached = this.attachment(e, onEvent, m.messageId, true);
         if (!previous)
-            e.messages.set(m.messageId, canonical(m));
+            e.messages.set(m.messageId, hashMessage(m));
         this.telemetry.record(e.trace, "reused");
         return attached;
     }
@@ -249,6 +286,9 @@ export class ExecutionBus {
         if (!handler)
             throw Error(ERRORS.UNKNOWN_HANDLER);
         handler.validate(parts.input);
+        // validate 是用户代码：可能在同步执行中触发 close()。
+        if (this.closed)
+            throw Error(ERRORS.CLOSED);
         const dedupeKey = handler.dedupe === "payload"
             ? JSON.stringify([owner.sessionId, parts.handler, fingerprint])
             : undefined;
@@ -269,6 +309,9 @@ export class ExecutionBus {
             }
         }
         const resources = this.resourcesFor(handler, parts.input);
+        // resources 也是用户代码，返回后重新确认总线未在同步段关闭。
+        if (this.closed)
+            throw Error(ERRORS.CLOSED);
         if (this.entries.size >= this.options.recordLimit ||
             this.queue.length >= this.options.queueLimit)
             throw Error(ERRORS.BACKPRESSURE);
@@ -306,7 +349,7 @@ export class ExecutionBus {
             dispatching: false,
             sourceSequence: 0,
             created: Date.now(),
-            messages: new Map([[m.messageId, canonical(m)]]),
+            messages: new Map([[m.messageId, hashMessage(m)]]),
         };
         this.entries.set(key, e);
         if (dedupeKey !== undefined)
@@ -375,11 +418,22 @@ export class ExecutionBus {
             delivery: "pending",
             result: target.view.result,
         }));
+        let resultBytes = 0;
+        try {
+            if (snapshot.result !== undefined)
+                resultBytes = Buffer.byteLength(JSON.stringify(snapshot.result));
+        }
+        catch {
+            resultBytes = target.resultBytes;
+        }
         let resolve;
         const done = new Promise((r) => (resolve = r));
+        const trace = this.telemetry.begin();
         const e = {
-            trace: this.telemetry.begin(),
-            resultBytes: 0,
+            trace,
+            resultBytes,
+            startedAt: trace.at,
+            finishedAt: trace.at,
             invoke: undefined,
             correlationId: m.messageId,
             owner: owner.sessionId,
@@ -399,9 +453,10 @@ export class ExecutionBus {
             dispatching: false,
             sourceSequence: 0,
             created: Date.now(),
-            messages: new Map([[m.messageId, canonical(m)]]),
+            messages: new Map([[m.messageId, hashMessage(m)]]),
         };
         this.entries.set(key, e);
+        this.retainedResultBytes += resultBytes;
         this.telemetry.record(e.trace, "accepted");
         this.telemetry.record(e.trace, "unique_reused");
         e.resolve(snapshot);
@@ -412,24 +467,31 @@ export class ExecutionBus {
             if (this.resourceLocks.get(resource) === e)
                 this.resourceLocks.delete(resource);
     }
-    /** 是否有空闲槽位供此 Entry 开始执行（Handler 舱壁 + 资源互斥）。 */
-    eligible(e, now) {
-        void now;
+    /** 优先类别表按自有属性查；未知类别回退 default 权重，避免原型链 NaN。 */
+    classRank(queueClass) {
+        const order = this.scheduler.queueClassOrder;
+        return Object.hasOwn(order, queueClass) ? order[queueClass] : 3;
+    }
+    /** 当前阻塞来源：Handler 舱壁优先于资源锁；undefined 表示可运行。 */
+    blockedBy(e) {
         const limit = e.handler.maxConcurrency;
         if (limit !== undefined &&
             (this.runningByHandler.get(e.handler) ?? 0) >= limit)
-            return false;
+            return "bulkhead";
         for (const resource of e.resources)
             if (this.resourceLocks.has(resource))
-                return false;
-        return true;
+                return "resource";
+        return undefined;
     }
-    /** 类别优先级 + 等待老化：分数越低越先出队，长时间等待会逐步压过类别差异。 */
+    /** 是否有空闲槽位供此 Entry 开始执行（Handler 舱壁 + 资源互斥）。 */
+    eligible(e) {
+        return this.blockedBy(e) === undefined;
+    }
+    /** 类别优先级 + 等待老化：等待越久提升越多（不封顶），最低到 0；
+     *  同分时按队列先后（FIFO）决出，避免低优先类别饥饿。 */
     effectivePriority(e, now) {
-        const rank = this.scheduler.queueClassOrder[e.queueClass] ?? 3;
-        const boost = Math.min(2, Math.floor(Math.max(0, now - e.trace.at) / this.scheduler.queueAgingMs));
-        // 老化只削平类别差距，不把优先级推到负值；同分时按队列先后（FIFO）决出。
-        return Math.max(0, rank - boost);
+        const boost = Math.floor(Math.max(0, now - e.trace.at) / this.scheduler.queueAgingMs);
+        return Math.max(0, this.classRank(e.queueClass) - boost);
     }
     /** 对已到期的排队任务结算 QUEUE_WAIT_TIMEOUT，再从队列移除。 */
     expireQueued(now) {
@@ -488,7 +550,7 @@ export class ExecutionBus {
             throw Error(ERRORS.INVALID_CONTROL);
         this.sweep();
         const e = this.get(owner, m.requestId);
-        const previous = e.messages.get(m.messageId), fingerprint = canonical(m);
+        const previous = e.messages.get(m.messageId), fingerprint = hashMessage(m);
         if (previous && previous !== fingerprint)
             throw Error(ERRORS.MESSAGE_CONFLICT);
         if (!previous) {
@@ -531,9 +593,7 @@ export class ExecutionBus {
             waitReason: e.view.state === "queued"
                 ? this.running >= this.options.concurrency
                     ? "concurrency"
-                    : this.eligible(e, now)
-                        ? "dispatch"
-                        : "resource"
+                    : (this.blockedBy(e) ?? "dispatch")
                 : null,
             longRunning: e.view.state === "running" &&
                 e.startedAt !== undefined &&
@@ -637,7 +697,7 @@ export class ExecutionBus {
             let chosenScore = Infinity;
             for (let i = 0; i < this.queue.length; i++) {
                 const e = this.queue[i];
-                if (e.owner !== owner || !this.eligible(e, now))
+                if (e.owner !== owner || !this.eligible(e))
                     continue;
                 const score = this.effectivePriority(e, now);
                 if (score < chosenScore) {

@@ -11,7 +11,9 @@ export declare function hostToolHandler(toolName: string, opts: {
     dedupe?: "payload";
 }): Handler;
 export declare const testHandler: Handler;
-/** 读取：无副作用，幂等，终态结果可复用；可按 payload 指纹做唯一任务。 */
+/** 读取：无副作用，幂等，终态结果可复用。0.12.1 起内置 host.* 不再声明
+ *  payload 去重：文件/权限/工作目录会变化，缓存旧结果会静默返回过期内容。
+ *  扩展 Handler 可自行声明 dedupe 并承担失效责任。 */
 export declare const readHandler: Handler;
 /** 文件名搜索：只读，幂等，终态结果可复用；搜索基数由宿主工具限制。 */
 export declare const globHandler: Handler;

@@ -28,8 +28,8 @@
 
 ### 去重与消息额度
 
-- 逻辑键是 **当前存活总线实例 + 宿主会话身份 + requestId**。不同会话不能查询/取消彼此记录；同预设仍共享容量。
-- 对参数规范排序后的摘要仅用于同 requestId 的冲突比较，不用于永久按参数去重。相同参数的新 requestId 仍是新操作。
+- 逻辑键是 **当前存活总线实例 + 宿主会话身份 + requestId**。不同会话不能查询/取消彼此记录；同一预设修订（generation）的会话共享总线容量。
+- 对参数规范排序后的摘要仅用于同 requestId 的冲突比较，不用于永久按参数去重。相同参数的新 requestId 默认仍是新操作；仅显式声明 `dedupe:"payload"` 的幂等 Handler 可复用同会话已成功的 payload 结果（0.12.1 起内置 host.* 不声明）。
 - 普通消息最多记账 128 条，含首次请求、重复请求及查询。满后拒绝普通新消息；首次尚未确认的有效取消可使用一个额外控制槽，最多 129 条。已记账消息的冲突检查不因控制槽而放松。
 - 活跃观察者附着最多 32 个；每个附着独立占名额，即使共用回调。附着被拒绝时不占用新消息编号/额度。
 - 终态超期清理后旧请求键失效，不应把此机制用于长期避免外部副作用重复。
@@ -110,7 +110,7 @@ core 不传配置时用默认值；显式配置必须完整包含 concurrency、
 
 期限使用单调时钟，计时器及出队前均检查，超期只将 queued 结算 failed / QUEUE_WAIT_TIMEOUT，不调用 Handler、不设置 cancelRequested、不重试，沿原 done/Job 返回。开始运行、取消或关闭时清除计时器。事件循环繁忙会令通知晚于期限，但不会让超期任务出队执行。已运行任务继续遵守原执行/取消规则。
 
-execution_bus_state 工具仅接受 {}，从宿主 Agent 取 sessionId，拒绝匿名或自报身份，关闭后拒绝查询。它读取 core inspect 的不可变快照，不创建 Job、不改变消息额度；查询会做正常终态 TTL 清理。不包含输入/输出，不访问其他会话。最多 50 条、活跃优先，其后按受理次序倒序列出终态；总数未截断，truncated 提示列表截断。元数据含 requestId、state、delivery、cancelRequested、固定 error/progress、waitReason（concurrency/dispatch/resource）、longRunning（运行超过 30 秒）、queueMs/runMs/remainingQueueMs。phase terminal 只表示执行终态且尚未标记返回，不代表可推断宿主 Job 清理进度。
+execution_bus_state 工具仅接受 {}，从宿主 Agent 取 sessionId，拒绝匿名或自报身份，关闭后拒绝查询。它读取 core inspect 的不可变快照，不创建 Job、不改变消息额度；查询会做正常终态 TTL 清理。不包含输入/输出，不访问其他会话。最多 50 条、活跃优先，其后按受理次序倒序列出终态；总数未截断，truncated 提示列表截断。元数据含 requestId、state、delivery、cancelRequested、固定 error/progress、waitReason（concurrency/bulkhead/resource/dispatch）、longRunning（运行超过 30 秒）、queueMs/runMs/remainingQueueMs。phase terminal 只表示执行终态且尚未标记返回，不代表可推断宿主 Job 清理进度。
 
 core inspect(trustedOwner) 要求非空 sessionId，但不提供鉴权，可信身份和访问控制属于嵌入宿主。勿把 core 的任意 owner 参数直接暴露给远端。状态不是持久审计/模型消费回执，不应循环调用。
 
@@ -128,6 +128,21 @@ core 实例的 `diagnostics()` 返回只读用途的独立快照：阶段计数�
 
 0.11.0 起，模型可传简化输入：请求 `{requestId, handler, input, messageId?}`、控制 `{requestId, type, messageId?}`；插件在进入总线前补齐完整 v1 消息，完整 v1 消息仍被接受。返回快照在附着已有执行时追加可选 `reused:true`，只表示复用了逻辑执行，不代表外部副作用对账。
 
-0.12.0 扩展 Handler 可选声明：`queue`（调度类别，内置 fs/diagnostic/command）、`maxConcurrency`（同一 Handler 舱壁）、`resources(input)`（资源键串行）、`dedupe:"payload"`（幂等 Handler 的唯一任务复用）。调度和资源锁只在单个总线实例内生效；资源键是调用方提供的字符串，不是 OS 文件锁或跨进程保证。唯一任务只复用 succeeded 终态，失败/取消/unknown 不缓存；命中时返回快照带 `reused:true`，且不会再次执行 Handler。
+0.12.0 扩展 Handler 可选声明：`queue`（调度类别，内置 fs/diagnostic/command）、`maxConcurrency`（同一 Handler 舱壁）、`resources(input)`（资源键串行）、`dedupe:"payload"`（幂等 Handler 的唯一任务复用）。调度和资源锁按总线实例生效；插件实例由同一预设修订（generation）的会话共享，跨进程/跨代际不保证。资源键是调用方提供的字符串，不是 OS 文件锁。唯一任务只复用 succeeded 终态，失败/取消/unknown 不缓存；命中时返回快照带 `reused:true`，且不会再次执行 Handler。
+
+0.12.1 起内置 host.read/host.glob/host.grep **不再声明** `dedupe:"payload"`：文件、权限或工作目录变化后缓存结果可能过期，扩展 Handler 如声明该能力需自行承担失效责任。同时 `waitReason` 区分 `bulkhead`（Handler 舱壁）与 `resource`（资源锁）。
 
 内置 test、host.read、host.glob 与 host.grep 没有副作用；host.edit、host.write 与 host.pwsh 是非幂等写/命令 Handler，通过 `Handler.idempotent=false` 显式声明，其终态结果复用被 `MUTATING_REUSE_DENIED` 拒绝，运行中的重复附着仍只等待同一执行。0.8.0 新增宿主工具输入错误码 INVALID_GLOB_INPUT、INVALID_GREP_INPUT 与 INVALID_PWSH_INPUT；协议既有错误码不改名。host.pwsh 的后台结果只是宿主 Job ID，不是完成回执。当前没有 ctx.executionBus 服务、远端传输、跨插件动态注册或外部副作用对账契约。扩展有副作用 Handler 前必须显式声明幂等并另行设计授权与崩溃对账，不能仅依赖本版请求键。
+
+
+## 9. 错误词汇（0.12.1 补录）
+
+错误码值即协议 v1 稳定词汇，不得重命名；完整定义见 `src/error-codes.ts`。
+
+- 协议解析：`INVALID_OBJECT`、`UNKNOWN_FIELD`、`UNSUPPORTED_VERSION`、`INVALID_ID`、`UNSUPPORTED_TYPE`、`MESSAGE_TOO_LARGE`。
+- 严格 JSON：`JSON_LIMIT`、`INVALID_JSON`、`CYCLIC_JSON`、`INVALID_JSON_ARRAY`、`INVALID_JSON_OBJECT`、`INVALID_JSON_KEY`、`INVALID_JSON_PROPERTY`。
+- 总线调度与准入：`CLOSED`、`EXPECTED_REQUEST`、`INVALID_REQUEST`、`REQUEST_CONFLICT`、`MESSAGE_CONFLICT`、`MESSAGE_LIMIT`、`UNKNOWN_HANDLER`、`BACKPRESSURE`、`SESSION_BACKPRESSURE`、`WAITER_LIMIT`、`EXPECTED_CONTROL`、`INVALID_CONTROL`、`NOT_FOUND`、`UNTRUSTED_CONTEXT`、`OWNING_SESSION_REQUIRED`、`QUEUE_WAIT_TIMEOUT`、`RESULT_NOT_RETAINED`、`CANCELLED`、`CANCELLATION_UNCONFIRMED`、`HANDLER_FAILED`、`INVALID_ADMISSION_POLICY`、`INVALID_OPTIONS`、`DUPLICATE_HANDLER`、`MUTATING_REUSE_DENIED`、`INVALID_HANDLER_OPTIONS`、`INVALID_RESOURCES`。
+- 宿主投影：`DUPLICATE_EXECUTION_HANDLE`、`INVALID_STATE_QUERY`、`HOST_READ_FAILED`、`HOST_TOOL_FAILED`、`HOST_JOB_UNAVAILABLE`。
+- 预设派生：`PTC_PRESET_TOO_LARGE`、`PTC_PRESET_ALREADY_CONTAINS_BUS`、`PTC_PRESET_RELATIVE_BASE_UNSUPPORTED`、`PTC_PRESET_UNAVAILABLE`。
+- 内置 Handler：`INVALID_TEST_INPUT`、`INVALID_READ_INPUT`、`INVALID_EDIT_INPUT`、`INVALID_WRITE_INPUT`、`INVALID_GLOB_INPUT`、`INVALID_GREP_INPUT`、`INVALID_PWSH_INPUT`、`READ_LIMIT`、`CONTROLLED_FAILURE`、`HOST_CAPABILITY_REQUIRED`。
+

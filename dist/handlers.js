@@ -66,15 +66,17 @@ function validateEdit(input) {
         (input.replace_all !== undefined && typeof input.replace_all !== "boolean"))
         throw Error(ERRORS.INVALID_EDIT_INPUT);
 }
-/** 同一路径的文件写入/编辑互斥；路径按调用原文作为资源键（不做跨平台归一化）。 */
+/** 同一路径的文件写入/编辑互斥；路径按调用原文作为资源键（不做跨平台归一化，
+ *  因此别名写法可能绕过互斥；见 docs/validation.md）。 */
 function fileResource(input) {
     return ["file:" + String(input.file_path)];
 }
-/** 读取：无副作用，幂等，终态结果可复用；可按 payload 指纹做唯一任务。 */
+/** 读取：无副作用，幂等，终态结果可复用。0.12.1 起内置 host.* 不再声明
+ *  payload 去重：文件/权限/工作目录会变化，缓存旧结果会静默返回过期内容。
+ *  扩展 Handler 可自行声明 dedupe 并承担失效责任。 */
 export const readHandler = hostToolHandler("read", {
     idempotent: true,
     queue: "fs",
-    dedupe: "payload",
     validate: validateRead,
     prepare: (input) => ({
         ...input,
@@ -93,7 +95,6 @@ function validateGlob(input) {
 export const globHandler = hostToolHandler("glob", {
     idempotent: true,
     queue: "fs",
-    dedupe: "payload",
     validate: validateGlob,
 });
 function validateGrep(input) {
@@ -125,7 +126,6 @@ function validateGrep(input) {
 export const grepHandler = hostToolHandler("grep", {
     idempotent: true,
     queue: "fs",
-    dedupe: "payload",
     validate: validateGrep,
 });
 function validateWrite(input) {
