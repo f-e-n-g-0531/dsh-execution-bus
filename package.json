@@ -1,6 +1,6 @@
 {
   "name": "@feng0531/dsh-execution-bus",
-  "version": "0.12.1",
+  "version": "1.0.0",
   "type": "module",
   "private": false,
   "license": "SEE LICENSE IN LICENSE",
@@ -12,11 +12,10 @@
     "type": "git",
     "url": "git+https://github.com/f-e-n-g-0531/dsh-execution-bus.git"
   },
-  "description": "萧何 / Xiao He: execution bus, bounded DSH handler dispatch with original-call waiting",
+  "description": "萧何 / Xiao He: declarative runtime for DSH agent tool plans (DAG execution, retries, persistence, recovery)",
   "main": "dist/plugin.js",
   "exports": {
     ".": "./dist/plugin.js",
-    "./core": "./dist/bus.js",
     "./mode": "./dist/mode.js",
     "./test-mode": "./dist/mode.js",
     "./preset": "./dist/preset.js"
@@ -38,11 +37,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "node scripts/clean-dist.mjs && tsc",
     "test": "npm run build && node --test test/*.test.mjs",
     "pack": "npm pack",
     "check": "npm test",
-    "test:flow": "npm run build && node --test test/flow-regression.test.mjs test/host.test.mjs test/agent-loop.test.mjs",
+    "test:flow": "npm run build && node --test test/runtime-tools.test.mjs test/runtime-executor.test.mjs",
     "prepack": "npm run check && npm run verify:package",
     "verify:package": "node scripts/verify-package.mjs",
     "test:install": "node scripts/test-install.mjs",
@@ -54,7 +53,6 @@
     "@deepseek-ai/cordis": "~4.0.4",
     "@deepseek-ai/cordis-plugin-include": "~1.0.9",
     "@deepseek-ai/dsh-agent-preset-registry": "0.2.1-rc.2",
-    "@deepseek-ai/dsh-jobs": "0.2.1-rc.2",
     "@deepseek-ai/dsh-scope": "0.2.1-rc.2",
     "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.2",
     "@deepseek-ai/dsh-tools": "0.2.1-rc.2"

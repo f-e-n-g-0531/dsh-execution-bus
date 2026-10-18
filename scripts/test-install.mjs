@@ -58,10 +58,10 @@ try {
   assert.equal(actual.version, expected.version);
   // A fresh child process rooted outside this checkout prevents resolving source devDependencies.
   const source = `import assert from 'node:assert/strict';import * as plugin from './node_modules/@feng0531/dsh-execution-bus/dist/plugin.js';
-const preset=await import('./node_modules/@feng0531/dsh-execution-bus/dist/preset.js');assert.equal(preset.PRESET_ID,'execution-bus-test');assert.equal(preset.derivePreset('[]').plugins.at(-1).name,'@feng0531/dsh-execution-bus/mode');const mode=await import('@feng0531/dsh-execution-bus/mode');const legacy=await import('@feng0531/dsh-execution-bus/test-mode');assert.equal(mode,legacy);assert.equal(mode.apply,legacy.apply);
-assert.equal(plugin.name,'execution-bus');assert.deepEqual(plugin.inject,['tools','jobs']);let definition;const disposers=[];
-plugin.apply({effect(fn){disposers.push(fn())},tools:{register(d){definition=d}}});assert.equal(definition.name,'execution_bus');assert.equal(typeof definition.execute,'function');
-await assert.rejects(definition.execute({},{}),/OWNING_SESSION_REQUIRED/);for(const dispose of disposers)await dispose();
+const preset=await import('./node_modules/@feng0531/dsh-execution-bus/dist/preset.js');assert.equal(preset.PRESET_ID,'xiao-he-runtime');assert.equal(preset.derivePreset('[]').plugins.at(-1).name,'@feng0531/dsh-execution-bus/mode');const mode=await import('@feng0531/dsh-execution-bus/mode');const legacy=await import('@feng0531/dsh-execution-bus/test-mode');assert.equal(mode,legacy);assert.equal(mode.apply,legacy.apply);
+assert.equal(plugin.name,'xiao-he-runtime');assert.deepEqual(plugin.inject,['tools']);const tools=[];const disposers=[];
+plugin.apply({effect(fn){disposers.push(fn())},tools:{register(t){tools.push(t)}}});assert.deepEqual(tools.map(t=>t.name).sort(),['runtime_cancel','runtime_result','runtime_resume','runtime_run','runtime_status']);const run=tools.find(t=>t.name==='runtime_run');assert.equal(typeof run.execute,'function');
+await assert.rejects(run.execute({},{}),/OWNING_SESSION_REQUIRED/);for(const dispose of disposers)await dispose();
 console.log('Production-only package entry and registration passed (stub host, not live DSH)');
 `;
   await writeFile(path.join(temp, "verify.mjs"), source);

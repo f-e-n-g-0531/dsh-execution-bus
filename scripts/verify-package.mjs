@@ -17,20 +17,8 @@ export function verifyReport(r, p) {
     "package.json",
     "README.md",
     "cordis.patch.yml",
-    "dist/bus.js",
-    "dist/bus.d.ts",
-    "dist/diagnostics.js",
-    "dist/diagnostics.d.ts",
     "dist/error-codes.js",
     "dist/error-codes.d.ts",
-    "dist/execution.js",
-    "dist/execution.d.ts",
-    "dist/handlers.js",
-    "dist/handlers.d.ts",
-    "dist/json.js",
-    "dist/json.d.ts",
-    "dist/limits.js",
-    "dist/limits.d.ts",
     "dist/mode.js",
     "dist/mode.d.ts",
     "dist/plugin.js",
@@ -39,20 +27,41 @@ export function verifyReport(r, p) {
     "dist/preset.d.ts",
     "dist/product.js",
     "dist/product.d.ts",
-    "dist/protocol.js",
-    "dist/protocol.d.ts",
     "dist/test-mode.js",
     "dist/test-mode.d.ts",
+    "dist/runtime/plan.js",
+    "dist/runtime/plan.d.ts",
+    "dist/runtime/store.js",
+    "dist/runtime/store.d.ts",
+    "dist/runtime/executor.js",
+    "dist/runtime/executor.d.ts",
+    "dist/runtime/service.js",
+    "dist/runtime/service.d.ts",
     "docs/host-compatibility.md",
     "docs/protocol.md",
     "docs/validation.md",
     "docs/RELEASING.md",
+    "docs/DECLARATIVE-RUNTIME.md",
     "docs/releases/" + p.version + ".md",
   ];
-  const allowed = new Set([...required, "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/FLOW-TEST.md", "docs/OPTIMIZATION.md", "docs/GITHUB-COMPARISON.md", "docs/INTEGRATION.md", "docs/PRODUCT.md"]);
+  const allowed = new Set([
+    ...required,
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "docs/FLOW-TEST.md",
+    "docs/OPTIMIZATION.md",
+    "docs/GITHUB-COMPARISON.md",
+    "docs/INTEGRATION.md",
+    "docs/PRODUCT.md",
+    "docs/RETROSPECTIVE.md",
+  ]);
   const paths = new Set();
   for (const f of r.files) {
-    assert.ok(allowed.has(f.path) || /^docs[/]releases[/][0-9]+[.][0-9]+[.][0-9]+[.]md$/.test(f.path), "Unexpected packed path: " + f.path);
+    assert.ok(
+      allowed.has(f.path) ||
+        /^docs[/]releases[/][0-9]+[.][0-9]+[.][0-9]+[.]md$/.test(f.path),
+      "Unexpected packed path: " + f.path,
+    );
     assert.ok(!paths.has(f.path), "Duplicate packed path");
     assert.ok(Number.isSafeInteger(f.size) && f.size > 0);
     paths.add(f.path);
@@ -61,7 +70,6 @@ export function verifyReport(r, p) {
     assert.ok(paths.has(f), "Missing packed file: " + f);
   assert.deepEqual(p.exports, {
     ".": "./dist/plugin.js",
-    "./core": "./dist/bus.js",
     "./mode": "./dist/mode.js",
     "./test-mode": "./dist/mode.js",
     "./preset": "./dist/preset.js",
@@ -69,7 +77,6 @@ export function verifyReport(r, p) {
   for (const target of Object.values(p.exports))
     assert.ok(paths.has(target.slice(2)));
   assert.equal(p.peerDependencies["@deepseek-ai/dsh-tools"], "0.2.1-rc.2");
-  assert.equal(p.peerDependencies["@deepseek-ai/dsh-jobs"], "0.2.1-rc.2");
   return paths.size;
 }
 if (process.argv[1]?.endsWith("verify-package.mjs")) {

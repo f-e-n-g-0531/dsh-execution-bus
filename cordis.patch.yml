@@ -1,6 +1,6 @@
 # Add a separate selectable preset, deriving the host's configured PTC declaration.
 # Does not patch preset-ptc, selectedDefault or global tools.
 - insert:
-    - id: preset-execution-bus-test
+    - id: preset-xiao-he-runtime
       name: '@feng0531/dsh-execution-bus/preset'
       config: {}

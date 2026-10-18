@@ -6,14 +6,12 @@ import { setTimeout as pause } from "node:timers/promises";
 import { PRODUCT } from "./product.js";
 import { ERRORS } from "./error-codes.js";
 export const PRESET_ID = PRODUCT.presetId;
-/** 校验派生源组合：拒绝已含总线，以及缺少公开基准地址的相对模块/include 子文件。 */
+/** 校验派生源组合：拒绝已含运行时，以及缺少公开基准地址的相对模块/include 子文件。 */
 function validateDerivation(rows) {
     for (const row of rows) {
-        if (row.id === "xiao-he-execution-bus" ||
+        if (row.id === "xiao-he-runtime" ||
             row.name?.startsWith("@feng0531/dsh-execution-bus"))
             throw Error(ERRORS.PTC_PRESET_ALREADY_CONTAINS_BUS);
-        // readDocument 不发布声明方的 baseUrl，不能把相对模块/include
-        // 静默重定位到 registrar 的不同上下文。
         if (row.name?.startsWith(".") ||
             row.name === "@deepseek-ai/cordis-plugin-include")
             throw Error(ERRORS.PTC_PRESET_RELATIVE_BASE_UNSUPPORTED);
@@ -35,11 +33,11 @@ export function derivePreset(content) {
         id: PRESET_ID,
         name: PRODUCT.name,
         order: 20,
-        description: "继承宿主 PTC 工具组合，叠加执行请求排队、等待与结果回传。普通任务使用原工具，授权和沙箱由宿主管理；不支持重启恢复。",
+        description: "继承宿主 PTC 工具组合，叠加声明式运行时（runtime_*）：DAG 计划、并行/重试/超时、落盘与恢复。普通任务使用原工具，授权和沙箱由宿主管理；不保证 exactly-once。",
         plugins: [
             ...rows,
             {
-                id: "xiao-he-execution-bus",
+                id: "xiao-he-runtime",
                 name: PRODUCT.modeEntry,
             },
         ],
