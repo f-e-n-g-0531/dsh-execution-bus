@@ -19,13 +19,16 @@ export interface RunSummary {
         error?: string;
     }>;
 }
-/** 每个预设作用域一个运行时服务：运行记录落盘、按会话隔离、可取消/恢复。 */
+/** Scope facade over a process-wide, root-keyed execution owner. */
 export declare class RuntimeService {
     private readonly ctx;
     private readonly store;
-    private readonly active;
+    private readonly key;
+    private readonly manager;
+    private closed;
+    private disposal?;
     constructor(ctx: Context, store?: RunStore);
-    dispose(): void;
+    dispose(): Promise<void>;
     run(raw: unknown, exec: ToolRunContext, background?: boolean): Promise<RunSummary | {
         runId: string;
         state: "running";
@@ -34,10 +37,17 @@ export declare class RuntimeService {
         runs: {
             updatedAt: number;
             stepCount: number;
+            error?: string | undefined;
             goal?: string | undefined;
             runId: string;
             state: import("./store.js").RunState;
         }[];
+        diagnostics: Readonly<{
+            invalidRecords: number;
+            oversizedRecords: number;
+            readFailures: number;
+            writeFailures: number;
+        }>;
     };
     result(raw: unknown, exec: ToolRunContext): {
         results: Record<string, import("./store.js").StoredResult>;
@@ -60,6 +70,11 @@ export declare class RuntimeService {
     };
     cancel(raw: unknown, exec: ToolRunContext): RunSummary;
     resume(raw: unknown, exec: ToolRunContext): Promise<RunSummary>;
+    private start;
+    private rememberStorageFailure;
+    private releaseManager;
+    private ensureOpen;
+    private admit;
     private sessionId;
     private owned;
     private executor;

@@ -19,6 +19,8 @@ export interface RunRecord {
     version: 1;
     runId: string;
     ownerSessionId: string;
+    ownerPid?: number;
+    ownerProcess?: string;
     goal?: string;
     plan: Plan;
     state: RunState;
@@ -30,16 +32,22 @@ export interface RunRecord {
     error?: string;
 }
 export declare function defaultRunRoot(): string;
-/** 纯文件持久化运行记录；原子写入，损坏记录忽略，不做跨进程锁。 */
+/** Pure file persistence: bounded reads, atomic replacement, no cross-process lock. */
 export declare class RunStore {
     readonly root: string;
+    private readonly counters;
     constructor(root?: string);
+    /** Fixed-size, saturated counters only: never return paths, IDs or record contents. */
+    diagnostics(): Readonly<typeof this.counters>;
+    private count;
     pathFor(runId: string): string;
     save(run: RunRecord): void;
     load(runId: string): RunRecord | undefined;
-    list(limit?: number): RunRecord[];
+    private scan;
+    list(limit?: number, ownerSessionId?: string, offset?: number): RunRecord[];
     remove(runId: string): void;
+    /** Retain the newest max terminal runs; active and recoverable runs never count toward the budget. */
     prune(max?: number): void;
-    /** 启动时把上次进程留下的 running 记录标记为 interrupted；不自动重跑副作用步骤。 */
-    markInterrupted(): number;
+    /** Recover only abandoned running records; legacy records without a PID remain supported. */
+    markInterrupted(exclude?: ReadonlySet<string>): number;
 }

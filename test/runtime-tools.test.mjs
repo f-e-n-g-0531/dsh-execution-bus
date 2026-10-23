@@ -27,27 +27,36 @@ async function fixture() {
     ensure: async () => cwd,
     set: async () => cwd,
   });
-  const calls = { read: 0, pwsh: 0 };
+  const calls = { read: 0, pwsh: 0, write: 0 };
   const stub = (name, run) => ({
     name,
     description: "stub " + name,
     parameters: { type: "object", additionalProperties: true },
     output: { schema: {}, render: () => [] },
-    async execute(args) {
+    async execute(args, exec) {
       calls[name]++;
-      return run(args);
+      return run(args, exec);
     },
   });
-  ctx.tools.register(stub("read", async (args) => ({ content: "stub:" + args.file_path, truncated: false })));
-  ctx.tools.register(stub("pwsh", async (args) => {
-    await sleep(args.sleep ?? 0);
-    return { stdout: "ok:" + args.command, exitCode: 0 };
-  }));
+  ctx.tools.register(
+    stub("read", async (args) => ({
+      content: "stub:" + args.file_path,
+      truncated: false,
+    })),
+  );
+  ctx.tools.register(
+    stub("pwsh", async (args) => {
+      await sleep(args.sleep ?? 0);
+      return { stdout: "ok:" + args.command, exitCode: 0 };
+    }),
+  );
+  ctx.tools.register(stub("write", async () => ({ ok: true })));
   const agent = { id: "runtime-agent", session: { header: { cwd } } };
   const scope = createScope(ctx, agent);
   agent.ctx = scope.ctx;
   ctx.provide("agents");
-  ctx.set("agents", { get: (id) => (id === agent.id ? agent : undefined) });
+  const agents = new Map([[agent.id, agent]]);
+  ctx.set("agents", { get: (id) => agents.get(id) });
   new Jobs(ctx, Jobs.Config({}));
   ctx.jobs.attachController("runtime-tools-test");
   plugin.apply(scope.ctx);
@@ -59,7 +68,25 @@ async function fixture() {
       agent,
       signal: new AbortController().signal,
     });
-  return { scope, call, calls, dir };
+  const peer = () => {
+    const other = { id: "peer-agent", session: { header: { cwd } } };
+    const otherScope = createScope(ctx, other);
+    other.ctx = otherScope.ctx;
+    agents.set(other.id, other);
+    plugin.apply(otherScope.ctx);
+    return {
+      scope: otherScope,
+      call: (name, args) =>
+        ctx.tools.execute({
+          name,
+          arguments: args,
+          agent: other,
+          callId: randomUUID(),
+          signal: new AbortController().signal,
+        }),
+    };
+  };
+  return { scope, call, calls, dir, ctx, peer };
 }
 
 test("runtime_run 同步执行 DAG：并行只读步骤 + 依赖命令步骤", async () => {
@@ -72,13 +99,21 @@ test("runtime_run 同步执行 DAG：并行只读步骤 + 依赖命令步骤", a
         steps: [
           { id: "a", tool: "read", input: { file_path: "a.txt" } },
           { id: "b", tool: "read", input: { file_path: "b.txt" } },
-          { id: "c", tool: "pwsh", input: { description: "汇总", command: "echo ok" }, depends_on: ["a", "b"] },
+          {
+            id: "c",
+            tool: "pwsh",
+            input: { description: "汇总", command: "echo ok" },
+            depends_on: ["a", "b"],
+          },
         ],
       },
     });
     assert.equal(result.isError, false, JSON.stringify(result));
     assert.equal(result.value.state, "succeeded");
-    assert.deepEqual(result.value.steps.map((s) => s.state), ["succeeded", "succeeded", "succeeded"]);
+    assert.deepEqual(
+      result.value.steps.map((s) => s.state),
+      ["succeeded", "succeeded", "succeeded"],
+    );
     assert.equal(calls.read, 2);
     assert.equal(calls.pwsh, 1);
   } finally {
@@ -95,7 +130,11 @@ test("runtime_run async + runtime_status/result 取回", async () => {
       async: true,
       plan: {
         steps: [
-          { id: "slow", tool: "pwsh", input: { description: "慢命令", command: "sleep", sleep: 250 } },
+          {
+            id: "slow",
+            tool: "pwsh",
+            input: { description: "慢命令", command: "sleep", sleep: 250 },
+          },
         ],
       },
     });
@@ -112,10 +151,94 @@ test("runtime_run async + runtime_status/result 取回", async () => {
     assert.equal(status.state, "succeeded");
     const result = await call("runtime_result", { runId: started.value.runId });
     assert.equal(result.isError, false, JSON.stringify(result));
-    assert.deepEqual(result.value.results.slow.value, { stdout: "ok:sleep", exitCode: 0 });
+    assert.deepEqual(result.value.results.slow.value, {
+      stdout: "ok:sleep",
+      exitCode: 0,
+    });
   } finally {
     await scope.dispose();
     rmSync(dir, { recursive: true, force: true });
+    delete process.env.XIAOHE_RUNTIME_DIR;
+  }
+});
+
+test("runtime_run 内嵌写入仍经过宿主拒绝管线", async () => {
+  const { scope, call, calls, dir, ctx } = await fixture();
+  let nested = false;
+  const deny = ctx.on("tools/pre-execute", async (exec, next) => {
+    if (exec.name === "write") {
+      nested = exec.parent !== undefined;
+      return { kind: "deny", reason: "nested-write-denied" };
+    }
+    return next();
+  });
+  try {
+    const run = await call("runtime_run", {
+      plan: {
+        steps: [
+          {
+            id: "blocked",
+            tool: "write",
+            input: { file_path: "never-write", content: "no" },
+          },
+          {
+            id: "child",
+            tool: "pwsh",
+            input: { description: "never", command: "exit 0" },
+            depends_on: ["blocked"],
+          },
+        ],
+      },
+    });
+    assert.equal(run.isError, false, JSON.stringify(run));
+    assert.equal(run.value.state, "failed");
+    assert.equal(run.value.steps[0].error, "RUNTIME_STEP_FAILED");
+    assert.equal(nested, true);
+    assert.equal(calls.write, 0);
+    assert.equal(calls.pwsh, 0);
+  } finally {
+    deny();
+    await scope.dispose();
+    rmSync(dir, { recursive: true, force: true });
+    delete process.env.XIAOHE_RUNTIME_DIR;
+  }
+});
+
+test("真实 ToolRuntime 双作用域：另一会话不能读取结果、取消或恢复", async () => {
+  const f = await fixture();
+  const other = f.peer();
+  try {
+    const owner = await f.call("runtime_run", {
+      plan: {
+        steps: [
+          { id: "file", tool: "read", input: { file_path: "private-marker" } },
+        ],
+      },
+    });
+    assert.equal(owner.isError, false, JSON.stringify(owner));
+    for (const tool of [
+      "runtime_status",
+      "runtime_result",
+      "runtime_cancel",
+      "runtime_resume",
+    ]) {
+      const denied = await other.call(tool, { runId: owner.value.runId });
+      assert.equal(denied.isError, true, tool);
+      assert.match(JSON.stringify(denied), /RUNTIME_NOT_FOUND/);
+      assert.doesNotMatch(JSON.stringify(denied), /private-marker/);
+    }
+    const listed = await other.call("runtime_status", {});
+    assert.equal(listed.isError, false, JSON.stringify(listed));
+    assert.deepEqual(listed.value.runs, []);
+    assert.equal(
+      (await f.call("runtime_result", { runId: owner.value.runId })).value
+        .state,
+      "succeeded",
+    );
+  } finally {
+    await other.scope.dispose();
+    await f.scope.dispose();
+    rmSync(f.dir, { recursive: true, force: true });
     delete process.env.XIAOHE_RUNTIME_DIR;
   }
 });
@@ -124,7 +247,9 @@ test("runtime 计划校验与跨工具未知字段拒绝", async () => {
   const { scope, call, dir } = await fixture();
   try {
     const bad = await call("runtime_run", {
-      plan: { steps: [{ id: "a", tool: "host.read", input: { file_path: "x" } }] },
+      plan: {
+        steps: [{ id: "a", tool: "host.read", input: { file_path: "x" } }],
+      },
     });
     assert.equal(bad.isError, true);
     const badAsync = await call("runtime_run", {

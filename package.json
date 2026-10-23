@@ -1,6 +1,6 @@
 {
   "name": "@feng0531/dsh-execution-bus",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "private": false,
   "license": "SEE LICENSE IN LICENSE",
@@ -70,6 +70,7 @@
     "@deepseek-ai/dsh-subprocess-local": "0.2.1-rc.2",
     "@deepseek-ai/dsh-tool-fs": "0.2.1-rc.2",
     "@deepseek-ai/dsh-tool-jobs": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-tool-pwsh": "0.2.1-rc.2",
     "@types/js-yaml": "4.0.9",
     "@types/node": "^22",
     "fast-check": "^4.10.2",

@@ -2,17 +2,24 @@ import type { Plan } from "./plan.js";
 import type { RunRecord } from "./store.js";
 import type { RunStore } from "./store.js";
 export type Invoke = (tool: string, input: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>;
-/** 按 DAG 执行声明式计划：独立步骤并行、幂等步骤可重试、逐步落盘、可取消/恢复。 */
+/** 按批次 DAG 执行；每次调用前及完成/重试时落盘，存储故障必须停止调度。 */
 export declare class RuntimeExecutor {
     private readonly store;
     private readonly invoke;
+    private readonly executions;
     constructor(store: RunStore, invoke: Invoke);
-    createRun(ownerSessionId: string, plan: Plan): RunRecord;
+    createRun(ownerSessionId: string, plan: Plan, owner?: {
+        ownerPid: number;
+        ownerProcess: string;
+    }): RunRecord;
     execute(run: RunRecord, signal?: AbortSignal): Promise<RunRecord>;
-    /** 只恢复 interrupted 运行：幂等步骤重排，副作用步骤保持 unknown/failed。 */
+    /** 未知副作用不得重放；出现这种失败时整个恢复运行停止，不启动无关 pending 写。 */
     resume(run: RunRecord, signal?: AbortSignal): Promise<RunRecord>;
-    cancel(run: RunRecord, reason?: "RUNTIME_CANCELLED"): void;
+    cancel(run: RunRecord, reason?: string): void;
+    private terminal;
     private spec;
     private runStep;
-    private touch;
+    private attempt;
+    private now;
+    private checkpoint;
 }
