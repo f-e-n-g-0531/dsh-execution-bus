@@ -20,7 +20,7 @@ npm run pack:candidate
 npm run test:install -- artifacts/candidate/feng0531-dsh-execution-bus-X.Y.Z.tgz
 ```
 
-把示例 X.Y.Z 替换为待发版本。包安装校验在系统临时目录运行，只检查生产依赖、入口及简化注册；不是实际桌面验收。候选生成命令不自行保证源码已重建，必须按上述顺序先执行 check。
+把示例 X.Y.Z 替换为待发版本。包安装校验在系统临时目录运行，只检查生产依赖、入口、简化注册及随包离线工具导入；不是实际桌面验收。候选生成命令不自行保证源码已重建，必须按上述顺序先执行 check。
 
 ## 3. 标签 CI
 

@@ -3,6 +3,8 @@ import { realpathSync } from "node:fs";
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
 import { ERRORS } from "../error-codes.js";
+import { runProgress, runGuidance } from "../presentation.js";
+import type { RunProgress, RunGuidance } from "../presentation.js";
 import { RuntimeExecutor } from "./executor.js";
 import type { Invoke } from "./executor.js";
 import { parsePlan } from "./plan.js";
@@ -39,6 +41,8 @@ export interface RunSummary {
   updatedAt: number;
   finishedAt?: number;
   durationMs: number;
+  progress: RunProgress;
+  guidance: RunGuidance[];
   steps: Array<{
     id: string;
     tool: string;
@@ -57,6 +61,8 @@ function summary(run: RunRecord): RunSummary {
     updatedAt: run.updatedAt,
     ...(run.finishedAt === undefined ? {} : { finishedAt: run.finishedAt }),
     durationMs: Math.max(0, (run.finishedAt ?? Date.now()) - run.createdAt),
+    progress: runProgress(run),
+    guidance: runGuidance(run),
     steps: run.steps.map((step) => ({
       id: step.id,
       tool: step.tool,
@@ -206,6 +212,8 @@ export class RuntimeService {
             ...(run.error === undefined ? {} : { error: run.error }),
             updatedAt: run.updatedAt,
             stepCount: run.steps.length,
+            progress: runProgress(run),
+            guidance: runGuidance(run),
           })),
         diagnostics: this.store.diagnostics(),
       };

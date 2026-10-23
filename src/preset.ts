@@ -23,11 +23,30 @@ function validateDerivation(rows: PresetDefinition["plugins"]): void {
     if (row.group && Array.isArray(row.config)) validateDerivation(row.config);
   }
 }
+/** Bound group traversal before the host's recursive shape validator sees YAML aliases. */
+function validateGroupGraph(plugins: unknown): void {
+  const active = new Set<unknown>();
+  let rows = 0;
+  const visit = (value: unknown, depth: number): void => {
+    if (!Array.isArray(value)) return; // The host supplies the shape diagnostic.
+    if (active.has(value)) throw Error("Invalid PTC preset: cyclic plugin groups");
+    if (depth > 64 || (rows += value.length) > 10000)
+      throw Error("Invalid PTC preset: plugin group traversal limit exceeded");
+    active.add(value);
+    for (const row of value) {
+      if (row && typeof row === "object" && row.group)
+        visit(row.config, depth + 1);
+    }
+    active.delete(value);
+  };
+  visit(plugins, 0);
+}
 /** Capture the host-declared composition without evaluating !!js or changing disabled rows. */
 export function derivePreset(content: string): PresetDefinition {
   if (Buffer.byteLength(content) > 1048576)
     throw Error(ERRORS.PTC_PRESET_TOO_LARGE);
   const plugins = load(content, { schema: entryListSchema });
+  validateGroupGraph(plugins);
   const problem = entryListProblem(plugins);
   if (problem) throw Error("Invalid PTC preset: " + problem);
   const rows = plugins as PresetDefinition["plugins"];

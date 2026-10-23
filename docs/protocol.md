@@ -12,6 +12,8 @@
 
 列表 `limit` 为 1–100，默认 20；`offset` 为 0–10000，默认 0。先按所有者过滤，再按更新时间降序分页；同时间以运行 ID 稳定排序。指定 `runId` 时不能同时提供分页参数。所有工具拒绝未知字段。
 
+运行摘要与列表新增派生 `progress`（各步骤状态计数）及 `guidance`（未知副作用、后台 Job 和中断处置提示）。它们仅在会话归属检查后生成，不写入 version 1 记录。建议操作不是授权，不会自动执行 Job、恢复或重发。工具的 JSON 文本返回保留，另提供宿主支持的结构化输出及展示摘要；实际桌面效果需独立验收。
+
 ## 计划（plan）
 
 `plan = { goal?, concurrency?, steps[] }`；`step = { id, tool, input, depends_on?, retry?, timeout_ms? }`。

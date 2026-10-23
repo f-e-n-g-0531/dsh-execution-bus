@@ -106,10 +106,10 @@ export const RUNTIME_RUN_DESCRIPTION =
   "萧何声明式运行时：提交 DAG 计划（steps：id/tool/input/depends_on/retry/timeout_ms），由程序按依赖并行执行、对只读步骤重试、逐步落盘。默认等待完成返回步骤状态；async:true 立即返回 runId，用 runtime_status/runtime_result 取回，runtime_cancel 取消。仅允许 read/glob/grep/edit/write/pwsh；副作用步骤不重试、崩溃后在途步骤标记 unknown（不做 exactly-once 回滚）。简单一次调用请直接用原工具。";
 
 export const RUNTIME_STATUS_DESCRIPTION =
-  "读取本会话的运行元数据：不带 runId 按 limit/offset 分页（默认 20/0）；带 runId 返回指定运行与步骤状态，不含结果。不要轮询正在等待的 runtime_run。";
+  "读取本会话的运行元数据：不带 runId 按 limit/offset 分页（默认 20/0）；带 runId 返回指定运行与步骤状态、progress 计数与 guidance 安全建议，不含原始步骤结果。建议仅供原 owner 显式处置，不会自动执行。不要轮询正在等待的 runtime_run。";
 
 export const RUNTIME_RESULT_DESCRIPTION =
-  "读取指定运行已保存的步骤结果（单步结果超过 64KiB 时只返回 truncated/bytes 标记）。";
+  "读取本会话指定运行已保存的步骤结果、progress 与 guidance（单步结果超过 64KiB 时只返回 truncated/bytes 标记）。finished 仅表示运行调度终态，不确认宿主进程或后台 Job 已停止；unknown 不等于回滚。Job 建议须由原 owner 显式调用，不会自动收集或停止。";
 
 export const RUNTIME_CANCEL_DESCRIPTION =
   "请求取消指定运行：停止调度、向后发步骤传播取消；已开始的副作用步骤状态可能为 unknown。";

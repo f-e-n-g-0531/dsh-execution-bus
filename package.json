@@ -1,6 +1,6 @@
 {
   "name": "@feng0531/dsh-execution-bus",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "type": "module",
   "private": false,
   "license": "SEE LICENSE IN LICENSE",
@@ -26,7 +26,11 @@
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "README.md",
-    "docs"
+    "docs",
+    "scripts/acceptance-report.mjs",
+    "scripts/pilot-report.mjs",
+    "scripts/benchmark-runtime.mjs",
+    "scripts/session-metrics.mjs"
   ],
   "dsh": {
     "bundle": {
@@ -41,13 +45,16 @@
     "test": "npm run build && node --test test/*.test.mjs",
     "pack": "npm pack",
     "check": "npm test",
-    "test:flow": "npm run build && node --test test/runtime-tools.test.mjs test/runtime-executor.test.mjs",
+    "test:flow": "npm run build && node --test test/runtime-tools.test.mjs test/runtime-executor.test.mjs test/runtime-ptc.test.mjs",
     "prepack": "npm run check && npm run verify:package",
     "verify:package": "node scripts/verify-package.mjs",
     "test:install": "node scripts/test-install.mjs",
     "pack:candidate": "node scripts/pack.mjs",
     "verify:release": "node scripts/release-preflight.mjs",
-    "metrics:sessions": "node scripts/session-metrics.mjs"
+    "metrics:sessions": "node scripts/session-metrics.mjs",
+    "acceptance:report": "node scripts/acceptance-report.mjs",
+    "pilot:report": "node scripts/pilot-report.mjs",
+    "benchmark:runtime": "node scripts/benchmark-runtime.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.4",

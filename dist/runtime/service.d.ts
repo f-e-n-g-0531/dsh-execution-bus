@@ -1,5 +1,6 @@
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
+import type { RunProgress, RunGuidance } from "../presentation.js";
 import { RunStore } from "./store.js";
 import type { RunRecord, StepRecord } from "./store.js";
 export interface RunSummary {
@@ -11,6 +12,8 @@ export interface RunSummary {
     updatedAt: number;
     finishedAt?: number;
     durationMs: number;
+    progress: RunProgress;
+    guidance: RunGuidance[];
     steps: Array<{
         id: string;
         tool: string;
@@ -37,6 +40,8 @@ export declare class RuntimeService {
         runs: {
             updatedAt: number;
             stepCount: number;
+            progress: RunProgress;
+            guidance: RunGuidance[];
             error?: string | undefined;
             goal?: string | undefined;
             runId: string;
@@ -60,6 +65,8 @@ export declare class RuntimeService {
         updatedAt: number;
         finishedAt?: number;
         durationMs: number;
+        progress: RunProgress;
+        guidance: RunGuidance[];
         steps: Array<{
             id: string;
             tool: string;

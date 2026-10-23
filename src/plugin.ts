@@ -11,6 +11,11 @@ import {
   RUNTIME_STATUS_PARAMETERS,
 } from "./product.js";
 import { RuntimeService } from "./runtime/service.js";
+import {
+  RUNTIME_OUTPUT_SCHEMAS,
+  runtimePresentationMeta,
+  presentRuntimeResult,
+} from "./presentation.js";
 
 export const name = "xiao-he-runtime";
 export const inject = ["tools"];
@@ -31,11 +36,13 @@ export function apply(ctx: Context) {
       description,
       parameters,
       output: {
-        schema: {},
+        schema: RUNTIME_OUTPUT_SCHEMAS[toolName],
+        presentationMeta: runtimePresentationMeta,
         render: (_args: unknown, value: unknown) => [
           { type: "text", text: JSON.stringify(value) },
         ],
       },
+      presentResult: presentRuntimeResult,
       async execute(raw: unknown, exec: ToolRunContext) {
         return execute(raw, exec);
       },

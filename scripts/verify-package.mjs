@@ -27,6 +27,8 @@ export function verifyReport(r, p) {
     "dist/preset.d.ts",
     "dist/product.js",
     "dist/product.d.ts",
+    "dist/presentation.js",
+    "dist/presentation.d.ts",
     "dist/test-mode.js",
     "dist/test-mode.d.ts",
     "dist/runtime/plan.js",
@@ -42,6 +44,11 @@ export function verifyReport(r, p) {
     "docs/validation.md",
     "docs/RELEASING.md",
     "docs/DECLARATIVE-RUNTIME.md",
+    "docs/OPERATIONS.md",
+    "scripts/acceptance-report.mjs",
+    "scripts/pilot-report.mjs",
+    "scripts/benchmark-runtime.mjs",
+    "scripts/session-metrics.mjs",
     "docs/releases/" + p.version + ".md",
   ];
   const allowed = new Set([

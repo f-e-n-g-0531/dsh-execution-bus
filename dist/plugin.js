@@ -1,5 +1,6 @@
 import { RUNTIME_CANCEL_DESCRIPTION, RUNTIME_RESULT_DESCRIPTION, RUNTIME_RESUME_DESCRIPTION, RUNTIME_RUN_DESCRIPTION, RUNTIME_RUN_ID_PARAMETERS, RUNTIME_RUN_PARAMETERS, RUNTIME_STATUS_DESCRIPTION, RUNTIME_STATUS_PARAMETERS, } from "./product.js";
 import { RuntimeService } from "./runtime/service.js";
+import { RUNTIME_OUTPUT_SCHEMAS, runtimePresentationMeta, presentRuntimeResult, } from "./presentation.js";
 export const name = "xiao-he-runtime";
 export const inject = ["tools"];
 /** 声明式运行时插件：只暴露 runtime_* 工具，执行/持久化在 RuntimeService。 */
@@ -12,11 +13,13 @@ export function apply(ctx) {
             description,
             parameters,
             output: {
-                schema: {},
+                schema: RUNTIME_OUTPUT_SCHEMAS[toolName],
+                presentationMeta: runtimePresentationMeta,
                 render: (_args, value) => [
                     { type: "text", text: JSON.stringify(value) },
                 ],
             },
+            presentResult: presentRuntimeResult,
             async execute(raw, exec) {
                 return execute(raw, exec);
             },

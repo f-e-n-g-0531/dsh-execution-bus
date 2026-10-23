@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { ERRORS } from "../error-codes.js";
+import { runProgress, runGuidance } from "../presentation.js";
 import { RuntimeExecutor } from "./executor.js";
 import { parsePlan } from "./plan.js";
 import { RunStore } from "./store.js";
@@ -21,6 +22,8 @@ function summary(run) {
         updatedAt: run.updatedAt,
         ...(run.finishedAt === undefined ? {} : { finishedAt: run.finishedAt }),
         durationMs: Math.max(0, (run.finishedAt ?? Date.now()) - run.createdAt),
+        progress: runProgress(run),
+        guidance: runGuidance(run),
         steps: run.steps.map((step) => ({
             id: step.id,
             tool: step.tool,
@@ -158,6 +161,8 @@ export class RuntimeService {
                     ...(run.error === undefined ? {} : { error: run.error }),
                     updatedAt: run.updatedAt,
                     stepCount: run.steps.length,
+                    progress: runProgress(run),
+                    guidance: runGuidance(run),
                 })),
                 diagnostics: this.store.diagnostics(),
             };
