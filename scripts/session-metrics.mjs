@@ -3,7 +3,8 @@
  * commands, business paths or result bodies. IDs are pseudonymous, not anonymous.
  * node scripts/session-metrics.mjs [--sessions <dir>] [--since <ISO>] [--preset <name>] [--json]
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, lstatSync } from "node:fs";
+import os from "node:os";
 import { createHash } from "node:crypto";
 import * as zlib from "node:zlib";
 import path from "node:path";
@@ -497,13 +498,15 @@ export function walk(dir, out = [], stats = diagnostics()) {
     const full = path.join(dir, name);
     let st;
     try {
-      st = statSync(full);
+      // Do not leave the selected log tree or revisit it through aliases/cycles.
+      st = lstatSync(full);
     } catch {
       stats.unreadableLogs++;
       continue;
     }
+    if (st.isSymbolicLink()) continue;
     if (st.isDirectory()) walk(full, out, stats);
-    else if (name.endsWith(".jsonl.zstd")) out.push(full);
+    else if (st.isFile() && name.endsWith(".jsonl.zstd")) out.push(full);
   }
   return out;
 }
@@ -557,7 +560,7 @@ export function main(argv = process.argv.slice(2)) {
   const root =
     opt.sessions ??
     path.join(
-      process.env.DSH_HOME ?? path.join(process.env.USERPROFILE ?? ".", ".dsh"),
+      process.env.DSH_HOME ?? path.join(os.homedir(), ".dsh"),
       "sessions",
     );
   const rows = walk(root, [], stats)

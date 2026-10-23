@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -66,6 +67,57 @@ function capture(args) {
     console.log = original;
   }
 }
+
+compressedTest(
+  "default sessions root uses OS home, not cwd when DSH_HOME is absent",
+  (t) => {
+    const home = fixture(t);
+    const sessions = path.join(home, ".dsh", "sessions");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(
+      path.join(sessions, "one.jsonl.zstd"),
+      zlib.zstdCompressSync(encode([header()])),
+    );
+    const previous = {
+      DSH_HOME: process.env.DSH_HOME,
+      USERPROFILE: process.env.USERPROFILE,
+    };
+    delete process.env.DSH_HOME;
+    process.env.USERPROFILE = path.join(home, "unrelated-profile");
+    t.mock.method(os, "homedir", () => home);
+    try {
+      const result = capture(["--json"]);
+      assert.equal(result.report.summary.sessions, 1);
+      assert.equal(result.report.diagnostics.unreadableLogs, 0);
+      assert.equal(result.output.includes(home), false);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  },
+);
+
+test("walk skips directory aliases, cycles and out-of-root links", (t) => {
+  const root = fixture(t);
+  const sessions = path.join(root, "sessions");
+  const nested = path.join(sessions, "nested");
+  const outside = path.join(root, "outside");
+  mkdirSync(nested, { recursive: true });
+  mkdirSync(outside);
+  const log = path.join(nested, "one.jsonl.zstd");
+  writeFileSync(log, "fixture");
+  writeFileSync(path.join(outside, "private.jsonl.zstd"), "must not traverse");
+  const type = process.platform === "win32" ? "junction" : "dir";
+  symlinkSync(nested, path.join(sessions, "alias"), type);
+  symlinkSync(outside, path.join(sessions, "external"), type);
+  const stats = diagnostics();
+  assert.deepEqual(walk(sessions, [], stats), [log]);
+  symlinkSync(sessions, path.join(nested, "loop"), type);
+  assert.deepEqual(walk(sessions, [], stats), [log]);
+  assert.equal(stats.unreadableLogs, 0);
+});
 
 test("module import has no CLI side effects; zstd capability is checked at runtime", () => {
   assert.throws(() => requireZstd({}), { code: "ZSTD_UNAVAILABLE" });
