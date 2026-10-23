@@ -4,7 +4,7 @@
 
 仓库 dsh-execution-bus、npm 包名、预设 ID `xiao-he-runtime` 保持不变；历史 0.x 版本说明保留当时名称。
 
-DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.1.0**
+DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.1.1**
 
 > 1.0 起产品从“执行总线模式”切换为**声明式运行时**：`runtime_run` 接收 DAG 计划，运行时按依赖并行执行、对只读步骤重试、逐步落盘并支持重启后恢复。旧的 `execution_bus` 工具与 `./core` 导出已移除；0.12.1 是最后一个总线版本，仍可在 npm/git 历史中查看。
 
@@ -25,7 +25,7 @@ DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.1.0**
 ## 安装与启用
 
 ```text
-npm install --ignore-scripts @feng0531/dsh-execution-bus@1.1.0
+npm install --ignore-scripts @feng0531/dsh-execution-bus@1.1.1
 ```
 
 将包加入目标 DSH 配置的 `dsh.profile.bundles`（或使用宿主插件管理器的 bundle 加载），加载后会出现独立预设 **xiao-he-runtime**。普通任务仍用原工具；预设不接管终端、编辑或全局工具，授权与沙箱由宿主管理。发布不会自动安装或重启你的 DSH。
@@ -79,5 +79,5 @@ npm run test:install   # 临时目录安装验证
 ## 文档
 
 - [声明式运行时设计](<docs/DECLARATIVE-RUNTIME.md>)、[协议](<docs/protocol.md>)、[验证范围](<docs/validation.md>)、[产品结构](<docs/PRODUCT.md>)
-- [1.1.0 发布说明](<docs/releases/1.1.0.md>)、[发布流程](<docs/RELEASING.md>)、[第三方说明](<THIRD_PARTY_NOTICES.md>)
+- [1.1.1 发布说明](<docs/releases/1.1.1.md>)、[发布流程](<docs/RELEASING.md>)、[第三方说明](<THIRD_PARTY_NOTICES.md>)
 - 0.x 总线历史与复盘：[复盘](<docs/RETROSPECTIVE.md>)、[整合说明](<docs/INTEGRATION.md>)

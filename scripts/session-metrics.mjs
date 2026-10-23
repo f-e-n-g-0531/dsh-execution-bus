@@ -104,6 +104,40 @@ export function requireZstd(api = zlib) {
   return api.zstdDecompressSync;
 }
 
+// Zstandard frame grammar, not decoder consumption: Node/zstd versions differ
+// in whether a synchronous call reads one frame or the entire concatenated input.
+export function zstdFrameEnd(buffer, start = 0) {
+  let cursor = start;
+  const take = (size) => {
+    if (size > buffer.length - cursor) throw Error("truncated zstd frame");
+    const at = cursor;
+    cursor += size;
+    return at;
+  };
+  const magic = take(4);
+  if (!buffer.subarray(magic, magic + 4).equals(MAGIC))
+    throw Error("invalid zstd magic");
+  const descriptor = buffer[take(1)];
+  if (descriptor & 0x08) throw Error("reserved zstd frame bit");
+  const singleSegment = Boolean(descriptor & 0x20);
+  if (!singleSegment) take(1); // Window_Descriptor
+  take([0, 1, 2, 4][descriptor & 3]); // Dictionary_ID
+  const contentFlag = descriptor >>> 6;
+  take(contentFlag === 0 ? (singleSegment ? 1 : 0) : [0, 2, 4, 8][contentFlag]);
+  let last;
+  do {
+    const at = take(3);
+    const block = buffer.readUIntLE(at, 3);
+    last = Boolean(block & 1);
+    const type = (block >>> 1) & 3;
+    const size = block >>> 3;
+    if (type === 3 || size > 128 * 1024) throw Error("invalid zstd block");
+    take(type === 1 ? 1 : size); // RLE stores exactly one byte, not Block_Size.
+  } while (!last);
+  if (descriptor & 4) take(4); // Content_Checksum
+  return cursor;
+}
+
 export function decompress(
   buffer,
   stats = diagnostics(),
@@ -115,33 +149,31 @@ export function decompress(
     const start = buffer.indexOf(MAGIC, offset);
     if (start !== offset) {
       stats.corruptFrames++;
-      parts.push("\n");
+      parts.push(Buffer.from("\n"));
     }
     if (start === -1) break;
+    let end;
     try {
-      // Node decodes one frame. bytesWritten is consumed input, so embedded
-      // magic bytes in a valid frame cannot become a second event stream.
-      const result = decode(buffer.subarray(start), { info: true });
-      const consumed = result.engine.bytesWritten;
-      if (
-        !Number.isSafeInteger(consumed) ||
-        consumed <= 0 ||
-        consumed > buffer.length - start
-      )
-        throw Error("invalid frame size");
-      parts.push(result.buffer.toString("utf8"));
-      offset = start + consumed;
+      end = zstdFrameEnd(buffer, start);
+      // Give even a greedy concatenation decoder exactly one complete frame.
+      // Its bytesWritten metadata is neither needed nor trusted for boundaries.
+      parts.push(decode(buffer.subarray(start, end)));
+      offset = end;
     } catch {
       stats.corruptFrames++;
       // Never stitch JSON fragments across missing/corrupt compressed data.
-      parts.push("\n");
-      const next = buffer.indexOf(MAGIC, start + MAGIC.length);
+      parts.push(Buffer.from("\n"));
+      // If framing succeeded, skip the whole failed frame, including payload
+      // magic. With damaged framing, magic resynchronization is best effort only.
+      const next = end ?? buffer.indexOf(MAGIC, start + MAGIC.length);
       if (next === -1) break;
       offset = next;
     }
   }
   if (!buffer.length) stats.corruptFrames++;
-  return parts.join("");
+  // Decode UTF-8 after joining successful frames: a code point may straddle
+  // frames. Corrupt regions above insert a newline so missing bytes never join.
+  return Buffer.concat(parts).toString("utf8");
 }
 
 export function parseEvents(text, stats = diagnostics()) {

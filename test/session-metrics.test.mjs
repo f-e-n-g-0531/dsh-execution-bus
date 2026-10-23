@@ -21,6 +21,7 @@ import {
   requireZstd,
   summarize,
   walk,
+  zstdFrameEnd,
 } from "../scripts/session-metrics.mjs";
 
 const header = (preset = "xiao-he-runtime", id = "private-session") => ({
@@ -72,19 +73,29 @@ test("module import has no CLI side effects; zstd capability is checked at runti
   assert.equal(requireZstd({ zstdDecompressSync: decode }), decode);
   assert.equal(summarize([]).sessions, 0);
 });
+// A valid raw-block frame, including arbitrary magic bytes in its payload.
+const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+function rawFrame(payload) {
+  const block = Buffer.alloc(3);
+  block.writeUIntLE((payload.length << 3) | 1, 0, 3);
+  return Buffer.concat([
+    MAGIC,
+    Buffer.from([0x20, payload.length]),
+    block,
+    payload,
+  ]);
+}
+const rawDecode = (frame) => frame.subarray(9);
 
 test("frame cursor consumes embedded magic once and reports empty/corrupt input", () => {
-  const magic = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
-  const input = Buffer.concat([magic, magic]);
+  const input = rawFrame(MAGIC);
   const stats = diagnostics();
   let calls = 0;
   assert.equal(
     decompress(input, stats, (buffer) => {
       calls++;
-      return {
-        buffer: Buffer.from("one-frame"),
-        engine: { bytesWritten: buffer.length },
-      };
+      assert.deepEqual(buffer, input);
+      return Buffer.from("one-frame");
     }),
     "one-frame",
   );
@@ -95,10 +106,80 @@ test("frame cursor consumes embedded magic once and reports empty/corrupt input"
     "",
   );
   assert.equal(stats.corruptFrames, 1);
-  decompress(magic, stats, () => {
+  decompress(MAGIC, stats, () => {
     throw Error("bad frame");
   });
   assert.equal(stats.corruptFrames, 2);
+});
+
+test("greedy multi-frame decoder receives only complete individual frames around corruption", () => {
+  const first = rawFrame(Buffer.from(encode([header()])));
+  const last = rawFrame(
+    Buffer.from(encode([dispatch("runtime_status", { runs: [] })])),
+  );
+  const invalid = Buffer.concat([MAGIC, Buffer.from([0xff, 0xff])]);
+  // Models a newer decoder that eagerly reads all frames in the supplied slice
+  // and throws if ANY trailing frame is malformed (losing earlier output).
+  const greedy = (input) => {
+    const parts = [];
+    for (let offset = 0; offset < input.length; ) {
+      const end = zstdFrameEnd(input, offset);
+      parts.push(rawDecode(input.subarray(offset, end)));
+      offset = end;
+    }
+    return Buffer.concat(parts);
+  };
+  assert.throws(() => greedy(Buffer.concat([first, invalid, last])));
+  const stats = diagnostics();
+  const text = decompress(Buffer.concat([first, invalid, last]), stats, greedy);
+  const row = metricsFromEvents(parseEvents(text, stats), stats);
+  assert.ok(row);
+  assert.equal(row.runtime.calls.runtime_status, 1);
+  assert.equal(stats.corruptFrames, 1);
+  assert.equal(stats.missingHeaders, 0);
+});
+
+test("decode failure skips known frame payload magic; UTF-8 may span successful frames", () => {
+  const chinese = Buffer.from("萧何\n");
+  const first = rawFrame(chinese.subarray(0, 2));
+  const last = rawFrame(chinese.subarray(2));
+  const stats = diagnostics();
+  assert.equal(
+    decompress(Buffer.concat([first, last]), stats, rawDecode),
+    "萧何\n",
+  );
+  assert.equal(stats.corruptFrames, 0);
+  const bad = rawFrame(Buffer.concat([Buffer.from("bad"), MAGIC]));
+  let calls = 0;
+  assert.equal(
+    decompress(Buffer.concat([first, bad, last]), stats, (frame) => {
+      calls++;
+      if (frame.equals(bad)) throw Error("checksum failure");
+      return rawDecode(frame);
+    }).includes("萧何"),
+    false,
+  );
+  assert.equal(calls, 3);
+  assert.equal(stats.corruptFrames, 1);
+});
+
+test("frame grammar handles descriptor fields, RLE, multiblock, checksum and truncation", () => {
+  // Non-single-segment, dictionary=4, content-size=8, checksum=4.
+  const frame = Buffer.concat([
+    MAGIC,
+    Buffer.from([0xc7, 0]),
+    Buffer.alloc(4 + 8),
+    Buffer.from([0x32, 0, 0, 0x41]), // non-last RLE, expanded size=6, one stored byte
+    Buffer.from([0x09, 0, 0, 0x42]), // last raw block, one stored byte
+    Buffer.alloc(4),
+  ]);
+  assert.equal(zstdFrameEnd(frame), frame.length);
+  for (let size = 0; size < frame.length; size++) {
+    assert.throws(() => zstdFrameEnd(frame.subarray(0, size)));
+  }
+  const reserved = rawFrame(Buffer.from("x"));
+  reserved[6] |= 6; // reserved block type
+  assert.throws(() => zstdFrameEnd(reserved));
 });
 
 test("CLI validates option values and dates without accepting accidental unfiltered scans", () => {
