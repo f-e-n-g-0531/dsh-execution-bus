@@ -29,7 +29,7 @@ import { parsePlan } from "../dist/runtime/plan.js";
 
 // Real host implementations and a real per-call Node PTC process. The explicit
 // full-access policy is only a fixture policy, NOT an OS sandbox enforcement test.
-async function fixture(mode = "ptc") {
+async function fixture(mode = "ptc", scopedPresentation = false) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "xiaohe-ptc-"));
   const previous = process.env.XIAOHE_RUNTIME_DIR;
   process.env.XIAOHE_RUNTIME_DIR = path.join(dir, "records");
@@ -42,7 +42,7 @@ async function fixture(mode = "ptc") {
   const host = root.plugin(function hostServices(context) {
     ctx = context;
     new SystemPrompt(ctx, {});
-    new ToolRuntime(ctx, { mode });
+    new ToolRuntime(ctx, { mode: scopedPresentation ? "native" : mode });
     new SessionProjectionRegistry(ctx);
     ctx.provide("workingDirectory");
     ctx.set("workingDirectory", {
@@ -63,6 +63,14 @@ async function fixture(mode = "ptc") {
       }),
     });
     new LocalFS(ctx, LocalFS.Config({ cwd: dir }));
+    ctx.provide("sandbox");
+    ctx.set("sandbox", {
+      confine() {
+        throw Error(
+          "Full-access fixture must not simulate OS sandbox confinement",
+        );
+      },
+    });
     new LocalSubprocess(ctx);
     new NodePtcRuntime(
       ctx,
@@ -103,6 +111,15 @@ async function fixture(mode = "ptc") {
     const original = {
       id: "ptc",
       plugins: [
+        ...(scopedPresentation
+          ? [
+              {
+                id: "presentation",
+                name: "@deepseek-ai/dsh-agent-tool-presentation",
+                config: { mode },
+              },
+            ]
+          : []),
         { id: "files", name: "@deepseek-ai/dsh-tool-fs" },
         { id: "jobs", name: "@deepseek-ai/dsh-tool-jobs" },
       ],
@@ -112,6 +129,13 @@ async function fixture(mode = "ptc") {
     cleanups.push(
       await ctx.agentPresets.register(derivePreset(document.content)),
     );
+    if (scopedPresentation)
+      cleanups.push(
+        await ctx.agentPresets.register({
+          id: "native-control",
+          plugins: [{ id: "files", name: "@deepseek-ai/dsh-tool-fs" }],
+        }),
+      );
     const agent = async (preset = PRESET_ID) => {
       const id = randomUUID();
       const owner = {
@@ -183,6 +207,61 @@ async function fixture(mode = "ptc") {
     throw error;
   }
 }
+
+test(
+  "rc.5: native host honors preset-scoped PTC without changing native control agents",
+  { timeout: 20000 },
+  async () => {
+    const f = await fixture("ptc", true);
+    try {
+      writeFileSync(path.join(f.dir, "scoped.txt"), "scoped PTC fixture");
+      const control = await f.agent("native-control");
+      const original = await f.agent("ptc");
+      assert.equal(f.ctx.tools.get("runtime_run", original), undefined);
+      assert.equal(
+        await f.program("return typeof tools.runtime_run;", original),
+        "undefined",
+      );
+      const native = await f.call("read", { file_path: "scoped.txt" }, control);
+      assert.equal(native.isError, false);
+      assert.equal(f.ctx.tools.get("run_code", control), undefined);
+      const direct = await f.call("runtime_run", {
+        plan: {
+          steps: [
+            { id: "read", tool: "read", input: { file_path: "scoped.txt" } },
+          ],
+        },
+      });
+      assert.equal(direct.isError, true);
+      assert.match(JSON.stringify(direct), /UNKNOWN_TOOL/);
+      const run = await f.runtime("runtime_run", {
+        plan: {
+          steps: [
+            { id: "scoped", tool: "read", input: { file_path: "scoped.txt" } },
+          ],
+        },
+      });
+      assert.equal(run.state, "succeeded");
+      const execution = f.executions.find(
+        (entry) => entry.name === "runtime_run",
+      );
+      const nested = f.executions.find(
+        (entry) => entry.name === "read" && entry.agent === f.owner,
+      );
+      assert.equal(nested.parent, execution.token);
+      assert.equal(nested.rootCallId, execution.rootCallId);
+      assert.equal(execution.agent, f.owner);
+      const nativeAgain = await f.call(
+        "read",
+        { file_path: "scoped.txt" },
+        control,
+      );
+      assert.equal(nativeAgain.isError, false);
+    } finally {
+      await f.close();
+    }
+  },
+);
 
 for (const mode of ["native", "ptc"]) {
   test(

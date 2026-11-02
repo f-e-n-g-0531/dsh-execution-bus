@@ -11,7 +11,9 @@ test("tag gate rejects mismatched versions, leading zeroes and prerelease", () =
   verifyTag("v" + pkg.version, pkg, lock);
   for (const tag of ["v00.1.0", "v1.2.3", "v0.1.0-beta", "v0x1x0"])
     assert.throws(() => verifyTag(tag, pkg, lock));
-  assert.throws(() => verifyTag("v" + pkg.version, pkg, { ...lock, version: "other" }));
+  assert.throws(() =>
+    verifyTag("v" + pkg.version, pkg, { ...lock, version: "other" }),
+  );
 });
 test("package whitelist rejects missing exports and sensitive additions", () => {
   const required = [
@@ -60,12 +62,46 @@ test("package whitelist rejects missing exports and sensitive additions", () => 
     files: required.map((path) => ({ path, size: 1 })),
   };
   assert.equal(verifyReport(report, pkg), required.length);
-  assert.throws(() => verifyReport({ ...report, files: report.files.slice(1) }, pkg));
+  for (const name of Object.keys(pkg.peerDependencies).filter((name) =>
+    name.startsWith("@deepseek-ai/dsh-"),
+  )) {
+    assert.throws(() =>
+      verifyReport(report, {
+        ...pkg,
+        peerDependencies: { ...pkg.peerDependencies, [name]: "0.2.1-rc.2" },
+      }),
+    );
+  }
   assert.throws(() =>
-    verifyReport({ ...report, files: [...report.files, { path: ".npmrc", size: 1 }] }, pkg),
+    verifyReport({ ...report, files: report.files.slice(1) }, pkg),
+  );
+  assert.throws(() =>
+    verifyReport(
+      { ...report, files: [...report.files, { path: ".npmrc", size: 1 }] },
+      pkg,
+    ),
   );
   assert.throws(() => verifyReport({ ...report, bundled: ["secret"] }, pkg));
 });
+test("all host peers and locked DSH components target rc.5 without mixed release candidates", () => {
+  const target = "0.2.1-rc.5";
+  assert.deepEqual(lock.packages[""].peerDependencies, pkg.peerDependencies);
+  assert.deepEqual(lock.packages[""].devDependencies, pkg.devDependencies);
+  for (const [name, version] of Object.entries({
+    ...pkg.peerDependencies,
+    ...pkg.devDependencies,
+  })) {
+    if (name.startsWith("@deepseek-ai/dsh-"))
+      assert.equal(version, target, name);
+  }
+  const components = Object.entries(lock.packages).filter(([name]) =>
+    name.includes("node_modules/@deepseek-ai/dsh-"),
+  );
+  assert.ok(components.length > 20);
+  for (const [name, entry] of components)
+    assert.equal(entry.version, target, name);
+});
+
 test("CI is tag/manual only with four platform combinations and exact candidate install", () => {
   const ci = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
   assert.deepEqual(Object.keys(ci.on).sort(), ["push", "workflow_dispatch"]);
@@ -77,7 +113,9 @@ test("CI is tag/manual only with four platform combinations and exact candidate 
   assert.equal(ci.permissions.contents, "read");
   const runs = ci.jobs.test.steps.map((step) => step.run).filter(Boolean);
   assert.ok(runs.includes("npm run check"));
-  assert.ok(runs.some((run) => run.includes("test:install -- artifacts/candidate/")));
+  assert.ok(
+    runs.some((run) => run.includes("test:install -- artifacts/candidate/")),
+  );
   assert.ok(!JSON.stringify(ci).includes("NODE_AUTH_TOKEN"));
 });
 test("release requires main, manual confirmation, exact-tag artifacts, npm then public verify then GitHub", () => {
@@ -96,14 +134,18 @@ test("release requires main, manual confirmation, exact-tag artifacts, npm then 
   assert.ok(steps[index("npm-release.mjs publish")].env.NODE_AUTH_TOKEN);
 });
 test("release preflight requires explicit confirmation without touching registry", () => {
-  const result = spawnSync(process.execPath, ["scripts/release-preflight.mjs"], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      RELEASE_TAG: "v" + pkg.version,
-      CONFIRM_PUBLISH: "not-authorized",
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/release-preflight.mjs"],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        RELEASE_TAG: "v" + pkg.version,
+        CONFIRM_PUBLISH: "not-authorized",
+      },
     },
-  });
+  );
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Explicit publication confirmation required/);
 });

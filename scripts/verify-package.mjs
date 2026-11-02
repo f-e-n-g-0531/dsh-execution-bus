@@ -83,7 +83,14 @@ export function verifyReport(r, p) {
   });
   for (const target of Object.values(p.exports))
     assert.ok(paths.has(target.slice(2)));
-  assert.equal(p.peerDependencies["@deepseek-ai/dsh-tools"], "0.2.1-rc.2");
+  assert.deepEqual(p.peerDependencies, {
+    "@deepseek-ai/cordis": "~4.0.5",
+    "@deepseek-ai/cordis-plugin-include": "~1.0.10",
+    "@deepseek-ai/dsh-agent-preset-registry": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-scope": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.5",
+  });
   return paths.size;
 }
 if (process.argv[1]?.endsWith("verify-package.mjs")) {

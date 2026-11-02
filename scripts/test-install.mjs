@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { spawnSync } from "node:child_process";
+import { runInstallSmoke } from "./install-smoke.mjs";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { npm, report } from "./npm.mjs";
@@ -33,7 +33,10 @@ try {
   const bytes = await readFile(archive);
   const snapshot = path.join(temp, "candidate-snapshot.tgz");
   await writeFile(snapshot, bytes, { flag: "wx" });
-  console.log("Candidate SHA256:", createHash("sha256").update(bytes).digest("hex"));
+  console.log(
+    "Candidate SHA256:",
+    createHash("sha256").update(bytes).digest("hex"),
+  );
   await writeFile(
     path.join(temp, "package.json"),
     JSON.stringify({ private: true, type: "module" }),
@@ -55,6 +58,18 @@ try {
   );
   assert.equal(actual.name, expected.name);
   assert.equal(actual.version, expected.version);
+  assert.deepEqual(actual.peerDependencies, expected.peerDependencies);
+  for (const [name, version] of Object.entries(expected.peerDependencies)) {
+    if (!name.startsWith("@deepseek-ai/dsh-")) continue;
+    const peer = JSON.parse(
+      await readFile(
+        path.join(temp, "node_modules", name, "package.json"),
+        "utf8",
+      ),
+    );
+    assert.equal(peer.version, version, "Installed host peer differs: " + name);
+  }
+  console.log("Production host peers verified: DSH 0.2.1-rc.5");
   // A fresh child process rooted outside this checkout prevents resolving source devDependencies.
   const source = `import assert from 'node:assert/strict';import * as plugin from './node_modules/@feng0531/dsh-execution-bus/dist/plugin.js';
 const preset=await import('./node_modules/@feng0531/dsh-execution-bus/dist/preset.js');assert.equal(preset.PRESET_ID,'xiao-he-runtime');assert.equal(preset.derivePreset('[]').plugins.at(-1).name,'@feng0531/dsh-execution-bus/mode');const mode=await import('@feng0531/dsh-execution-bus/mode');const legacy=await import('@feng0531/dsh-execution-bus/test-mode');assert.equal(mode,legacy);assert.equal(mode.apply,legacy.apply);
@@ -65,11 +80,7 @@ const acceptance=await import('./node_modules/@feng0531/dsh-execution-bus/script
 console.log('Production-only entries, registration and offline tool imports passed (stub host, not live DSH)');
 `;
   await writeFile(path.join(temp, "verify.mjs"), source);
-  const child = spawnSync(process.execPath, ["verify.mjs"], {
-    cwd: temp,
-    stdio: "inherit",
-    timeout: 30000,
-  });
+  const child = runInstallSmoke("verify.mjs", temp);
   if (child.error) throw child.error;
   assert.equal(child.status, 0);
 } finally {
