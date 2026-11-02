@@ -10,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ERRORS } from "../error-codes.js";
@@ -63,6 +64,72 @@ export interface RunRecord {
 
 const RUN_ID = /^run-[0-9a-z-]{8,80}$/;
 const RECORD_BYTES = 4 * 1024 * 1024;
+// Process-wide derived metadata only: never retain a RunRecord or its payload.
+const METADATA_ENTRIES = 16_384;
+const METADATA_BYTES = 4 * 1024 * 1024;
+interface RunMetadata {
+  runId: string;
+  ownerSessionId: string;
+  state: RunState;
+  updatedAt: number;
+  signature: string;
+}
+interface CachedMetadata {
+  metadata: Readonly<RunMetadata>;
+  bytes: number;
+}
+const metadataCache = new Map<string, CachedMetadata>();
+let metadataBytes = 0;
+
+function signature(stat: BigIntStats): string {
+  return [
+    stat.dev,
+    stat.ino,
+    stat.size,
+    stat.mtimeNs,
+    stat.ctimeNs,
+    stat.birthtimeNs,
+  ].join(":");
+}
+function metadata(run: RunRecord, stamp: string): RunMetadata {
+  return {
+    runId: run.runId,
+    ownerSessionId: run.ownerSessionId,
+    state: run.state,
+    updatedAt: run.updatedAt,
+    signature: stamp,
+  };
+}
+function compareMetadata(a: RunMetadata, b: RunMetadata): number {
+  return b.updatedAt - a.updatedAt || a.runId.localeCompare(b.runId);
+}
+function forgetMetadata(key: string): void {
+  const entry = metadataCache.get(key);
+  if (entry) metadataBytes -= entry.bytes;
+  metadataCache.delete(key);
+}
+function rememberMetadata(key: string, value: RunMetadata): void {
+  forgetMetadata(key);
+  // Bound retained UTF-8 data plus a fixed per-entry charge, independently of
+  // the entry cap. Actual V8 heap overhead is engine-dependent, also bounded by
+  // these two caps; this is not an exact heap-size measurement.
+  const bytes =
+    Buffer.byteLength(key) +
+    Buffer.byteLength(value.runId) +
+    Buffer.byteLength(value.ownerSessionId) +
+    Buffer.byteLength(value.state) +
+    Buffer.byteLength(value.signature) +
+    64;
+  if (bytes > METADATA_BYTES) return;
+  while (
+    metadataCache.size >= METADATA_ENTRIES ||
+    metadataBytes + bytes > METADATA_BYTES
+  ) {
+    forgetMetadata(metadataCache.keys().next().value!);
+  }
+  metadataCache.set(key, { metadata: Object.freeze(value), bytes });
+  metadataBytes += bytes;
+}
 const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
 const RUN_STATES = new Set(["running", "interrupted", ...TERMINAL]);
 const STEP_STATES = new Set([
@@ -416,6 +483,7 @@ export class RunStore {
     } catch {
       throw Error(ERRORS.RUNTIME_INVALID_STATE);
     }
+    forgetMetadata(path.resolve(target));
     const temp = target + "." + randomUUID() + ".tmp";
     let fd: number | undefined;
     let created = false;
@@ -448,37 +516,81 @@ export class RunStore {
   }
 
   load(runId: string): RunRecord | undefined {
+    // Public reads are authoritative, full, strictly validated snapshots. A stat
+    // signature can accelerate candidate selection, never authorize a result.
+    return this.readRecord(runId)?.run;
+  }
+
+  private readRecord(
+    runId: string,
+    hint = false,
+  ): { run?: RunRecord; metadata: RunMetadata } | undefined {
     let fd: number | undefined;
-    let text: string;
+    let key: string | undefined;
     try {
-      fd = openSync(this.pathFor(runId), "r");
-      const stat = fstatSync(fd);
+      const target = this.pathFor(runId);
+      key = path.resolve(target);
+      fd = openSync(target, "r");
+      const stat = fstatSync(fd, { bigint: true });
       if (!stat.isFile()) {
+        forgetMetadata(key);
         this.count("invalidRecords");
         return undefined;
       }
-      if (stat.size > RECORD_BYTES) {
+      if (stat.size > BigInt(RECORD_BYTES)) {
+        forgetMetadata(key);
         this.count("oversizedRecords");
         return undefined;
       }
-      // The descriptor can grow after stat: never read more than the cap plus one.
-      const bytes = Buffer.alloc(stat.size + 1);
+      const stamp = signature(stat);
+      const cached = hint ? metadataCache.get(key) : undefined;
+      if (cached?.metadata.signature === stamp) {
+        // Even a hit opens and fstats the descriptor twice. No raw record escapes
+        // the cache, and callers receive a copy of the small derived metadata.
+        if (signature(fstatSync(fd, { bigint: true })) !== stamp) {
+          forgetMetadata(key);
+          this.count("invalidRecords");
+          return undefined;
+        }
+        metadataCache.delete(key);
+        metadataCache.set(key, cached);
+        return { metadata: { ...cached.metadata } };
+      }
+      forgetMetadata(key);
+      const size = Number(stat.size);
+      // The descriptor can grow after stat: never read more than cap plus one.
+      const bytes = Buffer.alloc(size + 1);
       let length = 0;
       while (length < bytes.length) {
-        const read = readSync(fd, bytes, length, bytes.length - length, null);
-        if (read === 0) break;
-        length += read;
+        const count = readSync(fd, bytes, length, bytes.length - length, null);
+        if (count === 0) break;
+        length += count;
       }
       if (length > RECORD_BYTES) {
         this.count("oversizedRecords");
         return undefined;
       }
-      if (length > stat.size) {
+      if (
+        length !== size ||
+        signature(fstatSync(fd, { bigint: true })) !== stamp
+      ) {
         this.count("invalidRecords");
         return undefined;
       }
-      text = bytes.toString("utf8", 0, length);
+      try {
+        const value: unknown = JSON.parse(bytes.toString("utf8", 0, length));
+        if (validRun(value, runId)) {
+          const derived = metadata(value, stamp);
+          rememberMetadata(key, derived);
+          return { run: value, metadata: { ...derived } };
+        }
+      } catch {
+        /* malformed JSON and invalid plans are isolated */
+      }
+      this.count("invalidRecords");
+      return undefined;
     } catch (error) {
+      if (key) forgetMetadata(key);
       if ((error as NodeJS.ErrnoException).code !== "ENOENT")
         this.count("readFailures");
       return undefined;
@@ -487,21 +599,14 @@ export class RunStore {
         try {
           closeSync(fd);
         } catch {
+          if (key) forgetMetadata(key);
           this.count("readFailures");
         }
       }
     }
-    try {
-      const value: unknown = JSON.parse(text);
-      if (validRun(value, runId)) return value;
-    } catch {
-      /* malformed JSON and invalid plans are isolated */
-    }
-    this.count("invalidRecords");
-    return undefined;
   }
 
-  private scan(ownerSessionId?: string): RunRecord[] {
+  private scan(hint = false): RunMetadata[] {
     let names: string[];
     try {
       names = readdirSync(this.root);
@@ -509,30 +614,51 @@ export class RunStore {
       this.count("readFailures");
       return [];
     }
-    const runs: RunRecord[] = [];
+    const runs: RunMetadata[] = [];
     for (const name of names) {
       if (!name.endsWith(".json") || !RUN_ID.test(name.slice(0, -5))) continue;
-      const run = this.load(name.slice(0, -5));
-      if (
-        run &&
-        (ownerSessionId === undefined || run.ownerSessionId === ownerSessionId)
-      )
-        runs.push(run);
+      const entry = this.readRecord(name.slice(0, -5), hint);
+      if (entry) runs.push(entry.metadata);
     }
-    return runs.sort(
-      (a, b) => b.updatedAt - a.updatedAt || a.runId.localeCompare(b.runId),
-    );
+    return runs.sort(compareMetadata);
   }
 
   list(limit = 20, ownerSessionId?: string, offset = 0): RunRecord[] {
     if (!timestamp(limit) || !timestamp(offset))
       throw Error(ERRORS.RUNTIME_INVALID_STATE);
     const end = Math.min(Number.MAX_SAFE_INTEGER, offset + limit);
-    return this.scan(ownerSessionId).slice(offset, end);
+    // A changed selected page is retried, not silently shortened or refilled out
+    // of order. Under persistent churn return no page rather than wrong offsets.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const candidates = this.scan(true).filter(
+        (entry) =>
+          ownerSessionId === undefined ||
+          entry.ownerSessionId === ownerSessionId,
+      );
+      const page: RunRecord[] = [];
+      let changed = false;
+      for (const candidate of candidates.slice(offset, end)) {
+        const fresh = this.readRecord(candidate.runId);
+        if (
+          !fresh?.run ||
+          fresh.metadata.signature !== candidate.signature ||
+          fresh.metadata.ownerSessionId !== candidate.ownerSessionId ||
+          fresh.metadata.updatedAt !== candidate.updatedAt ||
+          fresh.metadata.state !== candidate.state
+        ) {
+          changed = true;
+          break;
+        }
+        page.push(fresh.run);
+      }
+      if (!changed) return page;
+    }
+    return [];
   }
 
   remove(runId: string): void {
     const target = this.pathFor(runId);
+    forgetMetadata(path.resolve(target));
     try {
       rmSync(target, { force: true });
     } catch {
@@ -541,22 +667,72 @@ export class RunStore {
     }
   }
 
-  /** Retain the newest max terminal runs; active and recoverable runs never count toward the budget. */
+  /** Retain newest max terminal runs; active and recoverable runs never count. */
   prune(max = 100): void {
     if (!timestamp(max)) throw Error(ERRORS.RUNTIME_INVALID_STATE);
-    for (const run of this.scan()
-      .filter((run) => TERMINAL.has(run.state))
-      .slice(max))
-      this.remove(run.runId);
+    this.pruneScanned(this.scan(), max);
   }
 
-  /** Recover only abandoned running records; legacy records without a PID remain supported. */
+  private pruneScanned(scanned: RunMetadata[], max: number): void {
+    // Destructive decisions start from uncached reads. If a retained boundary or
+    // candidate changed, stop conservatively rather than delete a new checkpoint.
+    const terminal = scanned.filter((entry) => TERMINAL.has(entry.state));
+    if (terminal.length <= max) return;
+    const retained = terminal.slice(0, max);
+    // Revalidate the retained set once, not max times for every deletion. This
+    // is deliberately not a cross-process transaction or lock.
+    for (const boundary of retained) {
+      const guard = this.readRecord(boundary.runId);
+      if (
+        !guard?.run ||
+        guard.metadata.signature !== boundary.signature ||
+        !TERMINAL.has(guard.run.state)
+      )
+        return;
+    }
+    for (const candidate of terminal.slice(max)) {
+      const fresh = this.readRecord(candidate.runId);
+      if (
+        !fresh?.run ||
+        fresh.metadata.signature !== candidate.signature ||
+        !TERMINAL.has(fresh.run.state) ||
+        retained.some(
+          (boundary) => compareMetadata(boundary, fresh.metadata) > 0,
+        )
+      )
+        return;
+      this.remove(candidate.runId);
+    }
+  }
+
+  /** One uncached enumeration for scope initialization; mutations still reread. */
+  maintain(exclude: ReadonlySet<string> = new Set(), max = 100): number {
+    if (!timestamp(max)) throw Error(ERRORS.RUNTIME_INVALID_STATE);
+    const scanned = this.scan();
+    const count = this.interruptScanned(scanned, exclude);
+    this.pruneScanned(scanned, max);
+    return count;
+  }
+
+  /** Recover abandoned running records; legacy records without PID supported. */
   markInterrupted(exclude: ReadonlySet<string> = new Set()): number {
+    return this.interruptScanned(this.scan(), exclude);
+  }
+
+  private interruptScanned(
+    scanned: RunMetadata[],
+    exclude: ReadonlySet<string>,
+  ): number {
     let count = 0;
-    for (const run of this.scan()) {
+    for (const candidate of scanned) {
+      if (candidate.state !== "running" || exclude.has(candidate.runId))
+        continue;
+      const fresh = this.readRecord(candidate.runId);
+      if (!fresh?.run || fresh.metadata.signature !== candidate.signature)
+        continue;
+      const run = fresh.run;
       if (
         run.state !== "running" ||
-        exclude.has(run.runId) ||
         (run.ownerPid !== undefined &&
           run.ownerPid !== process.pid &&
           alive(run.ownerPid))

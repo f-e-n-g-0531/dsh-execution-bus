@@ -14,6 +14,8 @@ import {
   parseArgs,
   validateOptions,
   runBenchmark,
+  benchmarkCapacity,
+  benchmarkAlgorithmDigest,
 } from "../scripts/benchmark-runtime.mjs";
 
 function deferred() {
@@ -36,6 +38,23 @@ async function bounded(promise) {
     clearTimeout(timer);
   }
 }
+
+test("algorithm digest binds entry and statistics helper bytes but not runtime data", () => {
+  const sources = new Map([
+    ["benchmark-runtime.mjs", "entry"],
+    ["pilot-report.mjs", "statistics-v1"],
+  ]);
+  const read = (url) => Buffer.from(sources.get(path.basename(url.pathname)));
+  const first = benchmarkAlgorithmDigest(read);
+  assert.equal(benchmarkAlgorithmDigest(read), first);
+  sources.set("unrelated-runtime-data.json", "changed sample");
+  assert.equal(benchmarkAlgorithmDigest(read), first);
+  sources.set("pilot-report.mjs", "statistics-v2");
+  assert.notEqual(benchmarkAlgorithmDigest(read), first);
+  sources.set("pilot-report.mjs", "statistics-v1");
+  sources.set("benchmark-runtime.mjs", "entry-v2");
+  assert.notEqual(benchmarkAlgorithmDigest(read), first);
+});
 
 test("benchmark options are bounded, explicit capacity defaults include 1k/10k and interrupted-heavy histories", () => {
   const defaults = parseArgs([]);
@@ -217,6 +236,7 @@ test("short DAG benchmark exercises both real executor and native at equal concu
   });
   assert.equal(report.dag.samples.length, 8);
   assert.match(report.environment.runtimeArtifactDigest, /^[a-f0-9]{64}$/);
+  assert.match(report.environment.benchmarkAlgorithmDigest, /^[a-f0-9]{64}$/);
   assert.equal(report.dag.summary.length, 4);
   assert.match(report.interpretation, /NOT model\/agent benefit/);
   assert.match(report.contracts.runtime, /batch barriers/);
@@ -277,7 +297,7 @@ test("benchmark CLI writes machine-readable component report with no paths", () 
   );
   assert.equal(cli.status, 0, cli.stderr);
   const report = JSON.parse(cli.stdout);
-  assert.equal(report.capacity.samples.length, 3);
+  assert.equal(report.capacity.samples.length, 4);
   assert.match(report.interpretation, /NOT model/);
   assert.ok(!cli.stdout.includes(process.cwd()));
   assert.ok(!cli.stdout.includes(os.tmpdir()));
@@ -309,8 +329,8 @@ test("ten-record disk capacity benchmark measures list/prune/startup and never r
     { suite: "capacity", iterations: 1, sizes: [10], interrupted: [0, 0.8] },
     runtime,
   );
-  assert.equal(report.capacity.samples.length, 6);
-  assert.equal(report.capacity.summary.length, 6);
+  assert.equal(report.capacity.samples.length, 8);
+  assert.equal(report.capacity.summary.length, 8);
   assert.equal(report.dag, undefined);
   for (const sample of report.capacity.samples) {
     assert.equal(sample.failed, false);
@@ -334,8 +354,138 @@ test("ten-record disk capacity benchmark measures list/prune/startup and never r
     }
   }
   assert.match(report.contracts.capacity, /setup excluded/);
+  assert.match(report.contracts.capacity, /neither is OS-cold/);
+  assert.match(report.contracts.capacity, /paired not independent/);
+  for (const summary of report.capacity.summary) {
+    assert.equal(summary.attempted, 1);
+    assert.equal(summary.independentHistories, 1);
+    assert.equal(summary.operationMs.observed, 1);
+    assert.equal(summary.operationMs.missing, 0);
+  }
+  for (const ratio of [0, 0.8]) {
+    const cold = report.capacity.samples.find(
+      (s) => s.operation === "list" && s.recoverableRatio === ratio,
+    );
+    const warm = report.capacity.samples.find(
+      (s) => s.operation === "warm-list" && s.recoverableRatio === ratio,
+    );
+    assert.equal(cold.cacheState, "fresh-history-root-first-operation");
+    assert.equal(warm.cacheState, "same-instance-second-read");
+    assert.equal(warm.returnedRecords, cold.returnedRecords);
+    assert.equal(warm.iteration, cold.iteration);
+  }
   assert.match(report.contracts.eventLoop, /not CPU time/);
   const interrupted = historyRecord(runtime, 1, "interrupted");
   assert.equal(interrupted.steps[0].tool, "write");
   assert.equal(interrupted.steps[0].state, "unknown");
+});
+
+test("capacity repeats are independent roots while warm-list reuses first-list store before verification", async () => {
+  const events = [];
+  let instance = 0;
+  class Store {
+    constructor(root) {
+      this.root = root;
+      this.id = instance++;
+      this.records = [];
+      this.reads = 0;
+    }
+    save(record) {
+      this.records.push(record);
+      events.push([this.root, this.id, "save"]);
+    }
+    list(limit) {
+      this.reads++;
+      events.push([
+        this.root,
+        this.id,
+        limit === Number.MAX_SAFE_INTEGER ? "verify" : "list",
+      ]);
+      return [];
+    }
+    prune() {
+      events.push([this.root, this.id, "prune"]);
+    }
+  }
+  class Service {
+    constructor(_ctx, store) {
+      events.push([store.root, store.id, "startup"]);
+    }
+    async dispose() {}
+  }
+  const fake = {
+    RunStore: Store,
+    RuntimeService: Service,
+    parsePlan: (p) => p,
+  };
+  const report = await benchmarkCapacity(fake, {
+    sizes: [2],
+    interrupted: [0],
+    iterations: 2,
+  });
+  assert.equal(report.samples.length, 8);
+  assert.equal(new Set(events.map((e) => e[0])).size, 6); // 3 independent histories per iteration
+  const firstRoots = new Set(
+    events.filter((e) => e[2] === "list").map((e) => e[0]),
+  );
+  assert.equal(firstRoots.size, 2);
+  for (const root of firstRoots) {
+    const reads = events.filter(
+      (e) => e[0] === root && ["list", "verify"].includes(e[2]),
+    );
+    assert.deepEqual(
+      reads.map((e) => e[2]),
+      ["list", "list", "verify"],
+    );
+    assert.equal(new Set(reads.map((e) => e[1])).size, 1);
+    const setupId = events.find((e) => e[0] === root && e[2] === "save")[1];
+    assert.notEqual(setupId, reads[0][1]);
+  }
+  for (const summary of report.summary) {
+    assert.equal(summary.attempted, 2);
+    assert.equal(summary.independentHistories, 2);
+  }
+});
+
+test("failed capacity operations remain samples but are missing from timing statistics", async () => {
+  class Store {
+    constructor() {
+      this.reads = 0;
+    }
+    save() {}
+    list(limit) {
+      if (limit === 20 && ++this.reads === 1)
+        throw Error("private business path");
+      return [];
+    }
+    prune() {
+      throw Error("private business path");
+    }
+  }
+  class Service {
+    constructor() {
+      throw Error("private command");
+    }
+  }
+  const report = await benchmarkCapacity(
+    { RunStore: Store, RuntimeService: Service, parsePlan: (p) => p },
+    { sizes: [2], interrupted: [0], iterations: 1 },
+  );
+  for (const op of ["list", "prune", "startup"]) {
+    const sample = report.samples.find((s) => s.operation === op);
+    const summary = report.summary.find((s) => s.operation === op);
+    assert.equal(sample.failed, true);
+    assert.equal(summary.failed, 1);
+    assert.equal(summary.operationMs.observed, 0);
+    assert.equal(summary.operationMs.missing, 1);
+    assert.equal(summary.operationMs.mean, null);
+  }
+  assert.equal(
+    report.summary.find((s) => s.operation === "warm-list").failed,
+    0,
+  );
+  assert.doesNotMatch(
+    JSON.stringify(report),
+    /private business path|private command/,
+  );
 });

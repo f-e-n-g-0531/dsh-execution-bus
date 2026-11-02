@@ -43,11 +43,16 @@ export declare class RunStore {
     pathFor(runId: string): string;
     save(run: RunRecord): void;
     load(runId: string): RunRecord | undefined;
+    private readRecord;
     private scan;
     list(limit?: number, ownerSessionId?: string, offset?: number): RunRecord[];
     remove(runId: string): void;
-    /** Retain the newest max terminal runs; active and recoverable runs never count toward the budget. */
+    /** Retain newest max terminal runs; active and recoverable runs never count. */
     prune(max?: number): void;
-    /** Recover only abandoned running records; legacy records without a PID remain supported. */
+    private pruneScanned;
+    /** One uncached enumeration for scope initialization; mutations still reread. */
+    maintain(exclude?: ReadonlySet<string>, max?: number): number;
+    /** Recover abandoned running records; legacy records without PID supported. */
     markInterrupted(exclude?: ReadonlySet<string>): number;
+    private interruptScanned;
 }

@@ -394,13 +394,13 @@ export async function benchmarkCapacity(runtime, options) {
       for (let iteration = 0; iteration < options.iterations; iteration++) {
         for (const operation of ["list", "prune", "startup"]) {
           samples.push(
-            await withTemp("xiaohe-bench-history-", async (root) => {
-              const store = new runtime.RunStore(root);
+            ...(await withTemp("xiaohe-bench-history-", async (root) => {
+              const setupStore = new runtime.RunStore(root);
               const recoverable = Math.floor(size * ratio);
               // Half already interrupted, half abandoned running: startup must preserve unknown.
               const existingInterrupted = Math.ceil(recoverable / 2);
               for (let i = 0; i < size; i++)
-                store.save(
+                setupStore.save(
                   historyRecord(
                     runtime,
                     i,
@@ -411,6 +411,9 @@ export async function benchmarkCapacity(runtime, options) {
                         : "succeeded",
                   ),
                 );
+              // Unique fresh history/root; setup uses saves, not list. A new instance alone
+              // does NOT isolate module-level metadata caches; OS file cache is NOT flushed.
+              const store = new runtime.RunStore(root);
               let service;
               const measured = await measureBlocking(() => {
                 if (operation === "list")
@@ -422,6 +425,13 @@ export async function benchmarkCapacity(runtime, options) {
                 service = new runtime.RuntimeService({}, store);
                 return null;
               });
+              // One immediate second list on the same instance, before verification scans.
+              const warm =
+                operation === "list"
+                  ? await measureBlocking(
+                      () => store.list(20, "benchmark-owner").length,
+                    )
+                  : null;
               try {
                 const remaining = store.list(Number.MAX_SAFE_INTEGER);
                 const states = Object.fromEntries(
@@ -430,17 +440,13 @@ export async function benchmarkCapacity(runtime, options) {
                     remaining.filter((r) => r.state === s).length,
                   ]),
                 );
-                return {
+                const context = {
                   size,
                   recoverableRatio: ratio,
                   initialInterrupted: existingInterrupted,
                   initialAbandonedRunning: recoverable - existingInterrupted,
                   iteration,
                   operation,
-                  operationMs: measured.operationMs,
-                  eventLoopProbeDelayMs: measured.eventLoopProbeDelayMs,
-                  failed: measured.failed,
-                  returnedRecords: measured.value ?? null,
                   remaining: remaining.length,
                   states,
                   unknownSteps: remaining.reduce(
@@ -449,10 +455,29 @@ export async function benchmarkCapacity(runtime, options) {
                     0,
                   ),
                 };
+                const sample = (op, m, cacheState) => ({
+                  ...context,
+                  operation: op,
+                  cacheState,
+                  operationMs: m.operationMs,
+                  eventLoopProbeDelayMs: m.eventLoopProbeDelayMs,
+                  failed: m.failed,
+                  returnedRecords: m.value ?? null,
+                });
+                return [
+                  sample(
+                    operation,
+                    measured,
+                    "fresh-history-root-first-operation",
+                  ),
+                  ...(warm
+                    ? [sample("warm-list", warm, "same-instance-second-read")]
+                    : []),
+                ];
               } finally {
                 if (service) await service.dispose();
               }
-            }),
+            })),
           );
         }
       }
@@ -461,7 +486,7 @@ export async function benchmarkCapacity(runtime, options) {
     samples,
     summary: options.sizes.flatMap((size) =>
       options.interrupted.flatMap((ratio) =>
-        ["list", "prune", "startup"].map((operation) => {
+        ["list", "warm-list", "prune", "startup"].map((operation) => {
           const rows = samples.filter(
             (s) =>
               s.size === size &&
@@ -474,15 +499,29 @@ export async function benchmarkCapacity(runtime, options) {
             operation,
             attempted: rows.length,
             failed: rows.filter((s) => s.failed).length,
-            operationMs: statistics(rows.map((s) => s.operationMs)),
+            independentHistories: new Set(rows.map((s) => s.iteration)).size,
+            operationMs: statistics(
+              rows.filter((s) => !s.failed).map((s) => s.operationMs),
+              rows.length,
+            ),
             eventLoopProbeDelayMs: statistics(
-              rows.map((s) => s.eventLoopProbeDelayMs),
+              rows.filter((s) => !s.failed).map((s) => s.eventLoopProbeDelayMs),
+              rows.length,
             ),
           };
         }),
       ),
     ),
   };
+}
+
+/** Include every local statistics dependency, not only the entry script. */
+export function benchmarkAlgorithmDigest(read = readFileSync) {
+  const hash = createHash("sha256");
+  for (const name of ["benchmark-runtime.mjs", "pilot-report.mjs"]) {
+    hash.update(name + "\0").update(read(new URL(name, import.meta.url)));
+  }
+  return hash.digest("hex");
 }
 
 export async function runBenchmark(options = {}, runtime) {
@@ -497,6 +536,7 @@ export async function runBenchmark(options = {}, runtime) {
       platform: process.platform,
       arch: process.arch,
       runtimeArtifactDigest: modules.artifactDigest ?? null,
+      benchmarkAlgorithmDigest: benchmarkAlgorithmDigest(),
     },
     interpretation:
       "synthetic local component benchmark; NOT model/agent benefit evidence; timings are machine/load dependent",
@@ -506,7 +546,7 @@ export async function runBenchmark(options = {}, runtime) {
       runtime:
         "real RuntimeExecutor with disk RunStore; batch barriers wait for all siblings before next ready batch; includes checkpoints",
       capacity:
-        "fresh synthetic history per operation; setup excluded; startup=RuntimeService constructor including markInterrupted and prune(100); no host execution",
+        "fresh synthetic history/root per operation/iteration; setup excluded; list=first list after setup saves, warm-list=same-instance second read before verification; new instances do not isolate module metadata, other roots may be cached; neither is OS-cold; iterations are independent histories, list/warm-list are paired not independent; startup=RuntimeService constructor including markInterrupted and prune(100); no host execution; failed samples remain but missing from timing summaries",
       eventLoop:
         "queued setImmediate wall delay, including scheduler baseline and synchronous blocking; not CPU time, isolated attribution, or lag histogram",
       reproducibility:

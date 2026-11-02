@@ -83,8 +83,7 @@ export class RuntimeService {
             failures: new Map(),
             references: 0,
         };
-        this.store.markInterrupted(new Set(manager.active.keys()));
-        this.store.prune(100);
+        this.store.maintain(new Set(manager.active.keys()), 100);
         manager.references++;
         this.manager = manager;
         managers.set(this.key, manager);

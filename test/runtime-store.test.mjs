@@ -629,9 +629,9 @@ test("超大文件：stat先拒绝，不读取payload；增长文件也有界拒
     withMock(
       fs,
       "fstatSync",
-      (fd) => {
-        const stat = actualFstat(fd);
-        stat.size = 1; // Emulate a file growing between stat and read.
+      (...args) => {
+        const stat = actualFstat(...args);
+        stat.size = typeof stat.size === "bigint" ? 1n : 1; // Emulate growth after stat.
         return stat;
       },
       () => assert.equal(store.load(id(2)), undefined),

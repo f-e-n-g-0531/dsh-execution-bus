@@ -154,6 +154,61 @@ test(
   },
 );
 
+test("scope construction combines recovery and retention in one maintenance pass", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "xiaohe-maintenance-"));
+  let service;
+  try {
+    class MaintenanceStore extends RunStore {
+      calls = [];
+      maintain(exclude, max) {
+        this.calls.push({ exclude: [...exclude], max });
+        return super.maintain(exclude, max);
+      }
+      markInterrupted() {
+        throw Error("Separate recovery scan must not run");
+      }
+      prune() {
+        throw Error("Separate startup prune must not run");
+      }
+    }
+    const store = new MaintenanceStore(root);
+    service = new RuntimeService(
+      context(async () => ({})),
+      store,
+    );
+    assert.deepEqual(store.calls, [{ exclude: [], max: 100 }]);
+  } finally {
+    await service?.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a new same-root scope still discovers records created after the first scope", async () => {
+  const f = fixture();
+  try {
+    const first = f.create();
+    const external = new RunStore(f.root);
+    const executor = new RuntimeExecutor(external, async () => ({}));
+    const orphan = executor.createRun("owner", parsePlan(plan("external")));
+    // Legacy/abandoned record, not in this process manager's active registry.
+    delete orphan.ownerPid;
+    delete orphan.ownerProcess;
+    external.save(orphan);
+    assert.equal(
+      first.status({ runId: orphan.runId }, exec()).state,
+      "running",
+    );
+    const second = f.create(undefined, new RunStore(f.root));
+    assert.equal(
+      second.status({ runId: orphan.runId }, exec()).state,
+      "interrupted",
+    );
+    assert.equal(external.load(orphan.runId).state, "interrupted");
+  } finally {
+    await f.close();
+  }
+});
+
 test("status/result/cancel/resume reject another owner for active, interrupted and completed runs", async () => {
   const entered = deferred();
   const gate = deferred();

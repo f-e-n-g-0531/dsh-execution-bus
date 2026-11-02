@@ -47,6 +47,8 @@ export function verifyReport(r, p) {
     "docs/OPERATIONS.md",
     "scripts/acceptance-report.mjs",
     "scripts/pilot-report.mjs",
+    "scripts/pilot-manifest.mjs",
+    "docs/DEVELOPMENT-PLAN.md",
     "scripts/benchmark-runtime.mjs",
     "scripts/session-metrics.mjs",
     "docs/releases/" + p.version + ".md",
