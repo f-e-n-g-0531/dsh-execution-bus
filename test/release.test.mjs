@@ -54,6 +54,7 @@ test("package whitelist rejects missing exports and sensitive additions", () => 
     "scripts/pilot-report.mjs",
     "scripts/pilot-manifest.mjs",
     "docs/DEVELOPMENT-PLAN.md",
+    "docs/RESEARCH-READINESS.md",
     "scripts/benchmark-runtime.mjs",
     "scripts/session-metrics.mjs",
     "docs/releases/" + pkg.version + ".md",
@@ -64,6 +65,7 @@ test("package whitelist rejects missing exports and sensitive additions", () => 
     files: required.map((path) => ({ path, size: 1 })),
   };
   assert.equal(verifyReport(report, pkg), required.length);
+  assert.throws(() => verifyReport({ ...report, files: report.files.filter(f => f.path !== "docs/RESEARCH-READINESS.md") }, pkg), /Missing packed file/);
   for (const name of Object.keys(pkg.peerDependencies).filter((name) =>
     name.startsWith("@deepseek-ai/dsh-"),
   )) {
