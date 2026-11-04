@@ -384,6 +384,9 @@ export class RunStore {
             closeSync(fd);
             fd = undefined;
             renameSync(temp, target);
+            // A successful rename consumed our unique temporary file. Only failures
+            // need cleanup; probing the missing old path adds I/O to every checkpoint.
+            created = false;
         }
         catch {
             this.count("writeFailures");

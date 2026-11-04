@@ -1,6 +1,6 @@
 # 验证范围与使用限制
 
-本文说明证据边界，不是生产环境认证。当前源码目标为 **v1.3.0**（尚未作为已发布版本声明），已发布研发基线为 **v1.2.2**（提交 `4c526cf`）；依赖目标为 **DSH 0.2.1-rc.5**、Cordis ~4.0.5、include ~1.0.10、Node ≥22，兼容范围见[宿主兼容性](<host-compatibility.md>)。历史 v1.2.0 的 Windows、Node.js 24.21.0、DSH rc.2 组件验证记录只属于当时版本，不能代替 rc.5 或新候选的复核。后续研发与真实验收门禁见[研发计划](<DEVELOPMENT-PLAN.md>)。
+本文说明证据边界，不是生产环境认证。当前已发布研发基线为 **v1.3.0**（提交 `a33ebb5`），已于 2026-11-02 发布至 [npm](https://registry.npmjs.org/@feng0531/dsh-execution-bus/1.3.0) 和 [GitHub Release](https://github.com/f-e-n-g-0531/dsh-execution-bus/releases/tag/v1.3.0)，交付范围见[发布说明](<releases/1.3.0.md>)；版本发布不代表下述真实环境验收已经完成。依赖目标为 **DSH 0.2.1-rc.5**、Cordis ~4.0.5、include ~1.0.10、Node ≥22，兼容范围见[宿主兼容性](<host-compatibility.md>)。历史 v1.2.0 的 Windows、Node.js 24.21.0、DSH rc.2 组件验证记录只属于当时版本，不能代替 rc.5 或新候选的复核。后续研发与真实验收门禁见[研发计划](<DEVELOPMENT-PLAN.md>)。
 
 ## 自动化检查范围
 

@@ -2,7 +2,7 @@
 
 ## 基线与边界
 
-已发布研发基线为 v1.2.2（提交 `4c526cf`），当前源码目标为 minor 版本 v1.3.0；目标宿主 DSH 0.2.1-rc.5、Cordis ~4.0.5、include ~1.0.10、Node ≥22。v1.2.0/rc.2 的历史验证不移作新候选证据。v1.3.0 的交付须待实现、复核和门禁结果确定，本文不表示该版本已发布。
+已发布研发基线为 v1.3.0（提交 `a33ebb5`），已于 2026-11-02 发布至 [npm](https://registry.npmjs.org/@feng0531/dsh-execution-bus/1.3.0) 和 [GitHub Release](https://github.com/f-e-n-g-0531/dsh-execution-bus/releases/tag/v1.3.0)，交付范围见[发布说明](<releases/1.3.0.md>)；目标宿主 DSH 0.2.1-rc.5、Cordis ~4.0.5、include ~1.0.10、Node ≥22。v1.2.0/rc.2 的历史验证不移作新候选证据；版本发布不代表真实环境验收或收益实验已经完成。
 
 本计划把实现、组件回归、真实环境验收和收益实验分开。组件通过不能替代真实模型、桌面 UI、实际 OS 沙箱或整宿主生命周期验收；缺少条件或证据的项目保持 pending，不补成功样本。具体验收步骤见[流程测试](<FLOW-TEST.md>)，证据边界见[验证范围](<validation.md>)。
 
