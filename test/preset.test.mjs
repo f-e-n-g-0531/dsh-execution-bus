@@ -10,6 +10,7 @@ import { Loader } from "@deepseek-ai/cordis-plugin-loader";
 import { AgentPresetRegistry } from "@deepseek-ai/dsh-agent-preset-registry";
 import { SessionProjectionRegistry } from "@deepseek-ai/dsh-session-projection";
 import { ToolRuntime } from "@deepseek-ai/dsh-tools";
+import { executeToolFixture } from "@deepseek-ai/dsh-tool-testkit";
 import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
 import Jobs from "@deepseek-ai/dsh-jobs-local";
 import { createScope } from "@deepseek-ai/dsh-scope";
@@ -95,7 +96,7 @@ test(
       const deny = ctx.on("tools/pre-execute", async (exec, next) =>
         exec.name === "write" ? { kind: "deny", reason: "host-policy-still-enforced" } : next(),
       );
-      const result = await ctx.tools.execute({
+      const result = await executeToolFixture(ctx, {
         name: "write",
         arguments: { file_path: "never-write", content: "no" },
         agent,

@@ -10,6 +10,8 @@ import {
   assertSupportedJsonSchema,
   validateJsonSchemaValue,
 } from "@deepseek-ai/dsh-tools";
+import { executeToolFixture } from "@deepseek-ai/dsh-tool-testkit";
+import { createServiceContext } from "./fixtures/service-context.mjs";
 import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
 import { createScope } from "@deepseek-ai/dsh-scope";
 import * as plugin from "../dist/plugin.js";
@@ -63,14 +65,10 @@ function serviceFixture(invoke = async () => ({ ok: true })) {
   );
   const store = new RunStore(root);
   const calls = [];
-  const ctx = {
-    tools: {
-      async execute(call) {
-        calls.push(call.name);
-        return { isError: false, value: await invoke(call) };
-      },
-    },
-  };
+  const ctx = createServiceContext(async (call) => {
+    calls.push(call.name);
+    return invoke(call);
+  });
   const service = new RuntimeService(ctx, store);
   return {
     store,
@@ -431,7 +429,7 @@ test("real host registration validates schemas and retains JSON renderer plus re
   agent.ctx = scope.ctx;
   try {
     plugin.apply(scope.ctx);
-    const result = await ctx.tools.execute({
+    const result = await executeToolFixture(ctx, {
       name: "runtime_run",
       callId: randomUUID(),
       agent,
@@ -452,7 +450,7 @@ test("real host registration validates schemas and retains JSON renderer plus re
       ["runtime_result", { runId: result.value.runId }],
       ["runtime_cancel", { runId: result.value.runId }],
     ]) {
-      const response = await ctx.tools.execute({
+      const response = await executeToolFixture(ctx, {
         name,
         arguments: args,
         callId: randomUUID(),

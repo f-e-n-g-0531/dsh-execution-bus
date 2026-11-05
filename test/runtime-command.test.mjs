@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { RuntimeService } from "../dist/runtime/service.js";
 import { RunStore } from "../dist/runtime/store.js";
+import { createServiceContext } from "./fixtures/service-context.mjs";
 
 const exec = () => ({
   agent: { id: "owner" },
@@ -32,16 +33,12 @@ function fixture(value, isError = false) {
   const calls = [];
   const store = new RunStore(dir);
   const service = new RuntimeService(
-    {
-      tools: {
-        async execute(call) {
-          calls.push(call.name);
-          return call.name === "pwsh"
-            ? { isError, value }
-            : { isError: false, value: {} };
-        },
-      },
-    },
+    createServiceContext(async (call) => {
+      calls.push(call.name);
+      if (call.name !== "pwsh") return {};
+      if (isError) throw Error("Command fixture host failure");
+      return value;
+    }),
     store,
   );
   return {

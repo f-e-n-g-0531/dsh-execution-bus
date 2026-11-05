@@ -8,6 +8,7 @@ import { RuntimeService } from "../dist/runtime/service.js";
 import { RuntimeExecutor } from "../dist/runtime/executor.js";
 import { RunStore } from "../dist/runtime/store.js";
 import { parsePlan } from "../dist/runtime/plan.js";
+import { createServiceContext } from "./fixtures/service-context.mjs";
 
 function deferred() {
   let resolve;
@@ -39,11 +40,7 @@ const exec = (id = "owner", signal = new AbortController().signal) => ({
 const plan = (tag = "work") => ({
   steps: [{ id: tag, tool: "read", input: { tag } }],
 });
-const context = (invoke) => ({
-  tools: {
-    execute: async (call) => ({ isError: false, value: await invoke(call) }),
-  },
-});
+const context = createServiceContext;
 
 class ObservedStore extends RunStore {
   watchers = [];

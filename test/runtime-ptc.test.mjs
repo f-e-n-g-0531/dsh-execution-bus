@@ -16,6 +16,9 @@ import { Loader } from "@deepseek-ai/cordis-plugin-loader";
 import { AgentPresetRegistry } from "@deepseek-ai/dsh-agent-preset-registry";
 import { SessionProjectionRegistry } from "@deepseek-ai/dsh-session-projection";
 import { ToolRuntime } from "@deepseek-ai/dsh-tools";
+import * as NativeExecutor from "@deepseek-ai/dsh-tool-executor-native";
+import * as PtcExecutor from "@deepseek-ai/dsh-tool-executor-ptc";
+import { executeModelToolFixture } from "./fixtures/host-tools.mjs";
 import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
 import Jobs from "@deepseek-ai/dsh-jobs-local";
 import LocalFS from "@deepseek-ai/dsh-fs-local";
@@ -42,7 +45,7 @@ async function fixture(mode = "ptc", scopedPresentation = false) {
   const host = root.plugin(function hostServices(context) {
     ctx = context;
     new SystemPrompt(ctx, {});
-    new ToolRuntime(ctx, { mode: scopedPresentation ? "native" : mode });
+    new ToolRuntime(ctx);
     new SessionProjectionRegistry(ctx);
     ctx.provide("workingDirectory");
     ctx.set("workingDirectory", {
@@ -76,6 +79,9 @@ async function fixture(mode = "ptc", scopedPresentation = false) {
       ctx,
       NodePtcRuntime.Config({ timeoutMs: 10000, maxTimeoutMs: 15000 }),
     );
+    // A deployment default remains native when a preset owns its PTC selection.
+    if (scopedPresentation || mode === "native") NativeExecutor.apply(ctx);
+    else PtcExecutor.apply(ctx, PtcExecutor.Config({}));
     new Jobs(ctx, Jobs.Config({}));
     new Loader(ctx, { baseUrl: pathToFileURL(process.cwd() + "/").href });
     new AgentPresetRegistry(
@@ -114,9 +120,8 @@ async function fixture(mode = "ptc", scopedPresentation = false) {
         ...(scopedPresentation
           ? [
               {
-                id: "presentation",
-                name: "@deepseek-ai/dsh-agent-tool-presentation",
-                config: { mode },
+                id: "executor",
+                name: "@deepseek-ai/dsh-tool-executor-" + mode,
               },
             ]
           : []),
@@ -160,7 +165,7 @@ async function fixture(mode = "ptc", scopedPresentation = false) {
       caller = owner,
       signal = new AbortController().signal,
     ) =>
-      ctx.tools.execute({
+      executeModelToolFixture(ctx, {
         name,
         arguments: args,
         agent: caller,
@@ -209,7 +214,7 @@ async function fixture(mode = "ptc", scopedPresentation = false) {
 }
 
 test(
-  "rc.5: native host honors preset-scoped PTC without changing native control agents",
+  "rc.1: native host honors preset-scoped PTC without changing native control agents",
   { timeout: 20000 },
   async () => {
     const f = await fixture("ptc", true);

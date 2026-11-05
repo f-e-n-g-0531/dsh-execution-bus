@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
+import { ToolExecutionPipeline } from "@deepseek-ai/dsh-tools/pipeline";
 import { ERRORS } from "../error-codes.js";
 import { runProgress, runGuidance } from "../presentation.js";
 import type { RunProgress, RunGuidance } from "../presentation.js";
@@ -399,7 +400,8 @@ export class RuntimeService {
   }
   private executor(exec: ToolRunContext): RuntimeExecutor {
     const invoke: Invoke = async (tool, input, signal) => {
-      const result = await this.ctx.tools.execute({
+      const pipeline = new ToolExecutionPipeline(this.ctx);
+      const prepared = await pipeline.prepare({
         name: tool,
         callId: (String(exec.callId) +
           ":runtime:" +
@@ -407,9 +409,14 @@ export class RuntimeService {
         rootCallId: exec.rootCallId,
         parent: exec.token,
         agent: exec.agent,
+        toolSet: exec.toolSet,
         arguments: input,
         signal,
       });
+      const outcome = prepared.kind === "dispatch"
+        ? await pipeline.dispatch(prepared.exec)
+        : prepared;
+      const result = await pipeline.complete(prepared.exec, outcome);
       if (result.isError) throw Error(ERRORS.RUNTIME_STEP_FAILED);
       if (tool === "pwsh") {
         const value = result.value as Record<string, unknown> | null;

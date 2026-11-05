@@ -4,7 +4,7 @@
 
 仓库 dsh-execution-bus、npm 包名、预设 ID `xiao-he-runtime` 保持不变；历史 0.x 版本说明保留当时名称。
 
-DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.3.3**
+DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.3.4**
 
 > 1.0 起产品从“执行总线模式”切换为**声明式运行时**：`runtime_run` 接收 DAG 计划，运行时按依赖并行执行、对只读步骤重试、逐步落盘并支持重启后恢复。旧的 `execution_bus` 工具与 `./core` 导出已移除；0.12.1 是最后一个总线版本，仍可在 npm/git 历史中查看。
 
@@ -24,10 +24,10 @@ DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.3.3**
 
 ## 安装与启用
 
-本版目标宿主为 **DSH 0.2.1-rc.5**，宿主 peer 依赖精确锁定 rc.5；不宣称兼容其他候选版。依赖安全告警及测试边界见[宿主兼容性](<docs/host-compatibility.md>)。
+本版目标宿主为 **DSH 0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0，DSH peer 精确锁定 0.2.2-rc.1，不推导兼容其他宿主版本。旧版 1.3.3 的宿主目标仍为 0.2.1-rc.5。依赖安全告警及验证边界见[宿主兼容性](<docs/host-compatibility.md>)。
 
 ```text
-npm install --ignore-scripts @feng0531/dsh-execution-bus@1.3.3
+npm install --ignore-scripts @feng0531/dsh-execution-bus@1.3.4
 ```
 
 从源码验证待发布版本时，先用 `npm run pack:candidate` 生成本地 tgz，在隔离配置安装，不替换日常 DSH；正式包可用性以 npm 公开元数据及对应 GitHub Release 为准。
@@ -84,5 +84,5 @@ npm run test:install   # 临时目录安装验证
 
 - [声明式运行时设计](<docs/DECLARATIVE-RUNTIME.md>)、[协议](<docs/protocol.md>)、[验证范围](<docs/validation.md>)、[产品结构](<docs/PRODUCT.md>)
 - [运行状态与故障处置](<docs/OPERATIONS.md>)、[验收与对照试验](<docs/FLOW-TEST.md>)、[研发路线](<docs/DEVELOPMENT-PLAN.md>)
-- [1.3.3 发布说明](<docs/releases/1.3.3.md>)、[发布流程](<docs/RELEASING.md>)、[第三方说明](<THIRD_PARTY_NOTICES.md>)
+- [1.3.4 发布说明](<docs/releases/1.3.4.md>)、[发布流程](<docs/RELEASING.md>)、[第三方说明](<THIRD_PARTY_NOTICES.md>)
 - 0.x 总线历史与复盘：[复盘](<docs/RETROSPECTIVE.md>)、[整合说明](<docs/INTEGRATION.md>)

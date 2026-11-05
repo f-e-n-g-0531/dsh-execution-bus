@@ -87,8 +87,8 @@ test("package whitelist rejects missing exports and sensitive additions", () => 
   );
   assert.throws(() => verifyReport({ ...report, bundled: ["secret"] }, pkg));
 });
-test("all host peers and locked DSH components target rc.5 without mixed release candidates", () => {
-  const target = "0.2.1-rc.5";
+test("all host peers and locked DSH components target 0.2.2-rc.1 without mixed release candidates", () => {
+  const target = "0.2.2-rc.1";
   assert.deepEqual(lock.packages[""].peerDependencies, pkg.peerDependencies);
   assert.deepEqual(lock.packages[""].devDependencies, pkg.devDependencies);
   for (const [name, version] of Object.entries({

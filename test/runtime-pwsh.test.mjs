@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { Context } from "@deepseek-ai/cordis";
 import { ToolRuntime } from "@deepseek-ai/dsh-tools";
+import { executeToolFixture } from "./fixtures/host-tools.mjs";
 import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
 import Jobs from "@deepseek-ai/dsh-jobs-local";
 import { createScope } from "@deepseek-ai/dsh-scope";
@@ -141,7 +142,7 @@ async function fixture() {
   pwsh.apply(ctx, { enableRunInBackground: true, promoteOnTimeout: true });
   plugin.apply(scope.ctx);
   const call = (name, args) =>
-    ctx.tools.execute({
+    executeToolFixture(ctx, {
       name,
       arguments: args,
       agent,

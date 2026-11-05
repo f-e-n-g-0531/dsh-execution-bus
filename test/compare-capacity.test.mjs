@@ -317,6 +317,9 @@ for (const [name, source, code] of [
       );
       try {
         fs.cpSync("dist", path.join(root, "dist"), { recursive: true });
+        // The service now imports the public host pipeline at runtime. Preserve
+        // normal package resolution for this isolated trusted-build fixture.
+        fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), process.platform === "win32" ? "junction" : "dir");
         fs.writeFileSync(
           path.join(root, "package.json"),
           JSON.stringify({ type: "module" }),

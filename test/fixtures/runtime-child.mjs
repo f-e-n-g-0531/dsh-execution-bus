@@ -2,6 +2,7 @@ import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { RuntimeService } from "../../dist/runtime/service.js";
 import { RunStore } from "../../dist/runtime/store.js";
+import { createServiceContext } from "./service-context.mjs";
 
 // This fixture is driven only through fork IPC. No wall-clock delay selects the
 // crash point: the parent kills only after a durable checkpoint/entered barrier.
@@ -41,25 +42,21 @@ class CheckpointStore extends RunStore {
   }
 }
 const store = new CheckpointStore(root);
-const ctx = {
-  tools: {
-    async execute(call) {
-      const tag = call.arguments.tag;
-      effect(tag);
-      if (
-        mode === "start" &&
-        scenario === "inflight-write" &&
-        tag === "uncertain"
-      ) {
-        const run = store.list(100, owner.agent.id)[0];
-        await send({ type: "write-entered", runId: run.runId, record: run });
-        return never;
-      }
-      if (mode === "start" && tag === "slow") return never;
-      return { isError: false, value: { tag, content: "result:" + tag } };
-    },
-  },
-};
+const ctx = createServiceContext(async (call) => {
+  const tag = call.arguments.tag;
+  effect(tag);
+  if (
+    mode === "start" &&
+    scenario === "inflight-write" &&
+    tag === "uncertain"
+  ) {
+    const run = store.list(100, owner.agent.id)[0];
+    await send({ type: "write-entered", runId: run.runId, record: run });
+    return never;
+  }
+  if (mode === "start" && tag === "slow") return never;
+  return { tag, content: "result:" + tag };
+});
 let service;
 async function fatal(error) {
   try {

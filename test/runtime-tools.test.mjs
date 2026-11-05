@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { Context } from "@deepseek-ai/cordis";
 import { ToolRuntime } from "@deepseek-ai/dsh-tools";
+import { executeToolFixture } from "./fixtures/host-tools.mjs";
 import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
 import Jobs from "@deepseek-ai/dsh-jobs-local";
 import { createScope } from "@deepseek-ai/dsh-scope";
@@ -61,7 +62,7 @@ async function fixture() {
   ctx.jobs.attachController("runtime-tools-test");
   plugin.apply(scope.ctx);
   const call = (name, args) =>
-    ctx.tools.execute({
+    executeToolFixture(ctx, {
       name,
       callId: randomUUID(),
       arguments: args,
@@ -77,7 +78,7 @@ async function fixture() {
     return {
       scope: otherScope,
       call: (name, args) =>
-        ctx.tools.execute({
+        executeToolFixture(ctx, {
           name,
           arguments: args,
           agent: other,
@@ -86,8 +87,145 @@ async function fixture() {
         }),
     };
   };
-  return { scope, call, calls, dir, ctx, peer };
+  return { scope, call, calls, dir, ctx, peer, agent };
 }
+
+test("rc.1 real pipeline preserves conditional tool admission and nested identity", async () => {
+  const f = await fixture();
+  const controller = new AbortController();
+  const observed = { pre: [], execute: [] };
+  const disposers = [];
+  let bodyCalls = 0,
+    conditionCalls = 0,
+    toolSet;
+  try {
+    disposers.push(
+      f.scope.ctx.tools.register(
+        {
+          name: "read",
+          description: "conditional scoped read",
+          parameters: { type: "object", additionalProperties: true },
+          output: { schema: {}, render: () => [] },
+          async execute(_args, exec) {
+            bodyCalls++;
+            assert.equal(exec.agent, f.agent);
+            assert.equal(exec.toolSet, toolSet);
+            return { content: "admitted", truncated: false };
+          },
+        },
+        {
+          when: () => {
+            conditionCalls++;
+            return true;
+          },
+        },
+      ),
+    );
+    for (const [event, rows] of [
+      ["tools/pre-execute", observed.pre],
+      ["tools/execute", observed.execute],
+    ]) {
+      disposers.push(
+        f.ctx.on(event, async (exec, next) => {
+          rows.push({
+            name: exec.name,
+            token: exec.token,
+            parent: exec.parent,
+            rootCallId: exec.rootCallId,
+            agent: exec.agent,
+            toolSet: exec.toolSet,
+            signal: exec.signal,
+          });
+          return next();
+        }),
+      );
+    }
+    toolSet = await f.ctx.tools.resolve({
+      agent: f.agent,
+      modelSelection: { provider: "test", model: "test" },
+      signal: controller.signal,
+    });
+    assert.equal(conditionCalls, 1);
+    assert.ok(toolSet.view(f.agent).has("read"));
+    const invoke = (withAdmission) =>
+      executeToolFixture(f.ctx, {
+        name: "runtime_run",
+        callId: randomUUID(),
+        agent: f.agent,
+        signal: controller.signal,
+        ...(withAdmission ? { toolSet } : {}),
+        arguments: {
+          plan: {
+            steps: [
+              {
+                id: "read",
+                tool: "read",
+                input: { file_path: "conditional.txt" },
+              },
+            ],
+          },
+        },
+      });
+    const absent = await invoke(false);
+    assert.equal(absent.isError, false, JSON.stringify(absent));
+    assert.equal(absent.value.state, "failed");
+    assert.equal(absent.value.steps[0].state, "failed");
+    assert.equal(bodyCalls, 0);
+    assert.equal(
+      f.calls.read,
+      0,
+      "conditional shadow must not fall back to global read",
+    );
+    observed.pre.length = observed.execute.length = 0;
+    const accepted = await invoke(true);
+    assert.equal(accepted.isError, false, JSON.stringify(accepted));
+    assert.equal(accepted.value.state, "succeeded");
+    assert.equal(bodyCalls, 1);
+    for (const rows of [observed.pre, observed.execute]) {
+      assert.deepEqual(
+        rows.map((r) => r.name),
+        ["runtime_run", "read"],
+      );
+      const [outer, nested] = rows;
+      assert.equal(nested.parent, outer.token);
+      assert.equal(nested.rootCallId, outer.rootCallId);
+      assert.equal(outer.agent, f.agent);
+      assert.equal(nested.agent, f.agent);
+      assert.equal(outer.toolSet, toolSet);
+      assert.equal(nested.toolSet, toolSet);
+      assert.equal(outer.signal.aborted, false);
+      assert.equal(nested.signal.aborted, false);
+    }
+    disposers.push(
+      f.scope.ctx.tools.guard((exec) =>
+        exec.name === "read"
+          ? "conditional read denied by host guard"
+          : undefined,
+      ),
+    );
+    const denied = await invoke(true);
+    assert.equal(denied.isError, false, JSON.stringify(denied));
+    assert.equal(denied.value.state, "failed");
+    assert.equal(denied.value.steps[0].state, "failed");
+    assert.equal(
+      bodyCalls,
+      1,
+      "valid admission must not bypass the host guard",
+    );
+    assert.equal(f.calls.read, 0);
+    assert.equal(
+      conditionCalls,
+      1,
+      "nested dispatch must reuse rather than resolve admission",
+    );
+  } finally {
+    toolSet?.dispose();
+    for (const dispose of disposers.reverse()) dispose();
+    await f.scope.dispose();
+    rmSync(f.dir, { recursive: true, force: true });
+    delete process.env.XIAOHE_RUNTIME_DIR;
+  }
+});
 
 test("runtime_run 同步执行 DAG：并行只读步骤 + 依赖命令步骤", async () => {
   const { scope, call, calls, dir } = await fixture();
