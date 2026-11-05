@@ -687,7 +687,13 @@ test("存储故障：唯一0600临时文件、写失败清理、原记录不变�
       () => {
         assert.throws(
           () => store.save(record),
-          /^Error: RUNTIME_STORAGE_FAILED$/,
+          (error) => {
+            assert.equal(error.message, "RUNTIME_STORAGE_FAILED");
+            assert.equal(error.cause.code, "EACCES");
+            // Error causes remain local diagnostics, not JSON result fields.
+            assert.equal(JSON.stringify(error), "{}");
+            return true;
+          },
         );
       },
     );

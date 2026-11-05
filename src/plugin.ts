@@ -3,6 +3,7 @@ import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
 import {
   RUNTIME_CANCEL_DESCRIPTION,
   RUNTIME_RESULT_DESCRIPTION,
+  RUNTIME_RESULT_PARAMETERS,
   RUNTIME_RESUME_DESCRIPTION,
   RUNTIME_RUN_DESCRIPTION,
   RUNTIME_RUN_ID_PARAMETERS,
@@ -18,7 +19,14 @@ import {
 } from "./presentation.js";
 
 export const name = "xiao-he-runtime";
-export const inject = ["tools"];
+// Worker creation and setup must use declared services on the mounting context.
+export const inject = [
+  "tools",
+  "systemPrompt",
+  "agents",
+  "agentPresets",
+  "workingDirectory",
+];
 
 /** 声明式运行时插件：只暴露 runtime_* 工具，执行/持久化在 RuntimeService。 */
 export function apply(ctx: Context) {
@@ -64,7 +72,7 @@ export function apply(ctx: Context) {
   register(
     "runtime_result",
     RUNTIME_RESULT_DESCRIPTION,
-    RUNTIME_RUN_ID_PARAMETERS,
+    RUNTIME_RESULT_PARAMETERS,
     (raw, exec) => runtime.result(raw, exec),
   );
   register(

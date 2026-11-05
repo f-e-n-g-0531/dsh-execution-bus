@@ -1,0 +1,291 @@
+import { randomUUID } from "node:crypto";
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
+import { SessionId } from "@deepseek-ai/dsh-session";
+import { NativeToolExecutor } from "@deepseek-ai/dsh-tool-executor-native";
+import { setSandboxMode } from "@deepseek-ai/dsh-sandbox-policy";
+import { setApprovalPolicy } from "@deepseek-ai/dsh-user-approval";
+import { parseWorkerReport, parseAcceptanceCriteria, workerCriteriaInstructions, WORKER_REPORT_INSTRUCTIONS, } from "./agent-report.js";
+import { WORKER_PROMPT_VERSION, WORKER_ROLE_INSTRUCTIONS, promptHash, modelRoute, } from "./agent-trace.js";
+/** Keep the public wire names; never interpret prompt text as authorization. */
+export function parseAgentInput(raw) {
+    const invalid = () => {
+        throw Error("RUNTIME_AGENT_INVALID_INPUT");
+    };
+    if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        return invalid();
+    const prototype = Object.getPrototypeOf(raw);
+    if (prototype !== Object.prototype && prototype !== null)
+        return invalid();
+    if (Reflect.ownKeys(raw).some((key) => typeof key !== "string" ||
+        ![
+            "prompt",
+            "access",
+            "write_scopes",
+            "max_steps",
+            "output_format",
+            "acceptance_criteria",
+        ].includes(key) ||
+        !Object.getOwnPropertyDescriptor(raw, key).enumerable ||
+        !Object.hasOwn(Object.getOwnPropertyDescriptor(raw, key), "value")))
+        return invalid();
+    const value = raw;
+    if (Object.keys(value).some((key) => ![
+        "prompt",
+        "access",
+        "write_scopes",
+        "max_steps",
+        "output_format",
+        "acceptance_criteria",
+    ].includes(key)))
+        return invalid();
+    if (typeof value.prompt !== "string" ||
+        !value.prompt.trim() ||
+        Buffer.byteLength(value.prompt, "utf8") > 65_536)
+        return invalid();
+    if (value.access !== undefined &&
+        value.access !== "read" &&
+        value.access !== "write")
+        return invalid();
+    if (value.write_scopes !== undefined &&
+        (!Array.isArray(value.write_scopes) ||
+            value.write_scopes.some((scope) => typeof scope !== "string" || !scope.trim())))
+        return invalid();
+    const max_steps = value.max_steps ?? 12;
+    if (typeof max_steps !== "number" ||
+        !Number.isSafeInteger(max_steps) ||
+        max_steps < 1 ||
+        max_steps > 32)
+        return invalid();
+    // A path realpath check followed by host edit/write is not an atomic boundary.
+    // Until the public host exposes scope-bound writes, reject rather than promise
+    // confinement that a symlink/reparse-point swap can bypass.
+    if (value.access === "write")
+        throw Error("RUNTIME_AGENT_WRITE_UNSUPPORTED");
+    if (Array.isArray(value.write_scopes) && value.write_scopes.length)
+        return invalid();
+    if (value.output_format !== undefined &&
+        !["text", "report"].includes(value.output_format))
+        return invalid();
+    const acceptance_criteria = value.acceptance_criteria === undefined
+        ? undefined
+        : parseAcceptanceCriteria(value.acceptance_criteria);
+    if (acceptance_criteria !== undefined && value.output_format !== "report")
+        return invalid();
+    return {
+        prompt: value.prompt,
+        access: "read",
+        write_scopes: [],
+        max_steps,
+        ...(acceptance_criteria === undefined ? {} : { acceptance_criteria }),
+        ...(value.output_format === undefined
+            ? {}
+            : { output_format: value.output_format }),
+    };
+}
+/** The exact runtime-owned instructions hashed in WorkerTrace and sent to the child. */
+export function workerInstructions(input) {
+    return (WORKER_ROLE_INSTRUCTIONS +
+        (input.output_format === "report"
+            ? "\n\n" + WORKER_REPORT_INSTRUCTIONS
+            : "") +
+        (input.acceptance_criteria === undefined
+            ? ""
+            : "\n\n" + workerCriteriaInstructions(input.acceptance_criteria)));
+}
+/** Independent, bounded native-tool worker. No parent transcript is seeded. */
+export async function executeAgent(ctx, exec, raw, signal, onCreated, onTrace, delegationPolicy) {
+    const input = parseAgentInput(raw);
+    const parent = exec.agent;
+    if (!parent || !exec.toolSet)
+        throw Error("RUNTIME_AGENT_PARENT_REQUIRED");
+    const combined = signal;
+    if (combined.aborted)
+        throw Error("RUNTIME_AGENT_ABORTED");
+    // rc1 cannot publicly select only missing parent policies. Never guess at
+    // private scope internals or replay the full parent chain as a substitute.
+    if (typeof delegationPolicy?.checkParentPolicy !== "function")
+        throw Error("RUNTIME_AGENT_POLICY_UNSUPPORTED");
+    const route = parent.model.current();
+    if (!route)
+        throw Error("RUNTIME_AGENT_MODEL_REQUIRED");
+    const instructions = workerInstructions(input);
+    const trace = {
+        promptVersion: WORKER_PROMPT_VERSION,
+        promptHash: promptHash(instructions),
+        taskPromptHash: promptHash(input.prompt),
+        outputFormat: input.output_format ?? "text",
+        selectedModel: modelRoute(route),
+        requestModels: [],
+    };
+    const allowed = ["read", "glob", "grep"].filter((name) => ctx.tools.executable(name, parent, exec.toolSet));
+    if (!allowed.length)
+        throw Error("RUNTIME_AGENT_TOOLS_UNAVAILABLE");
+    let handle;
+    let child;
+    let end;
+    let steps = 0;
+    let limited = false;
+    const onAbort = () => child?.cancel({ kind: "parent" });
+    combined.addEventListener("abort", onAbort, { once: true });
+    try {
+        handle = await ctx.agents.create({
+            sessionId: SessionId("runtime-agent-" + randomUUID()),
+            parentAgent: parent,
+            meta: {
+                cwd: ctx.workingDirectory.get(parent.session),
+                origin: "subagent",
+                parentSession: parent.id,
+                delegationDepth: (parent.session.header.delegationDepth ?? 0) + 1,
+            },
+            agentOptions: {
+                ...route,
+                ...(parent.options.maxTokens === undefined
+                    ? {}
+                    : { maxTokens: parent.options.maxTokens }),
+            },
+            signal: combined,
+            setup(childCtx, agent) {
+                child = agent;
+                ctx.agentPresets.composeFrom(childCtx, parent.ctx);
+                childCtx.systemPrompt.section({
+                    name: "XIAO_HE_DECLARATIVE_RUNTIME",
+                    order: 1700,
+                    text: instructions,
+                    interpolate: false,
+                });
+                setSandboxMode(agent.session, "read-only");
+                setApprovalPolicy(agent.session, "never");
+                // Never expose an inherited PTC transport with arbitrary JavaScript. The
+                // native executor rejects run_code before it can reach a process runtime.
+                childCtx.tools.setExecutor(new NativeToolExecutor(childCtx));
+                // Include inherited preset tools, not just global registrations. The
+                // identity guard below also covers Agent-local shadowing. An empty
+                // allow removes every inherited capability.
+                const inherited = new Set(ctx.tools.definitions(agent).map((def) => def.name));
+                childCtx.tools.restrict({
+                    allow: allowed.filter((name) => inherited.has(name)),
+                });
+                // Native dispatch remains responsible for the child's global/preset/local
+                // policies exactly once. Only the trusted host can supplement missing
+                // parent policies without duplicating that native chain.
+                const parentDenied = new WeakSet();
+                childCtx.on("tools/pre-execute", async (call, next) => {
+                    if (call.agent !== agent)
+                        return next();
+                    if (combined.aborted)
+                        return { kind: "deny", reason: "RUNTIME_AGENT_ABORTED" };
+                    try {
+                        const decision = await delegationPolicy.checkParentPolicy({
+                            childCall: call,
+                            parentCall: {
+                                ...call,
+                                agent: parent,
+                                toolSet: exec.toolSet,
+                                parent: exec.token,
+                                rootCallId: exec.rootCallId,
+                            },
+                        });
+                        if (decision?.kind === "allow" && !combined.aborted)
+                            return next();
+                    }
+                    catch {
+                        // Supplemental policy failures cannot become authorization.
+                    }
+                    parentDenied.add(call);
+                    return { kind: "deny", reason: "RUNTIME_AGENT_PARENT_POLICY_DENIED" };
+                });
+                childCtx.tools.guard((call) => {
+                    // A surrounding waterfall may rewrite a deny to allow; the supplemental
+                    // parent decision remains a monotonic denial at the final guard stage.
+                    if (parentDenied.has(call))
+                        return "RUNTIME_AGENT_PARENT_POLICY_DENIED";
+                    if (combined.aborted)
+                        return "RUNTIME_AGENT_ABORTED";
+                    if (call.agent !== agent || !allowed.includes(call.name))
+                        return "RUNTIME_AGENT_TOOL_DENIED";
+                    const admitted = ctx.tools.executable(call.name, parent, exec.toolSet);
+                    if (!admitted ||
+                        childCtx.tools.executable(call.name, agent, call.toolSet) !==
+                            admitted)
+                        return "RUNTIME_AGENT_TOOL_DENIED";
+                    return undefined;
+                });
+                childCtx.on("agent/pre-step", async (payload, next) => {
+                    if (payload.agent !== agent)
+                        return next();
+                    if (combined.aborted) {
+                        agent.cancel({ kind: "parent" });
+                        return { kind: "reject" };
+                    }
+                    if (++steps > input.max_steps) {
+                        limited = true;
+                        agent.cancel({ kind: "hook", reason: "RUNTIME_AGENT_STEP_LIMIT" });
+                        return { kind: "reject" };
+                    }
+                    return next();
+                });
+                childCtx.on("session/event", (session, event) => {
+                    if (session !== agent.session)
+                        return;
+                    if (event.type === "turn/end")
+                        end = event.data.reason;
+                    if (event.type === "request/header") {
+                        const resolved = modelRoute(event.data.header.config);
+                        if (JSON.stringify(trace.requestModels.at(-1)) !==
+                            JSON.stringify(resolved))
+                            trace.requestModels.push(resolved);
+                    }
+                });
+            },
+        });
+        child = handle.agent;
+        onCreated?.(child.id, structuredClone(trace));
+        if (combined.aborted)
+            throw Error("RUNTIME_AGENT_ABORTED");
+        child.followup(createUserMessage({
+            content: [{ type: "text", text: input.prompt }],
+            source: { kind: "user" },
+        }));
+        await child.whenIdle();
+        if (combined.aborted)
+            throw Error("RUNTIME_AGENT_ABORTED");
+        onTrace?.(child.id, structuredClone(trace));
+        if (limited)
+            throw Error("RUNTIME_AGENT_STEP_LIMIT");
+        if (!end || end.kind !== "completed")
+            throw Error("RUNTIME_AGENT_TURN_FAILED");
+        const last = child.session.deriveMessages().at(-1);
+        if (last?.role !== "assistant" ||
+            last.content.some((block) => block.type === "tool-call"))
+            throw Error("RUNTIME_AGENT_OUTPUT_MISSING");
+        const output = last.content
+            .filter((block) => block.type === "text")
+            .map((block) => block.text)
+            .join("");
+        if (input.output_format !== "report" && !output.trim())
+            throw Error("RUNTIME_AGENT_OUTPUT_MISSING");
+        return {
+            sessionId: child.id,
+            output,
+            verification: "not_independently_verified",
+            ...(input.output_format === "report"
+                ? { report: parseWorkerReport(output, input.acceptance_criteria) }
+                : {}),
+            trace: structuredClone(trace),
+        };
+    }
+    catch (error) {
+        if (handle)
+            handle.agent.cancel({ kind: "parent" });
+        if (error instanceof Error && error.message.startsWith("RUNTIME_AGENT_"))
+            throw error;
+        throw Error(combined.aborted
+            ? "RUNTIME_AGENT_ABORTED"
+            : "RUNTIME_AGENT_EXECUTION_FAILED", { cause: error });
+    }
+    finally {
+        combined.removeEventListener("abort", onAbort);
+        if (handle)
+            await handle.dispose();
+    }
+}

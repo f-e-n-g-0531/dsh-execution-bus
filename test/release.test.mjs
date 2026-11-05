@@ -36,6 +36,16 @@ test("package whitelist rejects missing exports and sensitive additions", () => 
     "dist/presentation.d.ts",
     "dist/test-mode.js",
     "dist/test-mode.d.ts",
+    "dist/runtime/agent.js",
+    "dist/runtime/agent.d.ts",
+    "dist/runtime/agent-report.js",
+    "dist/runtime/agent-report.d.ts",
+    "dist/runtime/agent-trace.js",
+    "dist/runtime/agent-trace.d.ts",
+    "dist/runtime/worker-quota.js",
+    "dist/runtime/worker-quota.d.ts",
+    "dist/runtime/retry.js",
+    "dist/runtime/retry.d.ts",
     "dist/runtime/plan.js",
     "dist/runtime/plan.d.ts",
     "dist/runtime/store.js",
@@ -65,7 +75,19 @@ test("package whitelist rejects missing exports and sensitive additions", () => 
     files: required.map((path) => ({ path, size: 1 })),
   };
   assert.equal(verifyReport(report, pkg), required.length);
-  assert.throws(() => verifyReport({ ...report, files: report.files.filter(f => f.path !== "docs/RESEARCH-READINESS.md") }, pkg), /Missing packed file/);
+  assert.throws(
+    () =>
+      verifyReport(
+        {
+          ...report,
+          files: report.files.filter(
+            (f) => f.path !== "docs/RESEARCH-READINESS.md",
+          ),
+        },
+        pkg,
+      ),
+    /Missing packed file/,
+  );
   for (const name of Object.keys(pkg.peerDependencies).filter((name) =>
     name.startsWith("@deepseek-ai/dsh-"),
   )) {

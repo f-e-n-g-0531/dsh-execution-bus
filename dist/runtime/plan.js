@@ -1,4 +1,5 @@
 import { ERRORS } from "../error-codes.js";
+import { parseAgentInput } from "./agent.js";
 /** 声明式运行时只允许调用这些宿主工具；新增工具需同时更新幂等性判断。 */
 export const RUNTIME_TOOLS = Object.freeze([
     "read",
@@ -7,6 +8,7 @@ export const RUNTIME_TOOLS = Object.freeze([
     "edit",
     "write",
     "pwsh",
+    "agent",
 ]);
 export const IDEMPOTENT_TOOLS = new Set([
     "read",
@@ -24,7 +26,13 @@ export const RUNTIME_LIMITS = Object.freeze({
     goalChars: 500,
     resultBytes: 64 * 1024,
 });
-const PLAN_KEYS = new Set(["goal", "steps", "concurrency"]);
+const PLAN_KEYS = new Set([
+    "goal",
+    "task_id",
+    "previous_run_id",
+    "steps",
+    "concurrency",
+]);
 const STEP_KEYS = new Set([
     "id",
     "tool",
@@ -64,10 +72,19 @@ export function parsePlan(raw) {
         throw Error(ERRORS.PLAN_TOO_LARGE);
     const goal = raw.goal;
     if (goal !== undefined) {
-        if (typeof goal !== "string" ||
-            goal.length > RUNTIME_LIMITS.goalChars)
+        if (typeof goal !== "string" || goal.length > RUNTIME_LIMITS.goalChars)
             invalid();
     }
+    const taskId = raw.task_id;
+    const previousRunId = raw.previous_run_id;
+    if (taskId !== undefined &&
+        (typeof taskId !== "string" || !ID_PATTERN.test(taskId)))
+        invalid();
+    if (previousRunId !== undefined &&
+        (taskId === undefined ||
+            typeof previousRunId !== "string" ||
+            !/^run-[0-9a-z-]{8,80}$/.test(previousRunId)))
+        invalid();
     const concurrency = raw.concurrency ?? 2;
     if (typeof concurrency !== "number" ||
         !Number.isSafeInteger(concurrency) ||
@@ -97,6 +114,10 @@ export function parsePlan(raw) {
     assertAcyclic(steps);
     return {
         ...(goal === undefined ? {} : { goal: goal }),
+        ...(taskId === undefined ? {} : { taskId: taskId }),
+        ...(previousRunId === undefined
+            ? {}
+            : { previousRunId: previousRunId }),
         steps,
         concurrency,
     };
@@ -149,7 +170,9 @@ function parseStep(value) {
     return {
         id,
         tool: tool,
-        input: structuredClone(value.input),
+        input: tool === "agent"
+            ? { ...parseAgentInput(value.input) }
+            : structuredClone(value.input),
         dependsOn: deps,
         retry,
         timeoutMs,

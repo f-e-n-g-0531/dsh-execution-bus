@@ -1,8 +1,8 @@
 import { scopeOf } from "@deepseek-ai/dsh-scope";
-import { apply as applyRuntime } from "./plugin.js";
+import { apply as applyRuntime, inject as runtimeInject } from "./plugin.js";
 import { PRODUCT, RUNTIME_INSTRUCTIONS } from "./product.js";
 export const name = PRODUCT.modePluginName;
-export const inject = ["tools", "systemPrompt"];
+export const inject = [...runtimeInject];
 /** Additive preset row: presentation/tool inventory/authority stay with the host PTC composition. */
 export function apply(ctx) {
     if (scopeOf(ctx) === undefined)

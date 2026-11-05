@@ -54,7 +54,7 @@ export function derivePreset(content) {
         id: PRESET_ID,
         name: PRODUCT.name,
         order: 20,
-        description: "继承宿主 PTC 工具组合，叠加声明式运行时（runtime_*）：DAG 计划、并行/重试/超时、落盘与恢复。普通任务使用原工具，授权和沙箱由宿主管理；不保证 exactly-once。",
+        description: "PTC 多 Agent 编排（runtime_*）：Lead 拆分任务，独立只读 Worker 按 DAG 并行，传递结果、限制步数、落盘和取消清理；Lead 负责修改与验收。沿用当前预设，授权和沙箱由宿主管理，不保证 exactly-once。",
         plugins: [
             ...rows,
             {

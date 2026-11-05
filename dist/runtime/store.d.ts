@@ -1,4 +1,5 @@
 import type { Plan } from "./plan.js";
+import type { WorkerTrace } from "./agent-trace.js";
 export type RunState = "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
 export type StepState = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "unknown";
 export interface StepRecord {
@@ -6,6 +7,8 @@ export interface StepRecord {
     tool: string;
     state: StepState;
     attempts: number;
+    childSessionId?: string;
+    workerTrace?: WorkerTrace;
     startedAt?: number;
     finishedAt?: number;
     error?: string;

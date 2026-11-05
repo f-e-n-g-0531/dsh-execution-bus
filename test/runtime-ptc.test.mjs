@@ -510,7 +510,7 @@ test(
 );
 
 test(
-  "PTC real host read failure retains retry counts and blocks dependent mutation",
+  "PTC deterministic missing-file error is not retried and blocks dependent mutation",
   { timeout: 20000 },
   async () => {
     const f = await fixture();
@@ -534,12 +534,12 @@ test(
         },
       });
       assert.equal(run.state, "failed");
-      assert.equal(run.steps[0].attempts, 2);
+      assert.equal(run.steps[0].attempts, 1);
       assert.equal(run.steps[0].error, "RUNTIME_STEP_FAILED");
       assert.equal(run.steps[1].attempts, 0);
       assert.equal(
         f.executions.filter((entry) => entry.name === "read").length,
-        2,
+        1,
       );
       assert.equal(existsSync(path.join(f.dir, "never.txt")), false);
     } finally {

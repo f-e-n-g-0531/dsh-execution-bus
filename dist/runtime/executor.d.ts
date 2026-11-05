@@ -1,7 +1,8 @@
 import type { Plan } from "./plan.js";
 import type { RunRecord } from "./store.js";
 import type { RunStore } from "./store.js";
-export type Invoke = (tool: string, input: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>;
+import type { WorkerTrace } from "./agent-trace.js";
+export type Invoke = (tool: string, input: Record<string, unknown>, signal: AbortSignal, onCreated?: (sessionId: string, trace?: WorkerTrace) => void) => Promise<unknown>;
 /** 按批次 DAG 执行；每次调用前及完成/重试时落盘，存储故障必须停止调度。 */
 export declare class RuntimeExecutor {
     private readonly store;
@@ -19,6 +20,7 @@ export declare class RuntimeExecutor {
     private terminal;
     private spec;
     private runStep;
+    private stepInput;
     private attempt;
     private now;
     private checkpoint;

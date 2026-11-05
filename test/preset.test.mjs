@@ -6,6 +6,7 @@ import { parse } from "yaml";
 import { load } from "js-yaml";
 import { entryListSchema } from "@deepseek-ai/cordis-plugin-include";
 import { Context, Service } from "@deepseek-ai/cordis";
+import { AgentRegistry } from "@deepseek-ai/dsh-agent";
 import { Loader } from "@deepseek-ai/cordis-plugin-loader";
 import { AgentPresetRegistry } from "@deepseek-ai/dsh-agent-preset-registry";
 import { SessionProjectionRegistry } from "@deepseek-ai/dsh-session-projection";
@@ -50,6 +51,7 @@ test(
   async () => {
     const ctx = new Context();
     new SystemPrompt(ctx, {});
+    new AgentRegistry(ctx);
     new ToolRuntime(ctx, { mode: "native" });
     new SessionProjectionRegistry(ctx);
     ctx.provide("workingDirectory");

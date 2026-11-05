@@ -16,6 +16,8 @@ import path from "node:path";
 import { ERRORS } from "../error-codes.js";
 import { parsePlan, RUNTIME_LIMITS } from "./plan.js";
 import type { Plan } from "./plan.js";
+import { validWorkerTrace } from "./agent-trace.js";
+import type { WorkerTrace } from "./agent-trace.js";
 
 export type RunState =
   | "running"
@@ -36,6 +38,8 @@ export interface StepRecord {
   tool: string;
   state: StepState;
   attempts: number;
+  childSessionId?: string;
+  workerTrace?: WorkerTrace;
   startedAt?: number;
   finishedAt?: number;
   error?: string;
@@ -156,7 +160,13 @@ const RUN_KEYS = new Set([
   "finishedAt",
   "error",
 ]);
-const PLAN_KEYS = new Set(["goal", "steps", "concurrency"]);
+const PLAN_KEYS = new Set([
+  "goal",
+  "taskId",
+  "previousRunId",
+  "steps",
+  "concurrency",
+]);
 const PLAN_STEP_KEYS = new Set([
   "id",
   "tool",
@@ -170,6 +180,8 @@ const STEP_KEYS = new Set([
   "tool",
   "state",
   "attempts",
+  "childSessionId",
+  "workerTrace",
   "startedAt",
   "finishedAt",
   "error",
@@ -264,7 +276,23 @@ function validRun(value: unknown, runId: string): value is RunRecord {
     rawSteps.push({
       id: step.id,
       tool: step.tool,
-      input: step.input,
+      input:
+        step.tool === "agent" && object(step.input)
+          ? {
+              ...Object.fromEntries(
+                Object.entries(step.input).filter(
+                  ([key, value]) =>
+                    !(key === "access" && value === "read") &&
+                    !(
+                      key === "write_scopes" &&
+                      Array.isArray(value) &&
+                      value.length === 0
+                    ) &&
+                    !(key === "max_steps" && value === 12),
+                ),
+              ),
+            }
+          : step.input,
       ...(step.dependsOn.length === 0 ? {} : { depends_on: step.dependsOn }),
       ...(step.retry === 0 ? {} : { retry: step.retry }),
       ...(step.timeoutMs === 120000 ? {} : { timeout_ms: step.timeoutMs }),
@@ -274,6 +302,10 @@ function validRun(value: unknown, runId: string): value is RunRecord {
   try {
     parsed = parsePlan({
       ...(plan.goal === undefined ? {} : { goal: plan.goal }),
+      ...(plan.taskId === undefined ? {} : { task_id: plan.taskId }),
+      ...(plan.previousRunId === undefined
+        ? {}
+        : { previous_run_id: plan.previousRunId }),
       steps: rawSteps,
       ...(plan.concurrency === 2 ? {} : { concurrency: plan.concurrency }),
     });
@@ -282,6 +314,9 @@ function validRun(value: unknown, runId: string): value is RunRecord {
   }
   const storedSteps = plan.steps;
   if (
+    parsed.taskId !== plan.taskId ||
+    parsed.previousRunId !== plan.previousRunId ||
+    plan.previousRunId === value.runId ||
     parsed.concurrency !== plan.concurrency ||
     parsed.steps.some((spec, index) => {
       const stored = storedSteps[index];
@@ -318,7 +353,17 @@ function validRun(value: unknown, runId: string): value is RunRecord {
       spec.tool !== step.tool ||
       !STEP_STATES.has(step.state as string) ||
       !timestamp(step.attempts) ||
-      !optionalText(step.error)
+      !optionalText(step.error) ||
+      (step.workerTrace !== undefined &&
+        (step.tool !== "agent" ||
+          !step.childSessionId ||
+          !validWorkerTrace(step.workerTrace))) ||
+      (step.childSessionId !== undefined &&
+        (step.tool !== "agent" ||
+          typeof step.childSessionId !== "string" ||
+          !step.childSessionId.trim() ||
+          step.childSessionId.length > 1024 ||
+          step.attempts === 0))
     )
       return false;
     if (step.startedAt !== undefined && !withinRun(step.startedAt))
@@ -497,9 +542,11 @@ export class RunStore {
       // A successful rename consumed our unique temporary file. Only failures
       // need cleanup; probing the missing old path adds I/O to every checkpoint.
       created = false;
-    } catch {
+    } catch (cause) {
       this.count("writeFailures");
-      throw Error(ERRORS.RUNTIME_STORAGE_FAILED);
+      // Retain the syscall/code for local diagnostics; summaries still expose
+      // only the stable runtime error code, never the underlying path.
+      throw Error(ERRORS.RUNTIME_STORAGE_FAILED, { cause });
     } finally {
       if (fd !== undefined) {
         try {

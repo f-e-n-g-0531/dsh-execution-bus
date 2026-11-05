@@ -1,5 +1,5 @@
 /** 声明式运行时只允许调用这些宿主工具；新增工具需同时更新幂等性判断。 */
-export declare const RUNTIME_TOOLS: readonly ["read", "glob", "grep", "edit", "write", "pwsh"];
+export declare const RUNTIME_TOOLS: readonly ["read", "glob", "grep", "edit", "write", "pwsh", "agent"];
 export type RuntimeTool = (typeof RUNTIME_TOOLS)[number];
 export declare const IDEMPOTENT_TOOLS: ReadonlySet<string>;
 export interface PlanStep {
@@ -13,6 +13,9 @@ export interface PlanStep {
 }
 export interface Plan {
     goal?: string;
+    /** Display/history linkage only; never authorization or result reuse. */
+    taskId?: string;
+    previousRunId?: string;
     steps: PlanStep[];
     concurrency: number;
 }

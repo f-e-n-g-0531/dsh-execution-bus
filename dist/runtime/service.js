@@ -1,15 +1,26 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { ToolExecutionPipeline } from "@deepseek-ai/dsh-tools/pipeline";
 import { ERRORS } from "../error-codes.js";
 import { runProgress, runGuidance } from "../presentation.js";
 import { RuntimeExecutor } from "./executor.js";
 import { parsePlan } from "./plan.js";
+import { executeAgent } from "./agent.js";
+import { WorkerQuota } from "./worker-quota.js";
 import { RunStore } from "./store.js";
 const MAX_ACTIVE_RUNS = 8;
 const PROCESS_ID = randomUUID();
 const RUN_KEYS = new Set(["plan", "async"]);
 const RUN_ID_KEYS = new Set(["runId"]);
+const RESULT_KEYS = new Set(["runId", "stepId", "offset", "limit", "hash"]);
+// Process-local settlement knowledge only; never infer cleanup after a restart.
+const settlement = new Map();
+function observeSettlement(runId, done) {
+    settlement.delete(runId);
+    settlement.set(runId, done);
+    while (settlement.size > 1024)
+        settlement.delete(settlement.keys().next().value);
+}
 const STATUS_KEYS = new Set(["runId", "limit", "offset"]);
 // Shared only inside this module/process. A new Agent scope is not a process restart.
 const managers = new Map();
@@ -18,11 +29,18 @@ function summary(run) {
         runId: run.runId,
         state: run.state,
         ...(run.goal === undefined ? {} : { goal: run.goal }),
+        ...(run.plan.taskId === undefined ? {} : { taskId: run.plan.taskId }),
+        ...(run.plan.previousRunId === undefined
+            ? {}
+            : { previousRunId: run.plan.previousRunId }),
         ...(run.error === undefined ? {} : { error: run.error }),
         createdAt: run.createdAt,
         updatedAt: run.updatedAt,
         ...(run.finishedAt === undefined ? {} : { finishedAt: run.finishedAt }),
         durationMs: Math.max(0, (run.finishedAt ?? Date.now()) - run.createdAt),
+        ...(settlement.has(run.runId)
+            ? { executionSettled: settlement.get(run.runId) }
+            : {}),
         progress: runProgress(run),
         guidance: runGuidance(run),
         steps: run.steps.map((step) => ({
@@ -30,6 +48,12 @@ function summary(run) {
             tool: step.tool,
             state: step.state,
             attempts: step.attempts,
+            ...(step.childSessionId === undefined
+                ? {}
+                : { childSessionId: step.childSessionId }),
+            ...(step.workerTrace === undefined
+                ? {}
+                : { workerTrace: structuredClone(step.workerTrace) }),
             ...(step.error === undefined ? {} : { error: step.error }),
         })),
     };
@@ -69,17 +93,20 @@ function validateExecution(plan) {
 /** Scope facade over a process-wide, root-keyed execution owner. */
 export class RuntimeService {
     ctx;
+    delegationPolicy;
     store;
     key;
     manager;
     closed = false;
     disposal;
-    constructor(ctx, store) {
+    constructor(ctx, store, delegationPolicy) {
         this.ctx = ctx;
+        this.delegationPolicy = delegationPolicy;
         this.store = store ?? new RunStore();
         const root = realpathSync(this.store.root);
         this.key = process.platform === "win32" ? root.toLowerCase() : root;
         const manager = managers.get(this.key) ?? {
+            workerQuota: new WorkerQuota(),
             active: new Map(),
             failures: new Map(),
             references: 0,
@@ -120,6 +147,21 @@ export class RuntimeService {
         if (input.async !== undefined && typeof input.async !== "boolean")
             throw Error(ERRORS.INVALID_PLAN);
         validateExecution(plan);
+        // Step admission closes when the outer call returns. Never detach a worker
+        // with a dead parent toolSet or synthesize a broader replacement admission.
+        if ((background || input.async === true) &&
+            plan.steps.some((step) => step.tool === "agent"))
+            throw Error("RUNTIME_AGENT_ASYNC_UNSUPPORTED");
+        if (plan.previousRunId !== undefined) {
+            const previous = this.owned(plan.previousRunId, sessionId);
+            if (previous.plan.taskId !== plan.taskId ||
+                !["succeeded", "failed", "cancelled"].includes(previous.state) ||
+                this.manager.active.has(previous.runId))
+                throw Error("RUNTIME_TASK_LINK_INVALID");
+        }
+        if (plan.steps.some((step) => step.tool === "agent") &&
+            typeof this.delegationPolicy?.checkParentPolicy !== "function")
+            throw Error("RUNTIME_AGENT_POLICY_UNSUPPORTED");
         this.admit(exec);
         const executor = this.executor(exec);
         const run = executor.createRun(sessionId, plan, {
@@ -158,6 +200,12 @@ export class RuntimeService {
                     runId: run.runId,
                     state: run.state,
                     ...(run.goal === undefined ? {} : { goal: run.goal }),
+                    ...(run.plan.taskId === undefined
+                        ? {}
+                        : { taskId: run.plan.taskId }),
+                    ...(run.plan.previousRunId === undefined
+                        ? {}
+                        : { previousRunId: run.plan.previousRunId }),
                     ...(run.error === undefined ? {} : { error: run.error }),
                     updatedAt: run.updatedAt,
                     stepCount: run.steps.length,
@@ -173,8 +221,48 @@ export class RuntimeService {
     }
     result(raw, exec) {
         this.ensureOpen();
-        const input = plain(raw, RUN_ID_KEYS);
+        const input = plain(raw, RESULT_KEYS);
         const run = this.owned(input.runId, this.sessionId(exec));
+        if (input.stepId !== undefined) {
+            if (typeof input.stepId !== "string" ||
+                !run.steps.some((s) => s.id === input.stepId))
+                throw Error(ERRORS.RUNTIME_NOT_FOUND);
+            const stored = Object.hasOwn(run.results, input.stepId)
+                ? run.results[input.stepId]
+                : undefined;
+            if (!stored || stored.truncated || !Object.hasOwn(stored, "value"))
+                throw Error("RUNTIME_RESULT_UNAVAILABLE");
+            const text = JSON.stringify(stored.value);
+            const hash = createHash("sha256").update(text).digest("hex");
+            if (input.hash !== undefined && input.hash !== hash)
+                throw Error("RUNTIME_RESULT_CHANGED");
+            // Code-point offsets never split surrogate pairs. Each page is <= 16KiB UTF-8.
+            const chars = Array.from(text);
+            const offset = pageNumber(input.offset, 0, chars.length);
+            const limit = pageNumber(input.limit, 2048, 4096);
+            if (!limit)
+                throw Error(ERRORS.INVALID_PLAN);
+            const end = Math.min(chars.length, offset + limit);
+            return {
+                ...summary(run),
+                results: {},
+                finished: run.state !== "running" && run.state !== "interrupted",
+                page: {
+                    stepId: input.stepId,
+                    encoding: "json",
+                    unit: "unicode_code_point",
+                    hash,
+                    offset,
+                    total: chars.length,
+                    text: chars.slice(offset, end).join(""),
+                    ...(end < chars.length ? { nextOffset: end } : {}),
+                },
+            };
+        }
+        if (input.offset !== undefined ||
+            input.limit !== undefined ||
+            input.hash !== undefined)
+            throw Error(ERRORS.INVALID_PLAN);
         return {
             ...summary(run),
             results: structuredClone(run.results),
@@ -225,6 +313,9 @@ export class RuntimeService {
         if (run.state !== "interrupted" || this.manager.active.has(run.runId))
             throw Error(ERRORS.RUNTIME_INVALID_STATE);
         validateExecution(run.plan);
+        if (run.plan.steps.some((step) => step.tool === "agent") &&
+            typeof this.delegationPolicy?.checkParentPolicy !== "function")
+            throw Error("RUNTIME_AGENT_POLICY_UNSUPPORTED");
         this.admit(exec);
         return summary(await this.start(run, this.executor(exec), exec, true, false));
     }
@@ -244,6 +335,7 @@ export class RuntimeService {
         };
         // Register before arbitrary host code, including synchronous re-entrancy.
         this.manager.active.set(run.runId, entry);
+        observeSettlement(run.runId, false);
         const promise = Promise.resolve()
             .then(() => {
             if (exec.signal?.aborted && !detached)
@@ -275,6 +367,8 @@ export class RuntimeService {
             throw error;
         })
             .finally(() => {
+            // Eviction means unknown, never a fabricated cleanup success.
+            observeSettlement(run.runId, true);
             exec.signal?.removeEventListener("abort", onAbort);
             if (this.manager.active.get(run.runId) === entry)
                 this.manager.active.delete(run.runId);
@@ -333,7 +427,23 @@ export class RuntimeService {
         return run;
     }
     executor(exec) {
-        const invoke = async (tool, input, signal) => {
+        const invoke = async (tool, input, signal, onCreated) => {
+            if (tool === "agent") {
+                // Reserve before any host creation code, including synchronous re-entry.
+                // Never queue or detach workers behind the parent admission lifetime.
+                const release = this.manager.workerQuota.reserve();
+                try {
+                    const { trace: _trace, ...result } = await executeAgent(this.ctx, exec, input, signal, onCreated, onCreated, this.delegationPolicy);
+                    // Audit metadata is already checkpointed in StepRecord. Keep it outside
+                    // the legacy result quota and dependency prompt to preserve text budgets.
+                    return result;
+                }
+                finally {
+                    // executeAgent settles only after its awaited handle.dispose(). Neither
+                    // abort nor RuntimeService.dispose may release this reservation early.
+                    release();
+                }
+            }
             const pipeline = new ToolExecutionPipeline(this.ctx);
             const prepared = await pipeline.prepare({
                 name: tool,
@@ -351,8 +461,15 @@ export class RuntimeService {
                 ? await pipeline.dispatch(prepared.exec)
                 : prepared;
             const result = await pipeline.complete(prepared.exec, outcome);
-            if (result.isError)
-                throw Error(ERRORS.RUNTIME_STEP_FAILED);
+            if (result.isError) {
+                // Canonical host error codes only; never inspect content/message or tool values.
+                // rc.1 may omit raw status/errno, which cannot safely be reconstructed.
+                const error = Error(ERRORS.RUNTIME_STEP_FAILED);
+                const code = result.error?.info?.code;
+                if (typeof code === "string")
+                    Object.assign(error, { code });
+                throw error;
+            }
             if (tool === "pwsh") {
                 const value = result.value;
                 if (value?.kind === "background" || value?.kind === "promoted") {

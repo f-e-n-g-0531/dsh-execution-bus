@@ -20,6 +20,13 @@ export function runGuidance(run) {
     const guidance = [];
     let unsafeResume = run.steps.some((step) => step.state === "failed");
     for (const step of run.steps) {
+        if (step.tool === "agent" && step.state === "succeeded") {
+            guidance.push({
+                code: "agent_requires_verification",
+                stepId: step.id,
+                message: "Worker 已返回，不代表任务独立验收通过。Lead 必须检查结果与证据；依赖成功仅表示执行完成。",
+            });
+        }
         const uncertain = step.state === "unknown" ||
             (run.state === "interrupted" && step.state === "running");
         const unsafe = !IDEMPOTENT_TOOLS.has(step.tool) &&
@@ -163,15 +170,47 @@ const guidanceSchema = {
         additionalProperties: false,
     },
 };
+const workerModelSchema = {
+    type: "object",
+    properties: { provider: string, model: string, reasoningEffort: string },
+    required: ["provider", "model"],
+    additionalProperties: false,
+};
+const workerTraceSchema = {
+    type: "object",
+    properties: {
+        promptVersion: string,
+        promptHash: string,
+        taskPromptHash: string,
+        outputFormat: { type: "string", enum: ["text", "report"] },
+        selectedModel: workerModelSchema,
+        requestModels: { type: "array", items: workerModelSchema },
+    },
+    required: [
+        "promptVersion",
+        "promptHash",
+        "taskPromptHash",
+        "outputFormat",
+        "selectedModel",
+        "requestModels",
+    ],
+    additionalProperties: false,
+};
 const summaryProperties = {
     runId: string,
     state: runState,
     goal: string,
+    taskId: string,
+    previousRunId: string,
     error: string,
     createdAt: integer,
     updatedAt: integer,
     finishedAt: integer,
     durationMs: integer,
+    executionSettled: {
+        type: "boolean",
+        description: "Process-local scheduler/owned Worker cleanup settlement only; not proof ordinary host tools stopped.",
+    },
     progress: progressSchema,
     guidance: guidanceSchema,
     steps: {
@@ -183,6 +222,8 @@ const summaryProperties = {
                 tool: string,
                 state: stepState,
                 attempts: integer,
+                childSessionId: string,
+                workerTrace: workerTraceSchema,
                 error: string,
             },
             required: ["id", "tool", "state", "attempts"],
@@ -222,6 +263,8 @@ const listSchema = {
                     runId: string,
                     state: runState,
                     goal: string,
+                    taskId: string,
+                    previousRunId: string,
                     error: string,
                     updatedAt: integer,
                     stepCount: integer,
@@ -260,6 +303,29 @@ export const RUNTIME_OUTPUT_SCHEMAS = {
         type: "object",
         properties: {
             ...summaryProperties,
+            page: {
+                type: "object",
+                properties: {
+                    stepId: string,
+                    encoding: { type: "string", const: "json" },
+                    unit: { type: "string", const: "unicode_code_point" },
+                    hash: string,
+                    offset: integer,
+                    total: integer,
+                    text: string,
+                    nextOffset: integer,
+                },
+                required: [
+                    "stepId",
+                    "encoding",
+                    "unit",
+                    "hash",
+                    "offset",
+                    "total",
+                    "text",
+                ],
+                additionalProperties: false,
+            },
             results: {
                 type: "object",
                 description: "Step IDs map to StoredResult {value?: JSON, truncated?: true, bytes?: integer}; truncated values are not retained.",
@@ -304,6 +370,19 @@ function runText(value) {
     if (!run || typeof run.runId !== "string" || typeof run.state !== "string")
         return "";
     const lines = [run.runId + " · " + run.state, progressText(run.progress)];
+    if (typeof run.executionSettled === "boolean")
+        lines.push(run.executionSettled
+            ? "本进程调度/Worker 清理已收束；不证明普通工具退出。"
+            : "本进程运行尚未收束；终态后可能仍在清理。");
+    const page = object(run.page);
+    if (page)
+        lines.push("结果分页：" +
+            page.stepId +
+            " · 偏移 " +
+            page.offset +
+            "/" +
+            page.total +
+            "（JSON 片段，完整拼接后再解析）");
     if (typeof run.goal === "string")
         lines.push("目标：" + run.goal);
     if (typeof run.error === "string")
