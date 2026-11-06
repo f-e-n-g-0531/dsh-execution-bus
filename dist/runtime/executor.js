@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { clearRetryBackoff, setRetryBackoff } from "./waiting.js";
 import { classifyRetryError, MAX_RETRIES, retryDelayMs, waitForRetry, } from "./retry.js";
 import { ERRORS } from "../error-codes.js";
 import { IDEMPOTENT_TOOLS, RUNTIME_LIMITS } from "./plan.js";
@@ -249,11 +250,12 @@ export class RuntimeExecutor {
                 }
                 // A timed-out read may still be executing in a non-cooperative host.
                 // Do not overlap a retry, even for a nominally idempotent tool.
+                let classification;
                 const retry = outcome.kind === "failure" &&
                     !background &&
                     !timedOut &&
                     !uncertain &&
-                    classifyRetryError(outcome.error).retryable &&
+                    (classification = classifyRetryError(outcome.error)).retryable &&
                     attempt < attemptsAllowed;
                 record.state = retry
                     ? "pending"
@@ -264,7 +266,19 @@ export class RuntimeExecutor {
                 record.finishedAt = retry ? undefined : this.now(run);
                 this.checkpoint(run);
                 if (retry) {
-                    await waitForRetry(retryDelayMs(attempt), execution.controller.signal);
+                    const delay = retryDelayMs(attempt);
+                    const waitingSince = Date.now();
+                    setRetryBackoff(run, record.id, {
+                        waitingSince,
+                        nextRetryAt: waitingSince + delay,
+                        retryCategory: classification.category,
+                    });
+                    try {
+                        await waitForRetry(delay, execution.controller.signal);
+                    }
+                    finally {
+                        clearRetryBackoff(run, record.id);
+                    }
                     continue;
                 }
                 return;

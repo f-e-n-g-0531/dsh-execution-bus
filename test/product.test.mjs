@@ -31,8 +31,15 @@ test("formal product entry and compatibility export share implementation and ide
 
 test("product schema, descriptions and prompt stay on one runtime contract", async () => {
   assert.equal(PRODUCT.presetId, "xiao-he-runtime");
-  assert.equal(RUNTIME_RUN_PARAMETERS.properties.plan.properties.steps.maxItems, 32);
-  assert.equal(RUNTIME_RUN_PARAMETERS.properties.plan.properties.steps.items.properties.retry.maximum, 3);
+  assert.equal(
+    RUNTIME_RUN_PARAMETERS.properties.plan.properties.steps.maxItems,
+    32,
+  );
+  assert.equal(
+    RUNTIME_RUN_PARAMETERS.properties.plan.properties.steps.items.properties
+      .retry.maximum,
+    3,
+  );
   assert.match(RUNTIME_RUN_DESCRIPTION, /DAG/);
   assert.match(RUNTIME_INSTRUCTIONS, /runtime_run/);
   const dir = mkdtempSync(path.join(os.tmpdir(), "xiaohe-product-"));
@@ -50,10 +57,15 @@ test("product schema, descriptions and prompt stay on one runtime contract", asy
         },
       },
     });
-    assert.deepEqual(
-      tools.map((tool) => tool.name).sort(),
-      ["runtime_cancel", "runtime_result", "runtime_resume", "runtime_run", "runtime_status"],
-    );
+    assert.deepEqual(tools.map((tool) => tool.name).sort(), [
+      "runtime_cancel",
+      "runtime_capabilities",
+      "runtime_result",
+      "runtime_resume",
+      "runtime_review",
+      "runtime_run",
+      "runtime_status",
+    ]);
     for (const tool of tools) assert.equal(typeof tool.execute, "function");
   } finally {
     for (const dispose of disposers) await dispose();

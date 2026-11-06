@@ -1,4 +1,5 @@
 import type { Plan } from "./plan.js";
+import type { OwnerReviewRecord } from "./review.js";
 import type { WorkerTrace } from "./agent-trace.js";
 export type RunState = "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
 export type StepState = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "unknown";
@@ -29,6 +30,7 @@ export interface RunRecord {
     state: RunState;
     steps: StepRecord[];
     results: Record<string, StoredResult>;
+    ownerReviews?: OwnerReviewRecord[];
     createdAt: number;
     updatedAt: number;
     finishedAt?: number;
@@ -45,6 +47,13 @@ export declare class RunStore {
     private count;
     pathFor(runId: string): string;
     save(run: RunRecord): void;
+    /** Review writers serialize across processes; a crash leaves a fail-closed lock. */
+    recordReview(runId: string, ownerSessionId: string, input: {
+        snapshotHash: string;
+        expectedRevision: number;
+        disposition: "accepted" | "needs_work";
+        reason: string;
+    }): RunRecord;
     load(runId: string): RunRecord | undefined;
     private readRecord;
     private scan;

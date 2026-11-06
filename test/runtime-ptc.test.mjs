@@ -308,7 +308,7 @@ for (const mode of ["native", "ptc"]) {
           ],
         };
         const run = await f.runtime("runtime_run", { plan });
-        assert.equal(run.state, "succeeded");
+        assert.equal(run.state, "succeeded", JSON.stringify(run));
         assert.deepEqual(
           run.steps.map((step) => step.state),
           Array(4).fill("succeeded"),

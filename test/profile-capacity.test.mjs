@@ -128,7 +128,8 @@ test("prune and startup removal counts exclude setup and final cleanup", async (
   for (const s of r.samples.filter((s) =>
     ["prune", "startup"].includes(s.operation),
   )) {
-    assert.equal(s.calls.rmSync.calls, 5);
+    // Five history records plus each per-run review/remove lock cleanup.
+    assert.equal(s.calls.rmSync.calls, 10);
     assert.equal(s.remaining, 100);
   }
 });

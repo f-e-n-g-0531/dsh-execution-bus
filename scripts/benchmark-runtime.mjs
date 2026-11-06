@@ -114,6 +114,7 @@ export const RUNTIME_ARTIFACT_FILES = Object.freeze([
   "runtime/executor.js", "runtime/store.js", "runtime/plan.js", "runtime/service.js",
   "error-codes.js", "presentation.js", "runtime/retry.js", "runtime/agent.js",
   "runtime/agent-report.js", "runtime/agent-trace.js", "runtime/worker-quota.js",
+  "runtime/attention.js", "runtime/insights.js", "runtime/waiting.js", "runtime/review.js",
 ]);
 export function runtimeArtifactDigest(dist, read = readFileSync) {
   const root = dist instanceof URL ? dist : pathToFileURL(path.resolve(dist) + path.sep);

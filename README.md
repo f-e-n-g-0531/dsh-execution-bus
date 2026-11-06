@@ -1,10 +1,12 @@
 # 萧何 / Xiao He
 
-**PTC 多 Agent 编排：Lead 提交 DAG，独立只读 Worker 分工，运行时负责调度、落盘与恢复，Lead 负责修改与验收。**
+**声明式工具 DAG：运行时负责调度、落盘与恢复，Lead 负责修改与验收。独立只读 Worker 目前仅限可信适配器集成，标准 rc.1 插件入口不可用。**
 
 当前 mode 从 PTC 原地派生，Lead 仍用 PTC；仓库 dsh-execution-bus、npm 包名、预设 ID `xiao-he-runtime` 保持不变，不新增 team 模式。多 Agent 编排能力随 1.4.0 发布；标准插件入口对含 `agent` 计划的拒绝边界不变，见下方安全兼容边界。历史 0.x 版本说明保留当时名称。
 
-DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.4.1**
+DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.5.0**
+
+1.5.0 新增能力查询、恢复摘要、待复核结果汇总、待处理事项、等待原因展示与 owner 复核处置记录；发布不自动安装或重启日常 DSH，不代表日常 DSH 已加载这些功能。
 
 > 1.0 起产品从“执行总线模式”切换为**声明式运行时**：`runtime_run` 接收 DAG 计划，运行时按依赖并行执行、对只读步骤重试、逐步落盘并支持重启后恢复。旧的 `execution_bus` 工具与 `./core` 导出已移除；0.12.1 是最后一个总线版本，仍可在 npm/git 历史中查看。
 
@@ -30,10 +32,10 @@ DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.4.1**
 本版目标宿主为 **DSH 0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0，DSH peer 精确锁定 0.2.2-rc.1，不推导兼容其他宿主版本。旧版 1.3.3 的宿主目标仍为 0.2.1-rc.5。依赖安全告警及验证边界见[宿主兼容性](<docs/host-compatibility.md>)。
 
 ```text
-npm install --ignore-scripts @feng0531/dsh-execution-bus@1.4.1
+npm install --ignore-scripts @feng0531/dsh-execution-bus@1.5.0
 ```
 
-从源码验证待发布版本时，先用 `npm run pack:candidate` 生成本地 tgz，在隔离配置安装，不替换日常 DSH；正式包可用性以 npm 公开元数据及对应 GitHub Release 为准。
+从源码验证待发布改动时，先用 `npm run pack:candidate` 生成本地 tgz，在隔离配置安装，不替换日常 DSH；正式包可用性以 npm 公开元数据及对应 GitHub Release 为准。
 
 将包加入目标 DSH 配置的 `dsh.profile.bundles`（或使用宿主插件管理器的 bundle 加载），加载后会出现独立预设 **xiao-he-runtime**。普通任务仍用原工具；预设不接管终端、编辑或全局工具，授权与沙箱由宿主管理。发布不会自动安装或重启你的 DSH。
 
@@ -41,9 +43,11 @@ npm install --ignore-scripts @feng0531/dsh-execution-bus@1.4.1
 
 | 工具 | 作用 |
 |---|---|
+| `runtime_capabilities` | `{}` 查询能力说明；不是授权、容量预留或真实模型可用性检查 |
 | `runtime_run` | 提交计划；默认等待完成返回步骤状态；仅不含 Agent 且调用未携带 `exec.toolSet` 的受控宿主计划支持 `async:true` 立即返回 `runId` |
 | `runtime_status` | 无 `runId` 按本会话分页（`limit` 1–100，默认 20；`offset` 0–10000，默认 0）；带 `runId` 返回步骤状态（不含结果） |
 | `runtime_result` | 读取已保存的步骤结果（单步 >64KiB 只返回 `truncated/bytes`） |
+| `runtime_review` | 为完整成功且已收束的运行记录 owner 处置，绑定结果快照与 revision；不是人工或独立验收证明 |
 | `runtime_cancel` | 停止调度、传播取消 |
 | `runtime_resume` | 显式恢复 `interrupted` 运行 |
 
@@ -62,6 +66,19 @@ npm install --ignore-scripts @feng0531/dsh-execution-bus@1.4.1
 ```
 
 允许步骤：`read/glob/grep/edit/write/pwsh/agent`；`retry` 只允许 `read/glob/grep`。计划上限：32 步、64KiB、并发 1–4、超时 1s–600s。
+
+### 能力、恢复与待复核结果
+
+```ts
+const caps = await tools.runtime_capabilities({});
+console.log(caps.ordinaryDag, caps.worker, caps.ordinaryAsync, caps.workerAsync);
+const saved = await tools.runtime_result({ runId }); // 使用已返回的 runId
+console.log(saved.recovery, saved.acceptance);
+```
+
+`ordinaryDag:"supported"` 仍须每次通过宿主准入；仅同时存在可信 `DelegationPolicyAdapter` 和父 `toolSet` 时，`worker` 才为 `conditional`，否则为 `unavailable`，不代表适配器已修复或真实模型可用。普通 DAG 异步仅在无 `toolSet` 时允许，`workerAsync` 始终为 false；不得删除准入集合绕过限制。
+
+单 run 摘要（run/status/result/cancel/resume）新增 `recovery`，区分结果记录确定性、本进程清理观察及建议下一步；`externalWork` 始终为 `unconfirmed`，`cleanup:"settled"` 不证明外部 Job 停止。`runtime_result`（包括分页）另含 `acceptance:{status:"not_reviewed",workers:[...]}`：只汇总 Worker 状态、结果哈希及报告计数，不回显报告自由文本；原始证据仍从保存结果读取。`resultHash` 绑定步骤 value 的 JSON 输出，不是验收；不持久化独立验收记录，不允许 Worker 自授 accepted，Lead 复核仍在上层。无 Worker 时空数组也不证明任务通过。字段与异常判读见[协议](<docs/protocol.md>)和[故障处置](<docs/OPERATIONS.md>)。
 
 ### 结果按需读取
 
@@ -108,5 +125,5 @@ npm run test:install   # 临时目录安装验证
 
 - [声明式运行时设计](<docs/DECLARATIVE-RUNTIME.md>)、[协议](<docs/protocol.md>)、[验证范围](<docs/validation.md>)、[产品结构](<docs/PRODUCT.md>)
 - [运行状态与故障处置](<docs/OPERATIONS.md>)、[验收与对照试验](<docs/FLOW-TEST.md>)、[研发路线](<docs/DEVELOPMENT-PLAN.md>)
-- [1.4.1 发布说明](<docs/releases/1.4.1.md>)、[发布流程](<docs/RELEASING.md>)、[第三方说明](<THIRD_PARTY_NOTICES.md>)
+- [1.5.0 发布说明](<docs/releases/1.5.0.md>)、[1.4.1 发布说明](<docs/releases/1.4.1.md>)、[发布流程](<docs/RELEASING.md>)、[第三方说明](<THIRD_PARTY_NOTICES.md>)
 - 0.x 总线历史与复盘：[复盘](<docs/RETROSPECTIVE.md>)、[整合说明](<docs/INTEGRATION.md>)

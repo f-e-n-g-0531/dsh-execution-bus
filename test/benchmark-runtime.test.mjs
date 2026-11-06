@@ -4,7 +4,7 @@ import * as benchmarkIdentity from "../scripts/benchmark-runtime.mjs";
 test("runtime digest binds all current local dependencies and legacy absence", () => {
   const digest = benchmarkIdentity.runtimeArtifactDigest;
   assert.equal(typeof digest, "function");
-  const optional = ["retry", "agent", "agent-report", "agent-trace", "worker-quota"].map(n => "runtime/" + n + ".js");
+  const optional = ["retry", "agent", "agent-report", "agent-trace", "worker-quota", "attention", "insights", "waiting", "review"].map(n => "runtime/" + n + ".js");
   const required = ["runtime/executor.js", "runtime/store.js", "runtime/plan.js", "runtime/service.js", "error-codes.js", "presentation.js"];
   const files = new Map([...required, ...optional].map(n => [n, Buffer.from(n)]));
   const read = url => {

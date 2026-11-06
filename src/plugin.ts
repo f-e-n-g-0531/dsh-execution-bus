@@ -1,9 +1,13 @@
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
 import {
+  RUNTIME_CAPABILITIES_DESCRIPTION,
+  RUNTIME_CAPABILITIES_PARAMETERS,
   RUNTIME_CANCEL_DESCRIPTION,
   RUNTIME_RESULT_DESCRIPTION,
   RUNTIME_RESULT_PARAMETERS,
+  RUNTIME_REVIEW_DESCRIPTION,
+  RUNTIME_REVIEW_PARAMETERS,
   RUNTIME_RESUME_DESCRIPTION,
   RUNTIME_RUN_DESCRIPTION,
   RUNTIME_RUN_ID_PARAMETERS,
@@ -57,6 +61,18 @@ export function apply(ctx: Context) {
     });
   };
 
+  register(
+    "runtime_capabilities",
+    RUNTIME_CAPABILITIES_DESCRIPTION,
+    RUNTIME_CAPABILITIES_PARAMETERS,
+    (raw, exec) => runtime.capabilities(raw, exec),
+  );
+  register(
+    "runtime_review",
+    RUNTIME_REVIEW_DESCRIPTION,
+    RUNTIME_REVIEW_PARAMETERS,
+    (raw, exec) => runtime.review(raw, exec),
+  );
   register(
     "runtime_run",
     RUNTIME_RUN_DESCRIPTION,

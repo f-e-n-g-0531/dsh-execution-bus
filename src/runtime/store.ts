@@ -18,6 +18,13 @@ import { ERRORS } from "../error-codes.js";
 import { parsePlan, RUNTIME_LIMITS } from "./plan.js";
 import type { Plan } from "./plan.js";
 import { validWorkerTrace } from "./agent-trace.js";
+import {
+  MAX_OWNER_REVIEWS,
+  ownerReview,
+  reviewSnapshot,
+  validOwnerReviews,
+} from "./review.js";
+import type { OwnerReviewRecord } from "./review.js";
 import type { WorkerTrace } from "./agent-trace.js";
 
 export type RunState =
@@ -61,6 +68,7 @@ export interface RunRecord {
   state: RunState;
   steps: StepRecord[];
   results: Record<string, StoredResult>;
+  ownerReviews?: OwnerReviewRecord[];
   createdAt: number;
   updatedAt: number;
   finishedAt?: number;
@@ -162,6 +170,7 @@ const RUN_KEYS = new Set([
   "state",
   "steps",
   "results",
+  "ownerReviews",
   "createdAt",
   "updatedAt",
   "finishedAt",
@@ -254,6 +263,12 @@ function validRun(value: unknown, runId: string): value is RunRecord {
     return false;
   const createdAt = value.createdAt;
   const updatedAt = value.updatedAt;
+  if (
+    value.ownerReviews !== undefined &&
+    (value.state !== "succeeded" ||
+      !validOwnerReviews(value.ownerReviews, createdAt))
+  )
+    return false;
   const withinRun = (time: unknown) =>
     timestamp(time) && time >= createdAt && time <= updatedAt;
   if (value.state === "running") {
@@ -578,6 +593,72 @@ export class RunStore {
     }
   }
 
+  /** Review writers serialize across processes; a crash leaves a fail-closed lock. */
+  recordReview(
+    runId: string,
+    ownerSessionId: string,
+    input: {
+      snapshotHash: string;
+      expectedRevision: number;
+      disposition: "accepted" | "needs_work";
+      reason: string;
+    },
+  ): RunRecord {
+    const target = this.pathFor(runId);
+    const lock = target + ".review-lock";
+    let fd: number;
+    try {
+      fd = openSync(lock, "wx", 0o600);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === "EEXIST")
+        throw Error(ERRORS.RUNTIME_BUSY);
+      throw Error(ERRORS.RUNTIME_STORAGE_FAILED, { cause });
+    }
+    try {
+      const run = this.load(runId);
+      if (!run || run.ownerSessionId !== ownerSessionId)
+        throw Error(ERRORS.RUNTIME_NOT_FOUND);
+      const snapshot = reviewSnapshot(run);
+      if (!snapshot) throw Error(ERRORS.RUNTIME_INVALID_STATE);
+      if (snapshot !== input.snapshotHash)
+        throw Error(ERRORS.RUNTIME_RESULT_CHANGED);
+      const revision = ownerReview(run).revision;
+      if (revision !== input.expectedRevision)
+        throw Error(ERRORS.RUNTIME_RESULT_CHANGED);
+      if (revision >= MAX_OWNER_REVIEWS)
+        throw Error(ERRORS.RUNTIME_INVALID_STATE);
+      const entry: OwnerReviewRecord = {
+        revision: revision + 1,
+        snapshotHash: snapshot,
+        disposition: input.disposition,
+        reason: input.reason,
+        at: Math.max(
+          Date.now(),
+          run.updatedAt,
+          run.ownerReviews?.at(-1)?.at ?? 0,
+        ),
+      };
+      // Do not change execution timestamps or mutate a live executor's object.
+      const next = {
+        ...run,
+        ownerReviews: [...(run.ownerReviews ?? []), entry],
+      };
+      this.save(next);
+      return next;
+    } finally {
+      try {
+        closeSync(fd);
+      } catch {
+        /* Preserve stable errors; lock remains fail-closed on cleanup failure. */
+      }
+      try {
+        rmSync(lock);
+      } catch {
+        /* Never leak a raw path or reverse an already committed operation. */
+      }
+    }
+  }
+
   load(runId: string): RunRecord | undefined {
     // Public reads are authoritative, full, strictly validated snapshots. A stat
     // signature can accelerate candidate selection, never authorize a result.
@@ -728,12 +809,31 @@ export class RunStore {
 
   remove(runId: string): void {
     const target = this.pathFor(runId);
+    const lock = target + ".review-lock";
+    let fd: number;
+    try {
+      fd = openSync(lock, "wx", 0o600);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === "EEXIST") return;
+      throw Error(ERRORS.RUNTIME_STORAGE_FAILED, { cause });
+    }
     forgetMetadata(path.resolve(target));
     try {
       rmSync(target, { force: true });
     } catch {
       this.count("writeFailures");
       throw Error(ERRORS.RUNTIME_STORAGE_FAILED);
+    } finally {
+      try {
+        closeSync(fd);
+      } catch {
+        /* Preserve stable errors; lock remains fail-closed on cleanup failure. */
+      }
+      try {
+        rmSync(lock);
+      } catch {
+        /* Never leak a raw path or reverse an already committed operation. */
+      }
     }
   }
 

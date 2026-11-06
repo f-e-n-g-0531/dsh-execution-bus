@@ -1,4 +1,4 @@
-import { RUNTIME_CANCEL_DESCRIPTION, RUNTIME_RESULT_DESCRIPTION, RUNTIME_RESULT_PARAMETERS, RUNTIME_RESUME_DESCRIPTION, RUNTIME_RUN_DESCRIPTION, RUNTIME_RUN_ID_PARAMETERS, RUNTIME_RUN_PARAMETERS, RUNTIME_STATUS_DESCRIPTION, RUNTIME_STATUS_PARAMETERS, } from "./product.js";
+import { RUNTIME_CAPABILITIES_DESCRIPTION, RUNTIME_CAPABILITIES_PARAMETERS, RUNTIME_CANCEL_DESCRIPTION, RUNTIME_RESULT_DESCRIPTION, RUNTIME_RESULT_PARAMETERS, RUNTIME_REVIEW_DESCRIPTION, RUNTIME_REVIEW_PARAMETERS, RUNTIME_RESUME_DESCRIPTION, RUNTIME_RUN_DESCRIPTION, RUNTIME_RUN_ID_PARAMETERS, RUNTIME_RUN_PARAMETERS, RUNTIME_STATUS_DESCRIPTION, RUNTIME_STATUS_PARAMETERS, } from "./product.js";
 import { RuntimeService } from "./runtime/service.js";
 import { RUNTIME_OUTPUT_SCHEMAS, runtimePresentationMeta, presentRuntimeResult, } from "./presentation.js";
 export const name = "xiao-he-runtime";
@@ -32,6 +32,8 @@ export function apply(ctx) {
             },
         });
     };
+    register("runtime_capabilities", RUNTIME_CAPABILITIES_DESCRIPTION, RUNTIME_CAPABILITIES_PARAMETERS, (raw, exec) => runtime.capabilities(raw, exec));
+    register("runtime_review", RUNTIME_REVIEW_DESCRIPTION, RUNTIME_REVIEW_PARAMETERS, (raw, exec) => runtime.review(raw, exec));
     register("runtime_run", RUNTIME_RUN_DESCRIPTION, RUNTIME_RUN_PARAMETERS, (raw, exec) => runtime.run(raw, exec));
     register("runtime_status", RUNTIME_STATUS_DESCRIPTION, RUNTIME_STATUS_PARAMETERS, (raw, exec) => runtime.status(raw, exec));
     register("runtime_result", RUNTIME_RESULT_DESCRIPTION, RUNTIME_RESULT_PARAMETERS, (raw, exec) => runtime.result(raw, exec));

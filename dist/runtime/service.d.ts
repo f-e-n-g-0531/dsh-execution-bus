@@ -1,9 +1,14 @@
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
 import type { RunProgress, RunGuidance } from "../presentation.js";
+import type { RunAttention } from "./attention.js";
+import { runWaiting } from "./waiting.js";
+import { ownerReview } from "./review.js";
+import type { RunRecovery } from "./insights.js";
 import type { DelegationPolicyAdapter } from "./agent.js";
 import { RunStore } from "./store.js";
 import type { RunRecord, StepRecord } from "./store.js";
+type RunWaiting = ReturnType<typeof runWaiting>;
 export interface RunSummary {
     runId: string;
     state: RunRecord["state"];
@@ -18,6 +23,10 @@ export interface RunSummary {
     executionSettled?: boolean;
     progress: RunProgress;
     guidance: RunGuidance[];
+    recovery: RunRecovery;
+    attention: RunAttention;
+    waiting: RunWaiting;
+    ownerReview: ReturnType<typeof ownerReview>;
     steps: Array<{
         id: string;
         tool: string;
@@ -39,6 +48,23 @@ export declare class RuntimeService {
     private disposal?;
     constructor(ctx: Context, store?: RunStore, delegationPolicy?: DelegationPolicyAdapter | undefined);
     dispose(): Promise<void>;
+    /** Descriptive only: no policy checks, tool dispatch, capacity reservation or run creation. */
+    capabilities(raw: unknown, exec: ToolRunContext): {
+        ordinaryDag: "supported";
+        worker: "unavailable" | "conditional";
+        workerReason: "trusted_adapter_missing" | "parent_admission_missing" | "execution_checks_required";
+        ordinaryAsync: boolean;
+        workerAsync: false;
+        workerTools: string[];
+        limits: {
+            maxSteps: 32;
+            maxConcurrency: 4;
+            maxActiveRuns: number;
+            maxWorkers: number;
+        };
+        authorization: "checked_at_execution";
+        message: string;
+    };
     run(raw: unknown, exec: ToolRunContext, background?: boolean): Promise<RunSummary | {
         runId: string;
         state: "running";
@@ -49,6 +75,18 @@ export declare class RuntimeService {
             stepCount: number;
             progress: RunProgress;
             guidance: RunGuidance[];
+            attention: RunAttention;
+            waiting: {
+                steps: import("./waiting.js").WaitingStep[];
+                cleanupPending: boolean;
+            };
+            ownerReview: {
+                recordedAt?: number | undefined;
+                snapshotHash?: string | undefined;
+                revision: number;
+                status: "accepted" | "needs_work" | "stale" | "not_recorded";
+                verification: "owner_declared_not_independently_verified";
+            };
             error?: string | undefined;
             previousRunId?: string | undefined;
             taskId?: string | undefined;
@@ -63,7 +101,38 @@ export declare class RuntimeService {
             writeFailures: number;
         }>;
     };
+    review(raw: unknown, exec: ToolRunContext): {
+        ownerReviewHistory: import("./review.js").OwnerReviewRecord[];
+        runId: string;
+        state: RunRecord["state"];
+        goal?: string;
+        taskId?: string;
+        previousRunId?: string;
+        error?: string;
+        createdAt: number;
+        updatedAt: number;
+        finishedAt?: number;
+        durationMs: number;
+        executionSettled?: boolean;
+        progress: RunProgress;
+        guidance: RunGuidance[];
+        recovery: RunRecovery;
+        attention: RunAttention;
+        waiting: RunWaiting;
+        ownerReview: ReturnType<typeof ownerReview>;
+        steps: Array<{
+            id: string;
+            tool: string;
+            state: StepRecord["state"];
+            attempts: number;
+            childSessionId?: string;
+            workerTrace?: StepRecord["workerTrace"];
+            error?: string;
+        }>;
+    };
     result(raw: unknown, exec: ToolRunContext): {
+        acceptance: import("./insights.js").RunAcceptance;
+        ownerReviewHistory: import("./review.js").OwnerReviewRecord[];
         results: {};
         finished: boolean;
         page: {
@@ -89,6 +158,10 @@ export declare class RuntimeService {
         executionSettled?: boolean;
         progress: RunProgress;
         guidance: RunGuidance[];
+        recovery: RunRecovery;
+        attention: RunAttention;
+        waiting: RunWaiting;
+        ownerReview: ReturnType<typeof ownerReview>;
         steps: Array<{
             id: string;
             tool: string;
@@ -99,6 +172,8 @@ export declare class RuntimeService {
             error?: string;
         }>;
     } | {
+        acceptance: import("./insights.js").RunAcceptance;
+        ownerReviewHistory: import("./review.js").OwnerReviewRecord[];
         results: Record<string, import("./store.js").StoredResult>;
         finished: boolean;
         runId: string;
@@ -114,6 +189,10 @@ export declare class RuntimeService {
         executionSettled?: boolean;
         progress: RunProgress;
         guidance: RunGuidance[];
+        recovery: RunRecovery;
+        attention: RunAttention;
+        waiting: RunWaiting;
+        ownerReview: ReturnType<typeof ownerReview>;
         steps: Array<{
             id: string;
             tool: string;
@@ -135,3 +214,4 @@ export declare class RuntimeService {
     private owned;
     private executor;
 }
+export {};

@@ -196,6 +196,180 @@ const workerTraceSchema = {
     ],
     additionalProperties: false,
 };
+const attentionSchema = {
+    type: "object",
+    properties: {
+        items: {
+            type: "array",
+            items: {
+                type: "object",
+                properties: {
+                    key: string,
+                    kind: {
+                        type: "string",
+                        enum: [
+                            "inspect_external_state",
+                            "inspect_failure",
+                            "resume_read_only",
+                            "decision_required",
+                            "result_unavailable",
+                            "review_results",
+                        ],
+                    },
+                    stepId: string,
+                    resultHash: string,
+                },
+                required: ["key", "kind"],
+                additionalProperties: false,
+            },
+        },
+        notification: {
+            type: "object",
+            properties: { key: string, shouldNotify: { type: "boolean" } },
+            required: ["key", "shouldNotify"],
+            additionalProperties: false,
+        },
+    },
+    required: ["items", "notification"],
+    additionalProperties: false,
+};
+const waitingSchema = {
+    type: "object",
+    properties: {
+        steps: {
+            type: "array",
+            items: {
+                type: "object",
+                properties: {
+                    stepId: string,
+                    reason: {
+                        type: "string",
+                        enum: ["dependency", "scheduler", "retry_backoff"],
+                    },
+                    waitingSince: integer,
+                    nextRetryAt: integer,
+                    retryCategory: {
+                        type: "string",
+                        enum: [
+                            "permission",
+                            "invalid",
+                            "not_found",
+                            "transient",
+                            "deterministic",
+                            "legacy_unknown",
+                        ],
+                    },
+                },
+                required: ["stepId", "reason"],
+                additionalProperties: false,
+            },
+        },
+        cleanupPending: { type: "boolean" },
+    },
+    required: ["steps", "cleanupPending"],
+    additionalProperties: false,
+};
+const recoverySchema = {
+    type: "object",
+    properties: {
+        resultCertainty: {
+            type: "string",
+            enum: ["recorded", "incomplete", "unknown"],
+        },
+        cleanup: { type: "string", enum: ["pending", "settled", "unknown"] },
+        externalWork: { type: "string", const: "unconfirmed" },
+        nextAction: {
+            type: "string",
+            enum: [
+                "wait",
+                "inspect_external_state",
+                "resume_read_only",
+                "review_results",
+                "inspect_failure",
+            ],
+        },
+        message: string,
+    },
+    required: [
+        "resultCertainty",
+        "cleanup",
+        "externalWork",
+        "nextAction",
+        "message",
+    ],
+    additionalProperties: false,
+};
+const acceptanceSchema = {
+    type: "object",
+    properties: {
+        status: { type: "string", const: "not_reviewed" },
+        workers: {
+            type: "array",
+            items: {
+                type: "object",
+                properties: {
+                    stepId: string,
+                    state: stepState,
+                    resultHash: string,
+                    reportOutcome: {
+                        type: "string",
+                        enum: ["completed", "partial", "blocked"],
+                    },
+                    criteria: {
+                        type: "object",
+                        properties: {
+                            observed: integer,
+                            notVerified: integer,
+                            blocked: integer,
+                        },
+                        required: ["observed", "notVerified", "blocked"],
+                        additionalProperties: false,
+                    },
+                    evidenceCount: integer,
+                    limitationCount: integer,
+                    decisionRequired: { type: "boolean" },
+                },
+                required: ["stepId", "state"],
+                additionalProperties: false,
+            },
+        },
+    },
+    required: ["status", "workers"],
+    additionalProperties: false,
+};
+const ownerReviewSchema = {
+    type: "object",
+    properties: {
+        revision: integer,
+        status: {
+            type: "string",
+            enum: ["not_recorded", "stale", "accepted", "needs_work"],
+        },
+        verification: {
+            type: "string",
+            const: "owner_declared_not_independently_verified",
+        },
+        snapshotHash: string,
+        recordedAt: integer,
+    },
+    required: ["revision", "status", "verification"],
+    additionalProperties: false,
+};
+const ownerReviewHistorySchema = {
+    type: "array",
+    items: {
+        type: "object",
+        properties: {
+            revision: integer,
+            snapshotHash: string,
+            disposition: { type: "string", enum: ["accepted", "needs_work"] },
+            reason: string,
+            at: integer,
+        },
+        required: ["revision", "snapshotHash", "disposition", "reason", "at"],
+        additionalProperties: false,
+    },
+};
 const summaryProperties = {
     runId: string,
     state: runState,
@@ -213,6 +387,10 @@ const summaryProperties = {
     },
     progress: progressSchema,
     guidance: guidanceSchema,
+    recovery: recoverySchema,
+    attention: attentionSchema,
+    waiting: waitingSchema,
+    ownerReview: ownerReviewSchema,
     steps: {
         type: "array",
         items: {
@@ -270,6 +448,9 @@ const listSchema = {
                     stepCount: integer,
                     progress: progressSchema,
                     guidance: guidanceSchema,
+                    attention: attentionSchema,
+                    waiting: waitingSchema,
+                    ownerReview: ownerReviewSchema,
                 },
                 required: ["runId", "state", "updatedAt", "stepCount"],
                 additionalProperties: false,
@@ -297,12 +478,69 @@ const listSchema = {
 };
 /** Host-supported subset: dynamic step result keys/values deliberately remain JSON. */
 export const RUNTIME_OUTPUT_SCHEMAS = {
+    runtime_capabilities: {
+        type: "object",
+        properties: {
+            ordinaryDag: { type: "string", const: "supported" },
+            worker: { type: "string", enum: ["conditional", "unavailable"] },
+            workerReason: {
+                type: "string",
+                enum: [
+                    "trusted_adapter_missing",
+                    "parent_admission_missing",
+                    "execution_checks_required",
+                ],
+            },
+            ordinaryAsync: { type: "boolean" },
+            workerAsync: { type: "boolean", const: false },
+            workerTools: {
+                type: "array",
+                items: { type: "string", enum: ["read", "glob", "grep"] },
+            },
+            limits: {
+                type: "object",
+                properties: {
+                    maxSteps: integer,
+                    maxConcurrency: integer,
+                    maxActiveRuns: integer,
+                    maxWorkers: integer,
+                },
+                required: ["maxSteps", "maxConcurrency", "maxActiveRuns", "maxWorkers"],
+                additionalProperties: false,
+            },
+            authorization: { type: "string", const: "checked_at_execution" },
+            message: string,
+        },
+        required: [
+            "ordinaryDag",
+            "worker",
+            "workerReason",
+            "ordinaryAsync",
+            "workerAsync",
+            "workerTools",
+            "limits",
+            "authorization",
+            "message",
+        ],
+        additionalProperties: false,
+    },
+    runtime_review: {
+        type: "object",
+        properties: {
+            ...summaryProperties,
+            ownerReviewHistory: ownerReviewHistorySchema,
+        },
+        required: [...summaryRequired, "ownerReview", "ownerReviewHistory"],
+        additionalProperties: false,
+    },
     runtime_run: { oneOf: [receiptSchema, summarySchema] },
     runtime_status: { oneOf: [summarySchema, listSchema] },
     runtime_result: {
         type: "object",
         properties: {
             ...summaryProperties,
+            acceptance: acceptanceSchema,
+            ownerReviewHistory: ownerReviewHistorySchema,
             page: {
                 type: "object",
                 properties: {
@@ -365,15 +603,144 @@ function progressText(value) {
         "，unknown " +
         p.unknown);
 }
+const attentionPriority = {
+    inspect_external_state: 0,
+    inspect_failure: 1,
+    resume_read_only: 2,
+    decision_required: 3,
+    result_unavailable: 4,
+    review_results: 5,
+};
+function actionableItems(value) {
+    const attention = object(object(value)?.attention);
+    if (!Array.isArray(attention?.items))
+        return [];
+    return attention.items
+        .map(object)
+        .filter((item) => Boolean(item &&
+        typeof item.kind === "string" &&
+        Object.hasOwn(attentionPriority, item.kind)))
+        .sort((a, b) => attentionPriority[a.kind] -
+        attentionPriority[b.kind]);
+}
+/** Read-only navigation: aggregate attention hashes are never pagination hashes. */
+function resultLocation(runId, item) {
+    if (!["decision_required", "review_results", "result_unavailable"].includes(item.kind))
+        return [];
+    const request = { runId };
+    if (item.kind === "decision_required" && typeof item.stepId === "string") {
+        request.stepId = item.stepId;
+        request.offset = 0;
+        request.limit = 2048;
+        if (typeof item.resultHash === "string" &&
+            /^[a-f0-9]{64}$/.test(item.resultHash))
+            request.hash = item.resultHash;
+    }
+    const lines = ["只读定位：runtime_result(" + JSON.stringify(request) + ")"];
+    if (request.stepId !== undefined)
+        lines.push("分页按 nextOffset 继续并沿用返回的 page.hash；拼接 page.text 后再解析 JSON。");
+    if (item.kind === "result_unavailable")
+        lines.push("先检查保存结果；缺失或 truncated 的原文不能通过分页恢复，需另行补取证据。");
+    if (item.kind === "review_results")
+        lines.push("先读取各步骤保存结果；需要分页时使用 stepId 和该步骤返回的 hash，不使用待办聚合哈希。");
+    return lines;
+}
 function runText(value) {
     const run = object(value);
     if (!run || typeof run.runId !== "string" || typeof run.state !== "string")
         return "";
-    const lines = [run.runId + " · " + run.state, progressText(run.progress)];
+    const lines = [run.runId + " · " + run.state];
+    const attention = object(run.attention);
+    if (attention && Array.isArray(attention.items)) {
+        const labels = {
+            inspect_external_state: "先核验外部状态；不要自动重发",
+            inspect_failure: "检查失败与已保存结果",
+            resume_read_only: "中断运行待处置：核验计划后可显式恢复；此处不会执行",
+            decision_required: "待 Lead 决策（Worker 请求，未经独立核实）",
+            result_unavailable: "结果缺失或截断；补取证据",
+            review_results: "结果待复核；执行成功不代表验收通过",
+        };
+        const items = actionableItems(run);
+        if (items.length)
+            lines.push("待处理事项：");
+        for (const item of items) {
+            lines.push((typeof item.stepId === "string" ? "[" + item.stepId + "] " : "") +
+                labels[item.kind], ...resultLocation(run.runId, item));
+        }
+        if (!attention.items.length)
+            lines.push("暂无待处理提醒；常规进度仅保留在摘要与 JSON 中。");
+    }
+    lines.push(progressText(run.progress));
     if (typeof run.executionSettled === "boolean")
         lines.push(run.executionSettled
             ? "本进程调度/Worker 清理已收束；不证明普通工具退出。"
             : "本进程运行尚未收束；终态后可能仍在清理。");
+    const waiting = object(run.waiting);
+    if (waiting && Array.isArray(waiting.steps)) {
+        const labels = {
+            dependency: "等待依赖成功",
+            scheduler: "等待批次调度",
+            retry_backoff: "只读重试退避",
+        };
+        for (const raw of waiting.steps) {
+            const item = object(raw);
+            if (item &&
+                typeof item.reason === "string" &&
+                Object.hasOwn(labels, item.reason))
+                lines.push("[" +
+                    item.stepId +
+                    "] " +
+                    labels[item.reason] +
+                    (typeof item.waitingSince === "number"
+                        ? " · 自 " + item.waitingSince
+                        : "") +
+                    (typeof item.nextRetryAt === "number"
+                        ? " · 下次尝试不早于 " + item.nextRetryAt
+                        : ""));
+        }
+        if (waiting.cleanupPending === true)
+            lines.push("等待本进程调度/Worker 清理；不确认外部 Job 已退出。");
+    }
+    const recovery = object(run.recovery);
+    if (recovery)
+        lines.push("结果确定性：" +
+            recovery.resultCertainty +
+            " · 本进程清理：" +
+            recovery.cleanup +
+            " · 外部进程/Job：未确认", "下一步（" + recovery.nextAction + "）：" + recovery.message);
+    const review = object(run.ownerReview);
+    if (review)
+        lines.push("Owner 处置：" +
+            review.status +
+            " · revision " +
+            review.revision +
+            "（owner声明，不证明人工或独立验收）");
+    const acceptance = object(run.acceptance);
+    if (acceptance && Array.isArray(acceptance.workers)) {
+        lines.push("验收：未独立复核（not_reviewed）；Worker 自报不代表任务通过。");
+        for (const raw of acceptance.workers) {
+            const worker = object(raw);
+            if (!worker)
+                continue;
+            const counts = object(worker.criteria);
+            lines.push("[" +
+                worker.stepId +
+                "] " +
+                worker.state +
+                (typeof worker.reportOutcome === "string"
+                    ? " · 自报 " + worker.reportOutcome
+                    : "") +
+                (counts
+                    ? " · observed " +
+                        counts.observed +
+                        " / 未验证 " +
+                        counts.notVerified +
+                        " / blocked " +
+                        counts.blocked
+                    : "") +
+                (worker.decisionRequired === true ? " · 待 Lead 决策" : ""));
+        }
+    }
     const page = object(run.page);
     if (page)
         lines.push("结果分页：" +
@@ -387,7 +754,8 @@ function runText(value) {
         lines.push("目标：" + run.goal);
     if (typeof run.error === "string")
         lines.push("错误：" + run.error);
-    if (Array.isArray(run.steps))
+    // New summaries retain step-by-step progress in JSON, without repeating every step in the card.
+    if (!attention && Array.isArray(run.steps))
         for (const raw of run.steps) {
             const step = object(raw);
             if (step)
@@ -403,7 +771,8 @@ function runText(value) {
     if (Array.isArray(run.guidance))
         for (const raw of run.guidance) {
             const item = object(raw);
-            if (typeof item?.message === "string") {
+            if (typeof item?.message === "string" &&
+                !(attention && item.code === "agent_requires_verification")) {
                 lines.push((typeof item.stepId === "string" ? "[" + item.stepId + "] " : "") +
                     item.message);
                 if (typeof item.jobId === "string")
@@ -419,9 +788,29 @@ function runText(value) {
 /** Replayable metadata excludes inputs, raw result values and owner identity. */
 export function runtimePresentationMeta(_args, value) {
     const result = object(value);
+    if (result?.ordinaryDag === "supported" && typeof result.worker === "string")
+        return {
+            title: "萧何能力说明",
+            text: "普通 DAG：支持（执行时准入）\nWorker：" +
+                result.worker +
+                " · " +
+                result.workerReason +
+                "\n普通异步：" +
+                result.ordinaryAsync +
+                " · Worker 异步：false\n" +
+                result.message,
+        };
     const text = Array.isArray(result?.runs)
         ? result.runs.length
-            ? result.runs.map(runText).join("\n\n")
+            ? [
+                "本页运行（待处理优先；不代表全部待办）：",
+                ...result.runs
+                    .filter((run) => actionableItems(run).length > 0)
+                    .map(runText),
+                ...result.runs
+                    .filter((run) => actionableItems(run).length === 0)
+                    .map(runText),
+            ].join("\n\n")
             : "本会话暂无运行。"
         : runText(value);
     return { title: "萧何运行摘要", text };
@@ -434,7 +823,7 @@ export function presentRuntimeResult(_args, result) {
         return undefined;
     return {
         card: "generic",
-        title: "萧何运行摘要",
+        title: meta.title === "萧何能力说明" ? "萧何能力说明" : "萧何运行摘要",
         content: [{ type: "text", text: meta.text }],
     };
 }

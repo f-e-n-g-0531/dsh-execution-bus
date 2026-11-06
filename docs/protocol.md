@@ -1,20 +1,68 @@
 # 协议与运行语义
 
-多 Agent 扩展随 1.4.0 发布；沿用从 PTC 派生的 `xiao-he-runtime`，不新增 team 模式，历史 1.0/0.x 变更不因此重写。
+多 Agent 扩展随 1.4.0 发布；运行判读与 owner 复核处置随 1.5.0 发布，沿用从 PTC 派生的 `xiao-he-runtime`，不新增 team 模式，历史 1.0/0.x 变更不因此重写。
 
 ## 工具
 
 | 工具 | 输入 | 返回 |
 |---|---|---|
+| `runtime_capabilities` | `{}` | 描述当前调用上下文的能力与限制，不执行准入检查、不创建 run |
 | `runtime_run` | `{ plan, async? }` | 同步：运行摘要与步骤状态；仅不含 Agent 且调用未携带 `exec.toolSet` 的受控宿主计划可用 `async:true`：受理后立即返回 `{ runId, state:"running" }` |
 | `runtime_status` | `{}`、`{ limit?, offset? }` 或 `{ runId }` | 本会话最近运行列表与脱敏存储诊断，或指定运行元数据（不含结果） |
-| `runtime_result` | `{ runId }` | 运行摘要 + 已保存步骤结果（`truncated/bytes` 标记） |
+| `runtime_result` | `{ runId }` 或下述分页参数 | 运行摘要 + `acceptance` + 已保存步骤结果（`truncated/bytes` 标记）；分页同样含 `acceptance` |
+| `runtime_review` | `{runId,snapshotHash,expectedRevision,disposition,reason}` | 记录 owner 处置并返回摘要与 `ownerReviewHistory`；不是独立验收 |
 | `runtime_cancel` | `{ runId }` | 发起取消后的运行摘要；不保证 Worker 已清理或宿主操作已实际停止 |
 | `runtime_resume` | `{ runId }` | 同步等待恢复结果；仅 `interrupted` 可恢复 |
 
 列表 `limit` 为 1–100，默认 20；`offset` 为 0–10000，默认 0。先按所有者过滤，再按更新时间降序分页；同时间以运行 ID 稳定排序。指定 `runId` 时不能同时提供分页参数。所有工具拒绝未知字段。
 
 运行摘要与列表新增派生 `progress`（各步骤状态计数）及 `guidance`（未知副作用、后台 Job 和中断处置提示）。它们仅在会话归属检查后生成，不写入 version 1 记录。建议操作不是授权，不会自动执行 Job、恢复或重发。工具的 JSON 文本返回保留，另提供宿主支持的结构化输出及展示摘要；实际桌面效果需独立验收。
+
+### 能力说明
+
+`runtime_capabilities({})` 返回 `ordinaryDag:"supported"`、`worker:"conditional"|"unavailable"`、`workerReason`、`ordinaryAsync:boolean`、`workerAsync:false`、`workerTools`、`limits`、`authorization:"checked_at_execution"` 和说明 `message`。普通 DAG 每次执行仍由宿主准入；这不是查询授权、资源保留或真实工具/模型可用性探测。
+
+仅可信 `DelegationPolicyAdapter` 存在且父 `exec.toolSet` 存在时 Worker 标为 `conditional`，表示仍需执行期检查；否则为 `unavailable`。对应 `workerReason` 为 `trusted_adapter_missing`、`parent_admission_missing` 或 `execution_checks_required`。标准插件入口未接入适配器，不能据此声称 Worker 门禁已修复。`ordinaryAsync` 仅在无 `toolSet` 时为 true；Worker 异步始终不可用，不得删除父准入集合绕过限制。
+
+### 恢复摘要
+
+单 run 的 run/status/result/cancel/resume 摘要增加以下派生字段；异步受理回执仍为 `{runId,state:"running"}`，不是完整摘要。
+
+```ts
+recovery: {
+  resultCertainty: "recorded" | "incomplete" | "unknown";
+  cleanup: "pending" | "settled" | "unknown";
+  externalWork: "unconfirmed";
+  nextAction: "wait" | "inspect_external_state" | "resume_read_only" | "review_results" | "inspect_failure";
+  message: string;
+}
+```
+
+`resultCertainty` 区分记录已保存、不完整或存在未知状态，不评价证据正确性或任务是否通过。`cleanup` 仅观察本进程调度/owned Worker 的清理收束；缺少本进程观察时为 unknown，settled 不证明清理成功或外部工具/Job 停止。`externalWork` 始终未确认。`nextAction/message` 仅为判读建议，不自动等待、恢复、重发或授予新权限；具体异常处置见[运行状态与故障处置](<OPERATIONS.md>)。
+
+### 待处理事项与等待原因
+
+完整运行摘要与 status 列表项增加可选派生字段（异步受理回执不变）：
+
+- `attention.items`：按外部状态核验、失败检查/中断只读恢复处置（resume_read_only）、Worker 待决、结果缺失/截断、结果复核排序的事项。每项含 `key/kind`，可带 `stepId/resultHash`；不回显问题或报告自由文本。决策请求仍为 Worker 自报，原报告通过 result 读取，不是权限或自动暂停条件。
+- `attention.notification:{key,shouldNotify}`：同一事项集合生成稳定 SHA-256 键，常规运行进度无事项时 shouldNotify=false。更新时间、尝试次数不单独触发新键；键供上层合并提醒，不表示已发送、已读或已处理。读取不确认事项，不持久化通知收据。
+- `waiting:{steps,cleanupPending}`：仅 running 的 pending 步骤列出 dependency（依赖未成功）、scheduler（依赖已满足，等待后续批次）或 retry_backoff（当前进程实际处于只读重试退避）。仅真实退避观察附 waitingSince、nextRetryAt（毫秒时间戳）和枚举 retryCategory，不从错误正文推断。nextRetryAt 不是执行保证。
+
+退避观察仅存在于当前进程、当前 RunRecord，不写入 v1 记录，重启后不推断历史等待时间。cleanupPending 仅表示已知本进程运行 Promise 在终态后尚未收束，不证明外部工作停止。当前无容量等待队列，不展示虚构 capacity 等待。
+
+展示卡优先呈现待处理事项，常规逐步状态和重复 Worker 验收提醒收敛到 JSON；旧返回值没有这些字段时仍使用原展示。不改变状态/依赖成功条件、不自动执行恢复、不新增独立验收、Outbox 或工单；owner处置另见下节；列表只聚合当前页的本会话运行，不是全量全局待办。
+
+### Owner 复核处置
+
+摘要与列表提供 `ownerReview`：revision、status（not_recorded/stale/accepted/needs_work）、可选 snapshotHash/recordedAt；verification 固定为 owner_declared_not_independently_verified。result（含分页）和 review 返回 ownerReviewHistory，理由仅在这两个 owner 专属结果中返回，不进入展示元数据或列表。
+
+读取全部结果与证据后，调用 `runtime_review({runId,snapshotHash,expectedRevision,disposition,reason})`。hash/revision 从当前 ownerReview 读取；disposition 为 accepted 或 needs_work，理由非空且最多2048 UTF-8字节。快照绑定 runId、归一化计划、步骤工具/状态/尝试次数和每项完整 value JSON SHA-256；计划或结果变化使旧处置 stale。hash不证明读取或证据真实性。
+
+首版只允许非活动、成功且全部结果完整的持久化运行，拒绝清理在途、失败、取消、中断、缺失/截断和易失存储失败记录。所属会话取自宿主 exec.agent.id，参数不能声明 reviewer/人工身份；Worker 与普通 DAG 步骤均不开放此工具。owner调用者可能也是模型，accepted只代表该会话声明，不是独立验收、人工批准或后续执行授权；acceptance.status仍为not_reviewed。仅匹配当前快照的accepted收敛review_results提醒，needs_work/stale保留；未知副作用、失败和待决问题不因此消失，不自动重跑。
+
+记录存于 version 1 run 的可选 ownerReviews，最多32条，超限拒写而不驱逐。记录不改变运行时间、状态和保留排序，随终态运行一起按既有策略清理，不是永久审计库；旧版读取器不认识此字段，使用处置后的记录目录不能交给旧版写入。坏记录继续严格拒读，不默认为未处置。
+
+写入使用每run排他 `.review-lock`，在锁内重新读取并检查owner/hash/revision，陈旧值报RUNTIME_RESULT_CHANGED，锁忙报RUNTIME_BUSY。运行删除/保留清理也遵守该锁（锁忙跳过删除）。锁内沿用临时文件/fsync/rename；失败不先更新内存。崩溃遗留锁不会自动抢占，应先停掉所有访问该目录的宿主、备份运行记录并核验结果，再由操作者移除对应锁；不要在线清锁。此互斥仅覆盖新版本的review/remove，不为外部文件修改或旧版写入提供事务保证，不承诺掉电绝不回退。
 
 ## 计划（plan）
 
@@ -32,6 +80,30 @@
 `runtime_result({runId})` 保持完整结果读取；新增 `{runId,stepId,offset?,limit?,hash?}` 仅由原 owner 分页读取指定步骤已保存的 JSON 文本。offset 按 Unicode 码点计，默认 0；limit 默认 2048、范围 1–4096。返回 `results:{}` 与 `page:{stepId,encoding:"json",unit:"unicode_code_point",hash,offset,total,text,nextOffset?}`；按 nextOffset 读完后拼接 text 再 JSON.parse。hash 为完整 JSON 文本 SHA-256，可带入后页防混版本；不匹配报 `RUNTIME_RESULT_CHANGED`。没有 stepId 时不接受分页参数；无可用 value 或已截断报 `RUNTIME_RESULT_UNAVAILABLE`，不会恢复已丢弃内容。不改变 Worker 工具白名单、依赖注入或 64KiB 上限；这不是 Worker lazy-resource 能力。
 
 摘要可选 `executionSettled`：false 表示本进程运行 Promise 尚未收束（终态后可能还在清理），true 表示调度及 owned Worker 清理 Promise 已收束，不表示清理必定成功或普通宿主工具/Job 已退出。此观察仅存在于本进程、有界保留，不写入 v1 记录；缺省为未知，重启后不能据历史记录推断清理完成。`finished` 仍仅表示调度终态。
+
+### 待复核结果汇总
+
+`runtime_result` 完整与分页返回均增加：
+
+```ts
+acceptance: {
+  status: "not_reviewed";
+  workers: {
+    stepId: string;
+    state: "pending" | "running" | "succeeded" | "failed" | "cancelled" | "unknown";
+    resultHash?: string;
+    reportOutcome?: "completed" | "partial" | "blocked";
+    criteria?: { observed: number; notVerified: number; blocked: number };
+    evidenceCount?: number;
+    limitationCount?: number;
+    decisionRequired?: boolean;
+  }[];
+}
+```
+
+`resultHash` 是步骤已保存 `value` 的 `JSON.stringify(value)` 文本（UTF-8）的 SHA-256，与该步骤分页 `page.hash` 一致；绑定输出版本，不是证据核实或验收。缺失、截断等不可取得 value 的情况不能凭哈希恢复原文；可选报告字段缺省不等于报告通过。汇总只投影状态、枚举、布尔值和计数，不回显 summary、note、limitations、requestedDecision 等报告自由文本或 evidence 正文；原始报告与证据仍通过 `runtime_result` 的保存结果或分页读取。`runtime_status` 不含 report 内容，也不提供这份 acceptance 汇总。
+
+`status` 固定为 `not_reviewed`，没有持久化的独立验收记录，不提供 Worker 自授 `accepted`；`observed` 和 `reportOutcome:"completed"` 仍仅是 Worker 自报。Lead 的独立复核仍在上层，无 Worker 时 `workers:[]` 也不证明任务通过。本轮仅增加派生说明，不改变调度/恢复权限，不新增数据库、outbox 或工单系统。
 
 ## Agent 步骤（受控宿主集成）
 

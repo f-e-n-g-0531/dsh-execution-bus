@@ -354,6 +354,23 @@ test("真实 ToolRuntime 双作用域：另一会话不能读取结果、取消�
       },
     });
     assert.equal(owner.isError, false, JSON.stringify(owner));
+    const saved = await f.call("runtime_result", { runId: owner.value.runId });
+    const reviewArgs = {
+      runId: owner.value.runId,
+      snapshotHash: saved.value.ownerReview.snapshotHash,
+      expectedRevision: 0,
+      disposition: "accepted",
+      reason: "PRIVATE_OWNER_REASON",
+    };
+    const deniedReview = await other.call("runtime_review", reviewArgs);
+    assert.equal(deniedReview.isError, true);
+    assert.match(JSON.stringify(deniedReview), /RUNTIME_NOT_FOUND/);
+    const reviewed = await f.call("runtime_review", reviewArgs);
+    assert.equal(reviewed.isError, false, JSON.stringify(reviewed));
+    assert.equal(reviewed.value.ownerReview.status, "accepted");
+    assert.doesNotMatch(JSON.stringify(reviewed.meta), /PRIVATE_OWNER_REASON/);
+    const ownerList = await f.call("runtime_status", {});
+    assert.doesNotMatch(JSON.stringify(ownerList), /PRIVATE_OWNER_REASON/);
     for (const tool of [
       "runtime_status",
       "runtime_result",

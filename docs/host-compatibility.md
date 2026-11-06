@@ -4,6 +4,10 @@ v1.4.0 目标宿主：DSH **0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node
 
 > **当前安全兼容边界：**标准 DSH 0.2.2-rc.1 没有“仅补查父级缺失策略且去重公共层”的公开接口。本插件入口未接入可信 `DelegationPolicyAdapter`，含 `agent` 的 run/resume 在执行前以 `RUNTIME_AGENT_POLICY_UNSUPPORTED` 拒绝；普通工具 DAG 不受影响。下述 Worker 执行能力仅适用于显式注入该适配器的受控宿主集成，测试适配器不是 rc.1 通用实现。不能通过删父策略、回放完整父链或修改已安装宿主绕过此门禁。
 
+## 可信适配核实（2026-11-06）
+
+本轮重新检查当前安装的 rc.1 SDK：ToolsService 的 executable 只检查 admission/可执行身份，checkGuards 执行 global 与作用域全链；ToolExecutionPipeline.prepare 执行完整 pre-execute、审批及 guard，没有 supplemental-only 或公共层去重参数。parentAgent 表示生命周期归属，不等于继承父局部工具策略。因此不提供无条件 allow 适配器，不修改宿主，不通过回放父完整 pipeline 重复检查或弹出审批。标准入口继续支持普通工具 DAG、拒绝 Worker；这是尚未打通的核心限制，不宣称多 Agent 已可日常使用。未来需宿主提供可信的缺失父策略检查能力后再接入并验收。
+
 ## 依赖的宿主契约
 
 - 工具注册仍使用 `ctx.tools.register`；rc.1 的 `ctx.tools.execute` 已为 batch 接口，不能沿用旧单调用形式。运行时通过公开 `ToolExecutionPipeline.prepare/dispatch/complete` 执行嵌套工具，传递 `parent: exec.token`、`rootCallId`、`agent`、`signal` 与 `toolSet`，沿用宿主权限、工作目录与沙箱，不绕过宿主策略。

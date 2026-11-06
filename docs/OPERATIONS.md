@@ -9,10 +9,62 @@
 3. unknown 表示副作用是否完成无法确认。先检查实际文件、命令产生的业务记录和后台 Job，不要自动重发。
 4. 不要轮询仍在同步等待的 runtime_run；异步运行按需查询，不用紧密循环。
 
+## 能力与恢复判读
+
+先用 `runtime_capabilities({})` 了解当前调用上下文。`ordinaryDag:"supported"` 不是授权；Worker 仅在可信适配器和父 `toolSet` 同时存在时为 `conditional`，否则为 `unavailable`。这不保留资源、不探测真实模型，也不代表标准插件适配器已修复。普通异步仅在无 `toolSet` 时允许，`workerAsync` 始终为 false；不要移除准入集合绕过门禁。
+
+单 run 摘要的 `recovery` 可协助判读，仍需结合步骤错误与实际外部状态：
+
+| 字段/建议 | 安全判读 |
+|---|---|
+| `resultCertainty:recorded/incomplete/unknown` | 分别描述已记录、不完整或存在未知状态；recorded 不是任务验收通过 |
+| `cleanup:pending/settled/unknown` | 仅本进程调度及 owned Worker 收束观察；重启后缺少观察为 unknown，settled 不证明外部 Job 停止 |
+| `externalWork:unconfirmed` | 始终未确认外部工作停止或副作用回滚 |
+| `nextAction:wait` | 本进程仍运行/清理；不要轮询仍在同步等待的调用 |
+| `nextAction:inspect_external_state` | 先核对外部进程、文件和 Job，再决定是否另行操作，禁止自动重发 |
+| `nextAction:resume_read_only` | 仅建议检查只读恢复；显式 resume 仍受原有中断与权限门禁约束 |
+| `nextAction:review_results` | 取已保存结果并由 Lead 复核，不等于任务通过 |
+| `nextAction:inspect_failure` | 核对失败步骤、错误及记录完整性，不把失败等同于未写入 |
+
+`message` 是说明，不是指令或权限。上述字段不改变调度/恢复权限，不自动恢复、收集或停止 Job；不新增数据库、outbox 或工单。
+
+## 读取待复核输出
+
+```ts
+const saved = await tools.runtime_result({ runId });
+console.log(saved.recovery);
+console.log(saved.acceptance.status); // 始终 not_reviewed
+for (const worker of saved.acceptance.workers) {
+  console.log(worker.stepId, worker.state, worker.resultHash, worker.reportOutcome);
+  // 独立核对 saved.results[worker.stepId]?.value 的原始报告与证据。
+}
+```
+
+`acceptance` 包括 Worker 状态、可选结果哈希和报告/criteria 计数，不回显报告自由文本。需大结果时使用协议中的分页读取；分页同样带 acceptance，`resultHash` 与该步骤 value JSON 的 SHA-256（`page.hash`）一致，绑定输出但不是验收。缺失/截断不能从汇总恢复证据；哈希不匹配时重新读取并核对输出版本，不混拼页面。
+
+`runtime_status` 只看元数据，不含 report 内容。`not_reviewed` 不会被 Worker 自授为 accepted，运行时也不持久化独立验收证明；新增 runtime_review 仅记录 owner 声明的处置，不能证明人工或独立复核。即使 `succeeded`、`reportOutcome:completed` 或 `criteria.observed`，仍须核实证据、局限和待决事项；无 Worker 的空数组同样不证明任务通过。
+
+## 记录 owner 处置
+
+先读取完整结果并核实证据；仅成功且全部结果完整、已离开活动/清理窗口的运行可用。将 result.ownerReview 的 snapshotHash 和 revision 分别传给 runtime_review 的 snapshotHash、expectedRevision，并提供 disposition（accepted/needs_work）和非空理由。返回 ownerReviewHistory 留存最多32条；历史理由不会进入展示卡片。accepted仅为owner会话声明，不是人工/独立验收证明，不会授权或执行下一步。需要补证据时用needs_work，旧hash或revision被拒绝后应重新读取，不要盲目覆盖。
+
+结果或计划变化使处置stale；新run不继承旧处置。记录随run清理，不是永久账本。锁忙报RUNTIME_BUSY，不自动重试或偷锁；崩溃残留锁的离线处置边界见[协议](<protocol.md#owner-复核处置>)。
+
+## 优先查看待处理事项
+
+摘要与本会话列表项的 `attention.items` 优先列出外部核验、失败、Worker 待决、结果缺失/截断和结果待复核。卡片不重复逐步进度；完整状态、guidance 和结果仍保留在 JSON。待决事项只给步骤与结果哈希入口，须读取原报告后由 Lead 判断，不能把它当执行授权或自动暂停。
+
+常规进度没有提醒事项时 `notification.shouldNotify=false`；上层可按 `notification.key` 合并同一事项提醒。键不是已发送/已读标志，查询不会确认或清除事项；本轮没有外部推送或持久化去重账本。
+
+`waiting.steps` 区分等待依赖、等待批次调度、真实重试退避；仅退避有实际观察到的开始和下次尝试时间。重启不补猜时间，终态不再显示待执行步骤为活跃等待。清理等待仅指本进程，不代表外部 Job 退出；容量满仍按原行为拒绝，并未新增队列。
+
 ## 常见故障
 
 | 情况 | 安全操作 | 不能据此推断 |
 |---|---|---|
+| RUNTIME_AGENT_POLICY_UNSUPPORTED | 标准插件未接可信父策略适配器，改用原生委派或普通工具 DAG | 查询能力即可授权或修好适配器 |
+| RUNTIME_ASYNC_ADMISSION_UNSUPPORTED / RUNTIME_AGENT_ASYNC_UNSUPPORTED | 改用同步调用；保留父 toolSet，不重新解析或删去准入集合 | 普通异步/Worker 异步已获授权 |
+| RUNTIME_RESULT_UNAVAILABLE / RUNTIME_RESULT_CHANGED | 前者无可读保存 value 或已截断；后者输出版本已变，应重新取页核对 | 分页能恢复丢弃内容或跨版本拼接 |
 | RUNTIME_STEP_FAILED | 检查宿主返回与权限；只读普通失败可在原计划配置 retry，副作用须先核对 | 失败意味着没有写入 |
 | RUNTIME_STEP_TIMEOUT | 核对工具是否仍运行；只读超时也不立即重试，避免与不合作的原调用重叠 | 超时就是进程已退出 |
 | RUNTIME_CANCELLED | 用 runtime_result 检查 unknown；必要时通过宿主工具确认停止 | cancelled 就是已回滚 |

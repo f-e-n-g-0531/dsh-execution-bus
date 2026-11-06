@@ -8,13 +8,21 @@ import { runProgress, runGuidance } from "../presentation.js";
 import type { RunProgress, RunGuidance } from "../presentation.js";
 import { RuntimeExecutor } from "./executor.js";
 import type { Invoke } from "./executor.js";
-import { parsePlan } from "./plan.js";
+import { parsePlan, RUNTIME_LIMITS } from "./plan.js";
+import { runAcceptance, runRecovery } from "./insights.js";
+import { runAttention } from "./attention.js";
+import type { RunAttention } from "./attention.js";
+import { runWaiting } from "./waiting.js";
+import { ownerReview } from "./review.js";
+import type { RunRecovery } from "./insights.js";
 import { executeAgent } from "./agent.js";
 import type { DelegationPolicyAdapter } from "./agent.js";
 import { WorkerQuota } from "./worker-quota.js";
 import type { Plan } from "./plan.js";
 import { RunStore } from "./store.js";
 import type { RunRecord, StepRecord } from "./store.js";
+
+type RunWaiting = ReturnType<typeof runWaiting>;
 
 const MAX_ACTIVE_RUNS = 8;
 const PROCESS_ID = randomUUID();
@@ -60,6 +68,10 @@ export interface RunSummary {
   executionSettled?: boolean;
   progress: RunProgress;
   guidance: RunGuidance[];
+  recovery: RunRecovery;
+  attention: RunAttention;
+  waiting: RunWaiting;
+  ownerReview: ReturnType<typeof ownerReview>;
   steps: Array<{
     id: string;
     tool: string;
@@ -89,6 +101,10 @@ function summary(run: RunRecord): RunSummary {
       : {}),
     progress: runProgress(run),
     guidance: runGuidance(run),
+    recovery: runRecovery(run, settlement.get(run.runId)),
+    attention: runAttention(run, settlement.get(run.runId)),
+    waiting: runWaiting(run, settlement.get(run.runId)),
+    ownerReview: ownerReview(run),
     steps: run.steps.map((step) => ({
       id: step.id,
       tool: step.tool,
@@ -192,6 +208,40 @@ export class RuntimeService {
     return this.disposal;
   }
 
+  /** Descriptive only: no policy checks, tool dispatch, capacity reservation or run creation. */
+  capabilities(raw: unknown, exec: ToolRunContext) {
+    this.ensureOpen();
+    this.sessionId(exec);
+    plain(raw, new Set());
+    const adapter =
+      typeof this.delegationPolicy?.checkParentPolicy === "function";
+    const parentAdmission = exec.toolSet !== undefined;
+    return {
+      ordinaryDag: "supported" as const,
+      worker:
+        adapter && parentAdmission
+          ? ("conditional" as const)
+          : ("unavailable" as const),
+      workerReason: !adapter
+        ? ("trusted_adapter_missing" as const)
+        : !parentAdmission
+          ? ("parent_admission_missing" as const)
+          : ("execution_checks_required" as const),
+      ordinaryAsync: !parentAdmission,
+      workerAsync: false as const,
+      workerTools: ["read", "glob", "grep"],
+      limits: {
+        maxSteps: RUNTIME_LIMITS.steps,
+        maxConcurrency: RUNTIME_LIMITS.concurrencyMax,
+        maxActiveRuns: MAX_ACTIVE_RUNS,
+        maxWorkers: 8,
+      },
+      authorization: "checked_at_execution" as const,
+      message:
+        "能力说明不代表授权、工具/模型可用或容量预留；每次执行仍须通过宿主准入。Worker 需要可信父策略适配器及有效父 toolSet；普通异步调用仅适用于无 toolSet 的受控宿主集成。",
+    };
+  }
+
   async run(
     raw: unknown,
     exec: ToolRunContext,
@@ -281,6 +331,9 @@ export class RuntimeService {
             stepCount: run.steps.length,
             progress: runProgress(run),
             guidance: runGuidance(run),
+            attention: runAttention(run, settlement.get(run.runId)),
+            waiting: runWaiting(run, settlement.get(run.runId)),
+            ownerReview: ownerReview(run),
           })),
         diagnostics: this.store.diagnostics(),
       };
@@ -288,6 +341,48 @@ export class RuntimeService {
     if (input.limit !== undefined || input.offset !== undefined)
       throw Error(ERRORS.INVALID_PLAN);
     return summary(this.owned(input.runId, sessionId));
+  }
+
+  review(raw: unknown, exec: ToolRunContext) {
+    this.ensureOpen();
+    const sessionId = this.sessionId(exec);
+    const input = plain(
+      raw,
+      new Set([
+        "runId",
+        "snapshotHash",
+        "expectedRevision",
+        "disposition",
+        "reason",
+      ]),
+    );
+    const run = this.owned(input.runId, sessionId);
+    if (exec.signal?.aborted) throw Error(ERRORS.RUNTIME_CANCELLED);
+    if (
+      this.manager.active.has(run.runId) ||
+      this.manager.failures.has(run.runId)
+    )
+      throw Error(ERRORS.RUNTIME_INVALID_STATE);
+    if (
+      typeof input.snapshotHash !== "string" ||
+      !/^[a-f0-9]{64}$/.test(input.snapshotHash) ||
+      typeof input.expectedRevision !== "number" ||
+      !Number.isSafeInteger(input.expectedRevision) ||
+      input.expectedRevision < 0 ||
+      (input.disposition !== "accepted" &&
+        input.disposition !== "needs_work") ||
+      typeof input.reason !== "string" ||
+      !input.reason.trim() ||
+      Buffer.byteLength(input.reason, "utf8") > 2048
+    )
+      throw Error(ERRORS.INVALID_PLAN);
+    const saved = this.store.recordReview(run.runId, sessionId, {
+      snapshotHash: input.snapshotHash,
+      expectedRevision: input.expectedRevision,
+      disposition: input.disposition,
+      reason: input.reason,
+    });
+    return { ...summary(saved), ownerReviewHistory: saved.ownerReviews! };
   }
 
   result(raw: unknown, exec: ToolRunContext) {
@@ -317,6 +412,8 @@ export class RuntimeService {
       const end = Math.min(chars.length, offset + limit);
       return {
         ...summary(run),
+        acceptance: runAcceptance(run),
+        ownerReviewHistory: run.ownerReviews ?? [],
         results: {},
         finished: run.state !== "running" && run.state !== "interrupted",
         page: {
@@ -339,6 +436,8 @@ export class RuntimeService {
       throw Error(ERRORS.INVALID_PLAN);
     return {
       ...summary(run),
+      acceptance: runAcceptance(run),
+      ownerReviewHistory: run.ownerReviews ?? [],
       results: structuredClone(run.results),
       finished: run.state !== "running" && run.state !== "interrupted",
     };

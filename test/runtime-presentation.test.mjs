@@ -267,6 +267,9 @@ test("owner-filtered summaries expose progress/advice without plan inputs or raw
     const listed = f.service.status({}, exec());
     validate("runtime_status", listed);
     assert.deepEqual(listed.runs[0].progress, run.progress);
+    assert.equal(listed.runs[0].attention.items[0].kind, "inspect_external_state");
+    assert.equal(listed.runs[0].attention.notification.shouldNotify, true);
+    assert.deepEqual(listed.runs[0].waiting.steps, []);
     const status = f.service.status({ runId: run.runId }, exec());
     assert.doesNotMatch(
       JSON.stringify(status),
@@ -291,6 +294,8 @@ test("owner-filtered summaries expose progress/advice without plan inputs or raw
     assert.equal(stored.version, 1);
     assert.equal(Object.hasOwn(stored, "progress"), false);
     assert.equal(Object.hasOwn(stored, "guidance"), false);
+    assert.equal(Object.hasOwn(stored, "attention"), false);
+    assert.equal(Object.hasOwn(stored, "waiting"), false);
     const meta = runtimePresentationMeta(
       { plan: { secret: "SECRET" } },
       result,
@@ -445,6 +450,7 @@ test("real host registration validates schemas and retains JSON renderer plus re
     assert.doesNotMatch(JSON.stringify(result.meta), /RAW-PRIVATE-RESULT/);
     validate("runtime_run", result.value);
     for (const [name, args] of [
+      ["runtime_capabilities", {}],
       ["runtime_status", {}],
       ["runtime_status", { runId: result.value.runId }],
       ["runtime_result", { runId: result.value.runId }],
