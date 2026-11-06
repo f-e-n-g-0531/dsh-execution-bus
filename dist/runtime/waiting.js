@@ -32,7 +32,15 @@ export function runWaiting(run, settled) {
         .map((step) => {
         const backoff = backoffs.get(run)?.get(step.id);
         if (backoff)
-            return { stepId: step.id, reason: "retry_backoff", ...backoff };
+            return {
+                stepId: step.id,
+                reason: "retry_backoff",
+                disposition: backoff.retryCategory === "transient" ||
+                    backoff.retryCategory === "legacy_unknown"
+                    ? "waiting_retry"
+                    : "needs_action",
+                ...backoff,
+            };
         const spec = specs.get(step.id);
         return {
             stepId: step.id,

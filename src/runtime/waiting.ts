@@ -13,6 +13,8 @@ export interface WaitingStep {
   waitingSince?: number;
   nextRetryAt?: number;
   retryCategory?: RetryCategory;
+  /** Derived display only: a transient read may retry; it is not a new retry grant. */
+  disposition?: "waiting_retry" | "needs_action";
 }
 
 // Live observations only: never checkpoint these, or key them by a persisted ID.
@@ -59,7 +61,16 @@ export function runWaiting(
     .map((step): WaitingStep => {
       const backoff = backoffs.get(run)?.get(step.id);
       if (backoff)
-        return { stepId: step.id, reason: "retry_backoff", ...backoff };
+        return {
+          stepId: step.id,
+          reason: "retry_backoff",
+          disposition:
+            backoff.retryCategory === "transient" ||
+            backoff.retryCategory === "legacy_unknown"
+              ? "waiting_retry"
+              : "needs_action",
+          ...backoff,
+        };
       const spec = specs.get(step.id);
       return {
         stepId: step.id,

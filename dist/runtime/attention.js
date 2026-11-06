@@ -1,7 +1,16 @@
 import { createHash } from "node:crypto";
 import { runAcceptance, runRecovery } from "./insights.js";
 import { ownerReview } from "./review.js";
+import { attentionSnapshot } from "./acknowledgement.js";
 const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+/** Review stays visible, but a successful result is not an interrupt by itself. */
+const NOTIFY_KINDS = new Set([
+    "inspect_external_state",
+    "inspect_failure",
+    "resume_read_only",
+    "decision_required",
+    "result_unavailable",
+]);
 /**
  * Pure, owner-side advice: Worker decisions are self-reported, never verified.
  * Keys describe content, not delivery, acknowledgement, or cross-session deduplication.
@@ -73,11 +82,21 @@ export function runAttention(run, settled) {
         items.length === 0 &&
         ownerReview(run).status !== "accepted")
         add("review_results", undefined, digest(results));
+    const snapshotHash = attentionSnapshot(run);
+    for (const item of items) {
+        if (run.acknowledgements?.some((entry) => entry.snapshotHash === snapshotHash && entry.key === item.key))
+            item.acknowledged = true;
+    }
+    // Unknown external effects always remain urgent, even after explicit acknowledgement.
+    const alerts = items.filter((item) => NOTIFY_KINDS.has(item.kind) &&
+        (!item.acknowledged || item.kind === "inspect_external_state"));
     return {
+        ...(snapshotHash === undefined ? {} : { snapshotHash }),
+        revision: run.acknowledgements?.at(-1)?.revision ?? 0,
         items,
         notification: {
-            key: digest({ runId: run.runId, items }),
-            shouldNotify: items.length > 0,
+            key: digest({ runId: run.runId, items: alerts }),
+            shouldNotify: alerts.length > 0,
         },
     };
 }

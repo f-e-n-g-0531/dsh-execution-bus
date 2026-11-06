@@ -199,6 +199,8 @@ const workerTraceSchema = {
 const attentionSchema = {
     type: "object",
     properties: {
+        snapshotHash: string,
+        revision: integer,
         items: {
             type: "array",
             items: {
@@ -218,6 +220,7 @@ const attentionSchema = {
                     },
                     stepId: string,
                     resultHash: string,
+                    acknowledged: { type: "boolean", const: true },
                 },
                 required: ["key", "kind"],
                 additionalProperties: false,
@@ -258,6 +261,10 @@ const waitingSchema = {
                             "deterministic",
                             "legacy_unknown",
                         ],
+                    },
+                    disposition: {
+                        type: "string",
+                        enum: ["waiting_retry", "needs_action"],
                     },
                 },
                 required: ["stepId", "reason"],
@@ -524,6 +531,29 @@ export const RUNTIME_OUTPUT_SCHEMAS = {
         ],
         additionalProperties: false,
     },
+    runtime_acknowledge: {
+        type: "object",
+        properties: {
+            ...summaryProperties,
+            acknowledgementHistory: {
+                type: "array",
+                items: {
+                    type: "object",
+                    properties: {
+                        revision: integer,
+                        snapshotHash: string,
+                        key: string,
+                        reason: string,
+                        at: integer,
+                    },
+                    required: ["revision", "snapshotHash", "key", "reason", "at"],
+                    additionalProperties: false,
+                },
+            },
+        },
+        required: [...summaryRequired, "acknowledgementHistory"],
+        additionalProperties: false,
+    },
     runtime_review: {
         type: "object",
         properties: {
@@ -541,6 +571,21 @@ export const RUNTIME_OUTPUT_SCHEMAS = {
             ...summaryProperties,
             acceptance: acceptanceSchema,
             ownerReviewHistory: ownerReviewHistorySchema,
+            acknowledgementHistory: {
+                type: "array",
+                items: {
+                    type: "object",
+                    properties: {
+                        revision: integer,
+                        snapshotHash: string,
+                        key: string,
+                        reason: string,
+                        at: integer,
+                    },
+                    required: ["revision", "snapshotHash", "key", "reason", "at"],
+                    additionalProperties: false,
+                },
+            },
             page: {
                 type: "object",
                 properties: {
@@ -611,6 +656,16 @@ const attentionPriority = {
     result_unavailable: 4,
     review_results: 5,
 };
+const alertKinds = new Set([
+    "inspect_external_state",
+    "inspect_failure",
+    "resume_read_only",
+    "decision_required",
+    "result_unavailable",
+]);
+function alertItems(value) {
+    return actionableItems(value).filter((item) => alertKinds.has(item.kind));
+}
 function actionableItems(value) {
     const attention = object(object(value)?.attention);
     if (!Array.isArray(attention?.items))
@@ -625,8 +680,6 @@ function actionableItems(value) {
 }
 /** Read-only navigation: aggregate attention hashes are never pagination hashes. */
 function resultLocation(runId, item) {
-    if (!["decision_required", "review_results", "result_unavailable"].includes(item.kind))
-        return [];
     const request = { runId };
     if (item.kind === "decision_required" && typeof item.stepId === "string") {
         request.stepId = item.stepId;
@@ -639,10 +692,18 @@ function resultLocation(runId, item) {
     const lines = ["只读定位：runtime_result(" + JSON.stringify(request) + ")"];
     if (request.stepId !== undefined)
         lines.push("分页按 nextOffset 继续并沿用返回的 page.hash；拼接 page.text 后再解析 JSON。");
+    if (item.kind === "inspect_external_state")
+        lines.push("先核对对应步骤与后台回执；有 jobId 时由原 owner 收集 Job，无回执则先核实外部状态。不要自动重发。");
+    if (item.kind === "inspect_failure")
+        lines.push("先检查失败步骤、错误码与已保存结果；此处不重试、不绕过失败。");
+    if (item.kind === "resume_read_only")
+        lines.push("先核对原始提交计划及各步骤状态，再由 owner 显式请求 runtime_resume；仅只读在途步骤可重排，也可能继续尚未启动的步骤。此处不执行恢复、不增加授权。");
+    if (item.kind === "decision_required")
+        lines.push("读取完整 Worker 报告及证据后由 Lead 判断；请求决策不代表人工批准、执行授权或自动暂停，runtime_review 也不是回答 Worker 并续跑的接口。");
     if (item.kind === "result_unavailable")
         lines.push("先检查保存结果；缺失或 truncated 的原文不能通过分页恢复，需另行补取证据。");
     if (item.kind === "review_results")
-        lines.push("先读取各步骤保存结果；需要分页时使用 stepId 和该步骤返回的 hash，不使用待办聚合哈希。");
+        lines.push("先读取各步骤完整保存结果与证据；需要分页时使用 stepId 和该步骤返回的 hash，不使用待办聚合哈希。确认后可由 owner 显式调用 runtime_review 记录处置；处置不证明人工或独立验收。");
     return lines;
 }
 function runText(value) {
@@ -661,14 +722,21 @@ function runText(value) {
             review_results: "结果待复核；执行成功不代表验收通过",
         };
         const items = actionableItems(run);
-        if (items.length)
+        const alerts = items.filter((item) => alertKinds.has(item.kind));
+        const reviews = items.filter((item) => item.kind === "review_results");
+        if (alerts.length)
             lines.push("待处理事项：");
-        for (const item of items) {
+        for (const item of alerts) {
             lines.push((typeof item.stepId === "string" ? "[" + item.stepId + "] " : "") +
-                labels[item.kind], ...resultLocation(run.runId, item));
+                labels[item.kind] +
+                (item.acknowledged === true ? " · 已知悉（不等于解决或验收）" : ""), ...resultLocation(run.runId, item));
         }
-        if (!attention.items.length)
-            lines.push("暂无待处理提醒；常规进度仅保留在摘要与 JSON 中。");
+        if (reviews.length)
+            lines.push("详情：结果待复核（" +
+                reviews.length +
+                "）；执行成功不代表验收通过，不触发默认提醒。", ...reviews.flatMap((item) => resultLocation(String(run.runId), item)));
+        if (!alerts.length)
+            lines.push("暂无必须处理提醒；常规进度和结果复核保留在摘要与 JSON 中。");
     }
     lines.push(progressText(run.progress));
     if (typeof run.executionSettled === "boolean")
@@ -681,6 +749,10 @@ function runText(value) {
             dependency: "等待依赖成功",
             scheduler: "等待批次调度",
             retry_backoff: "只读重试退避",
+        };
+        const dispositions = {
+            waiting_retry: "本次失败，按既有策略等待重试；未升级为待处理",
+            needs_action: "重试条件不成立，需检查后再决定",
         };
         for (const raw of waiting.steps) {
             const item = object(raw);
@@ -696,6 +768,10 @@ function runText(value) {
                         : "") +
                     (typeof item.nextRetryAt === "number"
                         ? " · 下次尝试不早于 " + item.nextRetryAt
+                        : "") +
+                    (typeof item.disposition === "string" &&
+                        Object.hasOwn(dispositions, item.disposition)
+                        ? " · " + dispositions[item.disposition]
                         : ""));
         }
         if (waiting.cleanupPending === true)
@@ -785,6 +861,50 @@ function runText(value) {
         lines.push("步骤原始结果保留在工具 JSON 返回值中；truncated 仅是截断标记，不是完整结果。");
     return lines.filter(Boolean).join("\n");
 }
+const alertLabels = {
+    inspect_external_state: "外部状态未知",
+    inspect_failure: "失败待查",
+    resume_read_only: "中断待处置",
+    decision_required: "待决策",
+    result_unavailable: "结果缺失",
+};
+/** Current page only. Reviews stay out of the alert count and nothing is executed. */
+function pageAlertSummary(runs) {
+    const counts = new Map();
+    let reviews = 0;
+    for (const run of runs) {
+        for (const item of actionableItems(run)) {
+            const kind = item.kind;
+            if (alertKinds.has(kind))
+                counts.set(kind, (counts.get(kind) ?? 0) + 1);
+            else if (kind === "review_results")
+                reviews++;
+        }
+    }
+    const alerts = Object.keys(alertLabels)
+        .filter((kind) => counts.has(kind))
+        .map((kind) => alertLabels[kind] + " " + counts.get(kind));
+    return ("本页待办：" +
+        (alerts.length ? alerts.join("，") : "无必须处理事项") +
+        "；结果待复核 " +
+        reviews +
+        "（不触发提醒，不代表全部会话）。");
+}
+/** Keep every run's identity and locators, even when attention kinds match. */
+function renderRunList(runs) {
+    const urgent = [];
+    const quiet = [];
+    for (const run of runs) {
+        const text = runText(run);
+        (alertItems(run).length ? urgent : quiet).push(text);
+    }
+    return [
+        pageAlertSummary(runs),
+        "本页运行（必须处理优先；逐项保留运行与读取入口；不代表全部待办）：",
+        ...urgent,
+        ...quiet,
+    ].join("\n\n");
+}
 /** Replayable metadata excludes inputs, raw result values and owner identity. */
 export function runtimePresentationMeta(_args, value) {
     const result = object(value);
@@ -802,15 +922,7 @@ export function runtimePresentationMeta(_args, value) {
         };
     const text = Array.isArray(result?.runs)
         ? result.runs.length
-            ? [
-                "本页运行（待处理优先；不代表全部待办）：",
-                ...result.runs
-                    .filter((run) => actionableItems(run).length > 0)
-                    .map(runText),
-                ...result.runs
-                    .filter((run) => actionableItems(run).length === 0)
-                    .map(runText),
-            ].join("\n\n")
+            ? renderRunList(result.runs)
             : "本会话暂无运行。"
         : runText(value);
     return { title: "萧何运行摘要", text };

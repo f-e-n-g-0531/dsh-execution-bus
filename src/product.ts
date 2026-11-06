@@ -140,6 +140,21 @@ export const RUNTIME_STATUS_PARAMETERS = {
   additionalProperties: false,
 } as const;
 
+export const RUNTIME_ACKNOWLEDGE_PARAMETERS = {
+  type: "object",
+  properties: {
+    runId: { type: "string" },
+    snapshotHash: { type: "string", pattern: "^[a-f0-9]{64}$" },
+    key: { type: "string", pattern: "^[a-f0-9]{64}$" },
+    expectedRevision: { type: "integer", minimum: 0, maximum: 31 },
+    reason: { type: "string", minLength: 1, maxLength: 2048 },
+  },
+  required: ["runId", "snapshotHash", "key", "expectedRevision", "reason"],
+  additionalProperties: false,
+} as const;
+export const RUNTIME_ACKNOWLEDGE_DESCRIPTION =
+  "原 owner 显式记录当前版本问题已知悉。先读取 runtime_status/result 的 attention.snapshotHash、revision 和 items[].key，再提交；仅已停止调度的 succeeded/failed/cancelled 运行，活动/清理中/interrupted运行拒绝。理由最多2048 UTF-8字节，每run最多32条。已知悉不等于解决、验收、投递回执或授权，不改变执行状态，不回答Worker，不重试/恢复/停止Job。问题变化后旧知悉失效；未知副作用即使知悉仍保留警示和提醒。成功结果复核使用 runtime_review，不用此接口。";
+
 export const RUNTIME_REVIEW_PARAMETERS = {
   type: "object",
   properties: {

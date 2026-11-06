@@ -148,6 +148,35 @@ export declare const RUNTIME_STATUS_PARAMETERS: {
     };
     readonly additionalProperties: false;
 };
+export declare const RUNTIME_ACKNOWLEDGE_PARAMETERS: {
+    readonly type: "object";
+    readonly properties: {
+        readonly runId: {
+            readonly type: "string";
+        };
+        readonly snapshotHash: {
+            readonly type: "string";
+            readonly pattern: "^[a-f0-9]{64}$";
+        };
+        readonly key: {
+            readonly type: "string";
+            readonly pattern: "^[a-f0-9]{64}$";
+        };
+        readonly expectedRevision: {
+            readonly type: "integer";
+            readonly minimum: 0;
+            readonly maximum: 31;
+        };
+        readonly reason: {
+            readonly type: "string";
+            readonly minLength: 1;
+            readonly maxLength: 2048;
+        };
+    };
+    readonly required: readonly ["runId", "snapshotHash", "key", "expectedRevision", "reason"];
+    readonly additionalProperties: false;
+};
+export declare const RUNTIME_ACKNOWLEDGE_DESCRIPTION = "\u539F owner \u663E\u5F0F\u8BB0\u5F55\u5F53\u524D\u7248\u672C\u95EE\u9898\u5DF2\u77E5\u6089\u3002\u5148\u8BFB\u53D6 runtime_status/result \u7684 attention.snapshotHash\u3001revision \u548C items[].key\uFF0C\u518D\u63D0\u4EA4\uFF1B\u4EC5\u5DF2\u505C\u6B62\u8C03\u5EA6\u7684 succeeded/failed/cancelled \u8FD0\u884C\uFF0C\u6D3B\u52A8/\u6E05\u7406\u4E2D/interrupted\u8FD0\u884C\u62D2\u7EDD\u3002\u7406\u7531\u6700\u591A2048 UTF-8\u5B57\u8282\uFF0C\u6BCFrun\u6700\u591A32\u6761\u3002\u5DF2\u77E5\u6089\u4E0D\u7B49\u4E8E\u89E3\u51B3\u3001\u9A8C\u6536\u3001\u6295\u9012\u56DE\u6267\u6216\u6388\u6743\uFF0C\u4E0D\u6539\u53D8\u6267\u884C\u72B6\u6001\uFF0C\u4E0D\u56DE\u7B54Worker\uFF0C\u4E0D\u91CD\u8BD5/\u6062\u590D/\u505C\u6B62Job\u3002\u95EE\u9898\u53D8\u5316\u540E\u65E7\u77E5\u6089\u5931\u6548\uFF1B\u672A\u77E5\u526F\u4F5C\u7528\u5373\u4F7F\u77E5\u6089\u4ECD\u4FDD\u7559\u8B66\u793A\u548C\u63D0\u9192\u3002\u6210\u529F\u7ED3\u679C\u590D\u6838\u4F7F\u7528 runtime_review\uFF0C\u4E0D\u7528\u6B64\u63A5\u53E3\u3002";
 export declare const RUNTIME_REVIEW_PARAMETERS: {
     readonly type: "object";
     readonly properties: {

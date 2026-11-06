@@ -1,6 +1,7 @@
 import type { Plan } from "./plan.js";
 import type { OwnerReviewRecord } from "./review.js";
 import type { WorkerTrace } from "./agent-trace.js";
+import type { AcknowledgementRecord } from "./acknowledgement.js";
 export type RunState = "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
 export type StepState = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "unknown";
 export interface StepRecord {
@@ -31,6 +32,7 @@ export interface RunRecord {
     steps: StepRecord[];
     results: Record<string, StoredResult>;
     ownerReviews?: OwnerReviewRecord[];
+    acknowledgements?: AcknowledgementRecord[];
     createdAt: number;
     updatedAt: number;
     finishedAt?: number;
@@ -52,6 +54,13 @@ export declare class RunStore {
         snapshotHash: string;
         expectedRevision: number;
         disposition: "accepted" | "needs_work";
+        reason: string;
+    }): RunRecord;
+    /** Shares the review/removal lock; only non-recoverable terminal runs may be acknowledged. */
+    recordAcknowledgement(runId: string, ownerSessionId: string, input: {
+        snapshotHash: string;
+        key: string;
+        expectedRevision: number;
         reason: string;
     }): RunRecord;
     load(runId: string): RunRecord | undefined;

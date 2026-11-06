@@ -101,6 +101,35 @@ export declare class RuntimeService {
             writeFailures: number;
         }>;
     };
+    acknowledge(raw: unknown, exec: ToolRunContext): {
+        acknowledgementHistory: import("./acknowledgement.js").AcknowledgementRecord[];
+        runId: string;
+        state: RunRecord["state"];
+        goal?: string;
+        taskId?: string;
+        previousRunId?: string;
+        error?: string;
+        createdAt: number;
+        updatedAt: number;
+        finishedAt?: number;
+        durationMs: number;
+        executionSettled?: boolean;
+        progress: RunProgress;
+        guidance: RunGuidance[];
+        recovery: RunRecovery;
+        attention: RunAttention;
+        waiting: RunWaiting;
+        ownerReview: ReturnType<typeof ownerReview>;
+        steps: Array<{
+            id: string;
+            tool: string;
+            state: StepRecord["state"];
+            attempts: number;
+            childSessionId?: string;
+            workerTrace?: StepRecord["workerTrace"];
+            error?: string;
+        }>;
+    };
     review(raw: unknown, exec: ToolRunContext): {
         ownerReviewHistory: import("./review.js").OwnerReviewRecord[];
         runId: string;
@@ -133,6 +162,7 @@ export declare class RuntimeService {
     result(raw: unknown, exec: ToolRunContext): {
         acceptance: import("./insights.js").RunAcceptance;
         ownerReviewHistory: import("./review.js").OwnerReviewRecord[];
+        acknowledgementHistory: import("./acknowledgement.js").AcknowledgementRecord[];
         results: {};
         finished: boolean;
         page: {
@@ -174,6 +204,7 @@ export declare class RuntimeService {
     } | {
         acceptance: import("./insights.js").RunAcceptance;
         ownerReviewHistory: import("./review.js").OwnerReviewRecord[];
+        acknowledgementHistory: import("./acknowledgement.js").AcknowledgementRecord[];
         results: Record<string, import("./store.js").StoredResult>;
         finished: boolean;
         runId: string;

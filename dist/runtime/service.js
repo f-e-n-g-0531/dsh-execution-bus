@@ -267,6 +267,40 @@ export class RuntimeService {
             throw Error(ERRORS.INVALID_PLAN);
         return summary(this.owned(input.runId, sessionId));
     }
+    acknowledge(raw, exec) {
+        this.ensureOpen();
+        const sessionId = this.sessionId(exec);
+        const input = plain(raw, new Set(["runId", "snapshotHash", "key", "expectedRevision", "reason"]));
+        const run = this.owned(input.runId, sessionId);
+        if (exec.signal?.aborted)
+            throw Error(ERRORS.RUNTIME_CANCELLED);
+        if (this.manager.active.has(run.runId) ||
+            this.manager.failures.has(run.runId) ||
+            run.state === "running" ||
+            run.state === "interrupted")
+            throw Error(ERRORS.RUNTIME_INVALID_STATE);
+        if (typeof input.snapshotHash !== "string" ||
+            !/^[a-f0-9]{64}$/.test(input.snapshotHash) ||
+            typeof input.key !== "string" ||
+            !/^[a-f0-9]{64}$/.test(input.key) ||
+            typeof input.expectedRevision !== "number" ||
+            !Number.isSafeInteger(input.expectedRevision) ||
+            input.expectedRevision < 0 ||
+            typeof input.reason !== "string" ||
+            !input.reason.trim() ||
+            Buffer.byteLength(input.reason, "utf8") > 2048)
+            throw Error(ERRORS.INVALID_PLAN);
+        const saved = this.store.recordAcknowledgement(run.runId, sessionId, {
+            snapshotHash: input.snapshotHash,
+            key: input.key,
+            expectedRevision: input.expectedRevision,
+            reason: input.reason,
+        });
+        return {
+            ...summary(saved),
+            acknowledgementHistory: saved.acknowledgements,
+        };
+    }
     review(raw, exec) {
         this.ensureOpen();
         const sessionId = this.sessionId(exec);
@@ -330,6 +364,7 @@ export class RuntimeService {
                 ...summary(run),
                 acceptance: runAcceptance(run),
                 ownerReviewHistory: run.ownerReviews ?? [],
+                acknowledgementHistory: run.acknowledgements ?? [],
                 results: {},
                 finished: run.state !== "running" && run.state !== "interrupted",
                 page: {
@@ -352,6 +387,7 @@ export class RuntimeService {
             ...summary(run),
             acceptance: runAcceptance(run),
             ownerReviewHistory: run.ownerReviews ?? [],
+            acknowledgementHistory: run.acknowledgements ?? [],
             results: structuredClone(run.results),
             finished: run.state !== "running" && run.state !== "interrupted",
         };

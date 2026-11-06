@@ -10,6 +10,7 @@
 | `runtime_run` | `{ plan, async? }` | 同步：运行摘要与步骤状态；仅不含 Agent 且调用未携带 `exec.toolSet` 的受控宿主计划可用 `async:true`：受理后立即返回 `{ runId, state:"running" }` |
 | `runtime_status` | `{}`、`{ limit?, offset? }` 或 `{ runId }` | 本会话最近运行列表与脱敏存储诊断，或指定运行元数据（不含结果） |
 | `runtime_result` | `{ runId }` 或下述分页参数 | 运行摘要 + `acceptance` + 已保存步骤结果（`truncated/bytes` 标记）；分页同样含 `acceptance` |
+| `runtime_acknowledge` | `{runId,snapshotHash,key,expectedRevision,reason}` | 原 owner 显式记录当前版本问题已知悉，返回摘要与 `acknowledgementHistory`；不是解决或验收 |
 | `runtime_review` | `{runId,snapshotHash,expectedRevision,disposition,reason}` | 记录 owner 处置并返回摘要与 `ownerReviewHistory`；不是独立验收 |
 | `runtime_cancel` | `{ runId }` | 发起取消后的运行摘要；不保证 Worker 已清理或宿主操作已实际停止 |
 | `runtime_resume` | `{ runId }` | 同步等待恢复结果；仅 `interrupted` 可恢复 |
@@ -45,12 +46,22 @@ recovery: {
 完整运行摘要与 status 列表项增加可选派生字段（异步受理回执不变）：
 
 - `attention.items`：按外部状态核验、失败检查/中断只读恢复处置（resume_read_only）、Worker 待决、结果缺失/截断、结果复核排序的事项。每项含 `key/kind`，可带 `stepId/resultHash`；不回显问题或报告自由文本。决策请求仍为 Worker 自报，原报告通过 result 读取，不是权限或自动暂停条件。
-- `attention.notification:{key,shouldNotify}`：同一事项集合生成稳定 SHA-256 键，常规运行进度无事项时 shouldNotify=false。更新时间、尝试次数不单独触发新键；键供上层合并提醒，不表示已发送、已读或已处理。读取不确认事项，不持久化通知收据。
-- `waiting:{steps,cleanupPending}`：仅 running 的 pending 步骤列出 dependency（依赖未成功）、scheduler（依赖已满足，等待后续批次）或 retry_backoff（当前进程实际处于只读重试退避）。仅真实退避观察附 waitingSince、nextRetryAt（毫秒时间戳）和枚举 retryCategory，不从错误正文推断。nextRetryAt 不是执行保证。
+- `attention.notification:{key,shouldNotify}`：键只覆盖必须处理事项（外部状态未知、失败、只读恢复、Worker 待决、结果缺失/截断），稳定 SHA-256；`review_results` 仍在 `items`，但不进入键，也不使 shouldNotify=true。无必须处理事项时 shouldNotify=false。更新时间、尝试次数不单独触发新键；键供上层合并提醒，不表示已发送、已读、已忽略或已处理。读取不确认事项，不持久化通知收据；只有显式 runtime_acknowledge 才保存问题知悉记录。
+- `waiting:{steps,cleanupPending}`：仅 running 的 pending 步骤列出 dependency（依赖未成功）、scheduler（依赖已满足，等待后续批次）或 retry_backoff（当前进程实际处于只读重试退避）。仅真实退避观察附 waitingSince、nextRetryAt（毫秒时间戳）、枚举 retryCategory，以及可选 disposition：`waiting_retry`（transient/legacy_unknown，本次失败按既有策略等待重试，未升级）或 `needs_action`（其他类别，重试条件不成立）。不从错误正文推断，不因此放宽 retry。nextRetryAt 不是执行保证。
 
 退避观察仅存在于当前进程、当前 RunRecord，不写入 v1 记录，重启后不推断历史等待时间。cleanupPending 仅表示已知本进程运行 Promise 在终态后尚未收束，不证明外部工作停止。当前无容量等待队列，不展示虚构 capacity 等待。
 
-展示卡优先呈现待处理事项，常规逐步状态和重复 Worker 验收提醒收敛到 JSON；旧返回值没有这些字段时仍使用原展示。不改变状态/依赖成功条件、不自动执行恢复、不新增独立验收、Outbox 或工单；owner处置另见下节；列表只聚合当前页的本会话运行，不是全量全局待办。
+展示卡默认只展开必须处理事项；`review_results` 和常规进度留在详情。当前页列表只汇总各类事项计数，必须处理优先且保持分组内顺序；不同运行不折叠，每个 runId、状态、结果读取入口与 Job 提示分别保留。所有待办均提供只读 runtime_result 定位，待决步骤沿用该步骤结果哈希，其他事项不把聚合哈希用作分页哈希。恢复前须检查原始提交计划与步骤状态；owner 复核不是回答 Worker 并续跑的接口。上层可用 notification.key 合并提醒，也可在自己的界面忽略该键；问题知悉记录另见下节，查询不会确认或清除事项。旧返回值没有这些字段时仍使用原展示。不改变状态/依赖成功条件、不自动执行恢复、不给副作用步骤增加重试、不新增独立验收、Outbox 或工单；owner处置另见下节；列表只聚合当前页的本会话运行，不是全量全局待办。
+
+### 问题已知悉（1.6.0）
+
+原 owner 可显式调用 `runtime_acknowledge`（参数见工具表），snapshotHash、expectedRevision、key 分别复制当前 attention.snapshotHash、revision、items[].key。只允许 succeeded/failed/cancelled 的持久化运行；running/interrupted、活动或清理在途及易失失败记录拒绝。review_results 不可知悉，应使用 runtime_review。理由非空且最多2048 UTF-8字节，每run最多32条，不驱逐历史。
+
+知悉后该事项仍在 items 并带 acknowledged:true，卡片仍展开且注明“不等于解决或验收”；普通问题不再使 notification.shouldNotify=true，inspect_external_state 即使已知悉仍保留提醒。快照绑定计划、运行/步骤状态、尝试次数、错误、结果及步骤时间；这些内容变化使旧记录失效，同键新问题也不会被压住。snapshotHash 不是结果分页 hash，也不是已阅读证据。
+
+记录存于 v1 的可选 acknowledgements，revision 全run递增；acknowledge 和 result（含分页）返回 acknowledgementHistory，理由不进入 status 列表或展示元数据。随run既有保留策略清理，不是永久账本。写入与 review/remove 共用 .review-lock，在锁内重新检查 owner、快照和revision，沿用原子保存；锁忙拒绝，旧版本不认识新字段，不能混用记录目录。
+
+知悉不改变执行状态/时间、结果、验收、权限或恢复规则，不回答Worker，不发送通知，不重试或停止Job，也不表示问题已解决。首版不提供“已解决”。
 
 ### Owner 复核处置
 
@@ -62,7 +73,7 @@ recovery: {
 
 记录存于 version 1 run 的可选 ownerReviews，最多32条，超限拒写而不驱逐。记录不改变运行时间、状态和保留排序，随终态运行一起按既有策略清理，不是永久审计库；旧版读取器不认识此字段，使用处置后的记录目录不能交给旧版写入。坏记录继续严格拒读，不默认为未处置。
 
-写入使用每run排他 `.review-lock`，在锁内重新读取并检查owner/hash/revision，陈旧值报RUNTIME_RESULT_CHANGED，锁忙报RUNTIME_BUSY。运行删除/保留清理也遵守该锁（锁忙跳过删除）。锁内沿用临时文件/fsync/rename；失败不先更新内存。崩溃遗留锁不会自动抢占，应先停掉所有访问该目录的宿主、备份运行记录并核验结果，再由操作者移除对应锁；不要在线清锁。此互斥仅覆盖新版本的review/remove，不为外部文件修改或旧版写入提供事务保证，不承诺掉电绝不回退。
+写入使用每run排他 `.review-lock`，在锁内重新读取并检查owner/hash/revision，陈旧值报RUNTIME_RESULT_CHANGED，锁忙报RUNTIME_BUSY。运行删除/保留清理也遵守该锁（锁忙跳过删除）。锁内沿用临时文件/fsync/rename；失败不先更新内存。崩溃遗留锁不会自动抢占，应先停掉所有访问该目录的宿主、备份运行记录并核验结果，再由操作者移除对应锁；不要在线清锁。此互斥仅覆盖新版本的review/acknowledge/remove，不为外部文件修改或旧版写入提供事务保证，不承诺掉电绝不回退。
 
 ## 计划（plan）
 

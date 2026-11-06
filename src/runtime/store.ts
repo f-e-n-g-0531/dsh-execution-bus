@@ -26,6 +26,12 @@ import {
 } from "./review.js";
 import type { OwnerReviewRecord } from "./review.js";
 import type { WorkerTrace } from "./agent-trace.js";
+import {
+  MAX_ACKNOWLEDGEMENTS,
+  validAcknowledgements,
+} from "./acknowledgement.js";
+import type { AcknowledgementRecord } from "./acknowledgement.js";
+import { runAttention } from "./attention.js";
 
 export type RunState =
   | "running"
@@ -69,6 +75,7 @@ export interface RunRecord {
   steps: StepRecord[];
   results: Record<string, StoredResult>;
   ownerReviews?: OwnerReviewRecord[];
+  acknowledgements?: AcknowledgementRecord[];
   createdAt: number;
   updatedAt: number;
   finishedAt?: number;
@@ -171,6 +178,7 @@ const RUN_KEYS = new Set([
   "steps",
   "results",
   "ownerReviews",
+  "acknowledgements",
   "createdAt",
   "updatedAt",
   "finishedAt",
@@ -267,6 +275,11 @@ function validRun(value: unknown, runId: string): value is RunRecord {
     value.ownerReviews !== undefined &&
     (value.state !== "succeeded" ||
       !validOwnerReviews(value.ownerReviews, createdAt))
+  )
+    return false;
+  if (
+    value.acknowledgements !== undefined &&
+    !validAcknowledgements(value.acknowledgements, createdAt)
   )
     return false;
   const withinRun = (time: unknown) =>
@@ -655,6 +668,79 @@ export class RunStore {
         rmSync(lock);
       } catch {
         /* Never leak a raw path or reverse an already committed operation. */
+      }
+    }
+  }
+
+  /** Shares the review/removal lock; only non-recoverable terminal runs may be acknowledged. */
+  recordAcknowledgement(
+    runId: string,
+    ownerSessionId: string,
+    input: {
+      snapshotHash: string;
+      key: string;
+      expectedRevision: number;
+      reason: string;
+    },
+  ): RunRecord {
+    const lock = this.pathFor(runId) + ".review-lock";
+    let fd: number;
+    try {
+      fd = openSync(lock, "wx", 0o600);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === "EEXIST")
+        throw Error(ERRORS.RUNTIME_BUSY);
+      throw Error(ERRORS.RUNTIME_STORAGE_FAILED, { cause });
+    }
+    try {
+      const run = this.load(runId);
+      if (!run || run.ownerSessionId !== ownerSessionId)
+        throw Error(ERRORS.RUNTIME_NOT_FOUND);
+      if (run.state === "running" || run.state === "interrupted")
+        throw Error(ERRORS.RUNTIME_INVALID_STATE);
+      const attention = runAttention(run);
+      if (
+        !attention.snapshotHash ||
+        attention.snapshotHash !== input.snapshotHash ||
+        attention.revision !== input.expectedRevision
+      )
+        throw Error(ERRORS.RUNTIME_RESULT_CHANGED);
+      const item = attention.items.find(
+        (item) => item.key === input.key && item.kind !== "review_results",
+      );
+      if (
+        !item ||
+        item.acknowledged ||
+        attention.revision >= MAX_ACKNOWLEDGEMENTS
+      )
+        throw Error(ERRORS.RUNTIME_INVALID_STATE);
+      const entry: AcknowledgementRecord = {
+        revision: attention.revision + 1,
+        snapshotHash: attention.snapshotHash,
+        key: item.key,
+        reason: input.reason,
+        at: Math.max(
+          Date.now(),
+          run.updatedAt,
+          run.acknowledgements?.at(-1)?.at ?? 0,
+        ),
+      };
+      const next = {
+        ...run,
+        acknowledgements: [...(run.acknowledgements ?? []), entry],
+      };
+      this.save(next);
+      return next;
+    } finally {
+      try {
+        closeSync(fd);
+      } catch {
+        /* Keep errors stable. */
+      }
+      try {
+        rmSync(lock);
+      } catch {
+        /* Committed writes remain committed. */
       }
     }
   }

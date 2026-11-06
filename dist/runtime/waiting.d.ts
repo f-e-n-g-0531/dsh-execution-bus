@@ -11,6 +11,8 @@ export interface WaitingStep {
     waitingSince?: number;
     nextRetryAt?: number;
     retryCategory?: RetryCategory;
+    /** Derived display only: a transient read may retry; it is not a new retry grant. */
+    disposition?: "waiting_retry" | "needs_action";
 }
 export declare function setRetryBackoff(run: RunRecord, stepId: string, metadata: RetryBackoff): void;
 export declare function clearRetryBackoff(run: RunRecord, stepId: string): void;

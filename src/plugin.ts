@@ -1,6 +1,8 @@
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
 import {
+  RUNTIME_ACKNOWLEDGE_DESCRIPTION,
+  RUNTIME_ACKNOWLEDGE_PARAMETERS,
   RUNTIME_CAPABILITIES_DESCRIPTION,
   RUNTIME_CAPABILITIES_PARAMETERS,
   RUNTIME_CANCEL_DESCRIPTION,
@@ -66,6 +68,12 @@ export function apply(ctx: Context) {
     RUNTIME_CAPABILITIES_DESCRIPTION,
     RUNTIME_CAPABILITIES_PARAMETERS,
     (raw, exec) => runtime.capabilities(raw, exec),
+  );
+  register(
+    "runtime_acknowledge",
+    RUNTIME_ACKNOWLEDGE_DESCRIPTION,
+    RUNTIME_ACKNOWLEDGE_PARAMETERS,
+    (raw, exec) => runtime.acknowledge(raw, exec),
   );
   register(
     "runtime_review",

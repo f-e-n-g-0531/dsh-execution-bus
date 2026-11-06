@@ -19,6 +19,8 @@ test("new attention cards compact routine progress and retain legacy fallback", 
           reason: "retry_backoff",
           waitingSince: 10,
           nextRetryAt: 110,
+          retryCategory: "transient",
+          disposition: "waiting_retry",
         },
       ],
       cleanupPending: false,
@@ -32,9 +34,10 @@ test("new attention cards compact routine progress and retain legacy fallback", 
   };
   const before = structuredClone(run);
   const text = runtimePresentationMeta({}, run).text;
-  assert.match(text, /暂无待处理提醒/);
+  assert.match(text, /暂无必须处理提醒/);
   assert.match(text, /等待依赖成功/);
   assert.match(text, /只读重试退避.*110/);
+  assert.match(text, /本次失败，按既有策略等待重试/);
   assert.doesNotMatch(text, /x · read|REPEATED_WORKER_ADVICE/);
   assert.deepEqual(run, before);
   const legacy = { ...run };

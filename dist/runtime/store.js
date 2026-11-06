@@ -6,6 +6,8 @@ import { ERRORS } from "../error-codes.js";
 import { parsePlan, RUNTIME_LIMITS } from "./plan.js";
 import { validWorkerTrace } from "./agent-trace.js";
 import { MAX_OWNER_REVIEWS, ownerReview, reviewSnapshot, validOwnerReviews, } from "./review.js";
+import { MAX_ACKNOWLEDGEMENTS, validAcknowledgements, } from "./acknowledgement.js";
+import { runAttention } from "./attention.js";
 const RUN_ID = /^run-[0-9a-z-]{8,80}$/;
 const RECORD_BYTES = 4 * 1024 * 1024;
 // A live owner checkpoints at every step boundary, and a single attempt is
@@ -89,6 +91,7 @@ const RUN_KEYS = new Set([
     "steps",
     "results",
     "ownerReviews",
+    "acknowledgements",
     "createdAt",
     "updatedAt",
     "finishedAt",
@@ -167,6 +170,9 @@ function validRun(value, runId) {
     if (value.ownerReviews !== undefined &&
         (value.state !== "succeeded" ||
             !validOwnerReviews(value.ownerReviews, createdAt)))
+        return false;
+    if (value.acknowledgements !== undefined &&
+        !validAcknowledgements(value.acknowledgements, createdAt))
         return false;
     const withinRun = (time) => timestamp(time) && time >= createdAt && time <= updatedAt;
     if (value.state === "running") {
@@ -519,6 +525,63 @@ export class RunStore {
             }
             catch {
                 /* Never leak a raw path or reverse an already committed operation. */
+            }
+        }
+    }
+    /** Shares the review/removal lock; only non-recoverable terminal runs may be acknowledged. */
+    recordAcknowledgement(runId, ownerSessionId, input) {
+        const lock = this.pathFor(runId) + ".review-lock";
+        let fd;
+        try {
+            fd = openSync(lock, "wx", 0o600);
+        }
+        catch (cause) {
+            if (cause.code === "EEXIST")
+                throw Error(ERRORS.RUNTIME_BUSY);
+            throw Error(ERRORS.RUNTIME_STORAGE_FAILED, { cause });
+        }
+        try {
+            const run = this.load(runId);
+            if (!run || run.ownerSessionId !== ownerSessionId)
+                throw Error(ERRORS.RUNTIME_NOT_FOUND);
+            if (run.state === "running" || run.state === "interrupted")
+                throw Error(ERRORS.RUNTIME_INVALID_STATE);
+            const attention = runAttention(run);
+            if (!attention.snapshotHash ||
+                attention.snapshotHash !== input.snapshotHash ||
+                attention.revision !== input.expectedRevision)
+                throw Error(ERRORS.RUNTIME_RESULT_CHANGED);
+            const item = attention.items.find((item) => item.key === input.key && item.kind !== "review_results");
+            if (!item ||
+                item.acknowledged ||
+                attention.revision >= MAX_ACKNOWLEDGEMENTS)
+                throw Error(ERRORS.RUNTIME_INVALID_STATE);
+            const entry = {
+                revision: attention.revision + 1,
+                snapshotHash: attention.snapshotHash,
+                key: item.key,
+                reason: input.reason,
+                at: Math.max(Date.now(), run.updatedAt, run.acknowledgements?.at(-1)?.at ?? 0),
+            };
+            const next = {
+                ...run,
+                acknowledgements: [...(run.acknowledgements ?? []), entry],
+            };
+            this.save(next);
+            return next;
+        }
+        finally {
+            try {
+                closeSync(fd);
+            }
+            catch {
+                /* Keep errors stable. */
+            }
+            try {
+                rmSync(lock);
+            }
+            catch {
+                /* Committed writes remain committed. */
             }
         }
     }

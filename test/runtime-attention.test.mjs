@@ -126,10 +126,13 @@ for (const { name, state, steps, error, settled, expected } of [
     const run = record(steps, { state, ...(error ? { error } : {}) });
     const attention = runAttention(run, settled);
     assert.deepEqual(kinds(attention), expected);
-    assert.equal(attention.notification.shouldNotify, expected.length > 0);
+    const alerts = attention.items.filter(
+      (item) => item.kind !== "review_results",
+    );
+    assert.equal(attention.notification.shouldNotify, alerts.length > 0);
     assert.equal(
       attention.notification.key,
-      hash({ runId: run.runId, items: attention.items }),
+      hash({ runId: run.runId, items: alerts }),
     );
   });
 }
@@ -276,14 +279,19 @@ test("stable keys ignore timestamps, attempts, progress, and storage insertion o
   run.steps[0].attempts += 5;
   run.steps[1].state = "running";
   run.steps.reverse();
-  assert.deepEqual(runAttention(run), before);
+  const after = runAttention(run);
+  assert.deepEqual(after.items, before.items);
+  assert.deepEqual(after.notification, before.notification);
+  assert.notEqual(after.snapshotHash, before.snapshotHash); // Execution version, unlike notification identity, changed.
   const review = record([step("z"), step("a")]);
   const original = runAttention(review);
   review.results = { a: { value: null }, z: { value: null } };
   review.steps.reverse();
   assert.deepEqual(runAttention(review), original);
+  assert.equal(original.notification.shouldNotify, false);
   review.results.a.value = "changed";
-  assert.notEqual(
+  assert.equal(runAttention(review).notification.shouldNotify, false);
+  assert.equal(
     runAttention(review).notification.key,
     original.notification.key,
   );

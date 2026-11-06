@@ -5,8 +5,11 @@ export interface AttentionItem {
     kind: AttentionKind;
     stepId?: string;
     resultHash?: string;
+    acknowledged?: true;
 }
 export interface RunAttention {
+    snapshotHash?: string;
+    revision: number;
     items: AttentionItem[];
     notification: {
         key: string;

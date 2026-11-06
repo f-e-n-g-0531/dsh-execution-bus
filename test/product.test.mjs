@@ -58,6 +58,7 @@ test("product schema, descriptions and prompt stay on one runtime contract", asy
       },
     });
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
+      "runtime_acknowledge",
       "runtime_cancel",
       "runtime_capabilities",
       "runtime_result",

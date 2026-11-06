@@ -264,6 +264,86 @@ test("hash uses the full JSON value with Unicode and no report or contract fallb
   });
 });
 
+test("external-state advice carries a bounded owner checklist without executing or mutating", () => {
+  const cases = [
+    record([step("write", "write", "unknown")], { state: "interrupted" }),
+    record([step("command", "pwsh", "running")], { state: "interrupted" }),
+    record([step("worker", "agent", "failed", "RUNTIME_INTERRUPTED")], {
+      state: "failed",
+    }),
+    record([step("read", "read", "failed")], {
+      state: "failed",
+      error: "RUNTIME_STORAGE_FAILED",
+    }),
+    record([step("read", "read", "cancelled")], { state: "cancelled" }),
+    record([step("read", "read", "unknown")], { state: "failed" }),
+  ];
+  for (const run of cases) {
+    const before = structuredClone(run);
+    freeze(run);
+    for (const settled of [true, false, undefined]) {
+      const recovery = runRecovery(run, settled);
+      // Only the final two cases defer to pending cleanup; unsafe/storage
+      // inspection must remain visible even before cleanup settles.
+      const waits = settled === false && cases.indexOf(run) >= 4;
+      assert.equal(
+        recovery.nextAction,
+        waits ? "wait" : "inspect_external_state",
+      );
+      if (waits) {
+        assert.doesNotMatch(recovery.message, /核对清单/);
+        continue;
+      }
+      assert.match(recovery.message, /核对清单（由 owner 核验，此处未执行）/);
+      for (const item of [
+        "已保存结果与调用回执",
+        "后台 Job/进程",
+        "目标文件或远端状态",
+        "未启动步骤",
+        "授权范围",
+      ])
+        assert.ok(recovery.message.includes(item));
+      assert.match(recovery.message, /缺失或截断不算完成/);
+      assert.match(recovery.message, /不自动停止/);
+      assert.match(recovery.message, /不将未知当作未执行/);
+      assert.match(recovery.message, /不授予重试、恢复或重发权限/);
+      assert.equal(recovery.externalWork, "unconfirmed");
+      assert.doesNotMatch(JSON.stringify(recovery), /PRIVATE_/);
+      assert.ok(recovery.message.length < 700);
+    }
+    assert.deepEqual(run, before);
+  }
+});
+
+test("external checklist stays out of waiting, resume, failure and review advice", () => {
+  for (const [run, settled, action] of [
+    [
+      record([step("read", "read", "running")], { state: "running" }),
+      false,
+      "wait",
+    ],
+    [
+      record([step("read", "read", "unknown")], { state: "interrupted" }),
+      true,
+      "resume_read_only",
+    ],
+    [
+      record([step("read", "read", "failed")], { state: "failed" }),
+      true,
+      "inspect_failure",
+    ],
+    [
+      record([step("read", "read")], { results: { read: { value: null } } }),
+      true,
+      "review_results",
+    ],
+  ]) {
+    const recovery = runRecovery(freeze(run), settled);
+    assert.equal(recovery.nextAction, action);
+    assert.doesNotMatch(recovery.message, /核对清单/);
+  }
+});
+
 test("recovery cleanup is supplied independently and never confirms external work", () => {
   const run = record([step("read", "read")], {
     results: { read: { value: null } },

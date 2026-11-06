@@ -43,6 +43,8 @@ export function verifyReport(r, p) {
     "dist/runtime/worker-quota.d.ts",
     "dist/runtime/insights.js",
     "dist/runtime/insights.d.ts",
+    "dist/runtime/acknowledgement.js",
+    "dist/runtime/acknowledgement.d.ts",
     "dist/runtime/attention.js",
     "dist/runtime/attention.d.ts",
     "dist/runtime/waiting.js",

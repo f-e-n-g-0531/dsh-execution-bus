@@ -146,10 +146,12 @@ test("WeakMap identity, copied metadata, independent steps, and explicit clear",
   assert.deepEqual(waiting.steps[0], {
     stepId: "a",
     reason: "retry_backoff",
+    disposition: "waiting_retry",
     waitingSince: 10,
     nextRetryAt: 110,
     retryCategory: "transient",
   });
+  assert.equal(runWaiting(run).steps[1].disposition, "waiting_retry");
   waiting.steps[0].waitingSince = 888;
   assert.equal(runWaiting(run).steps[0].waitingSince, 10);
   assert.deepEqual(run, before);

@@ -52,11 +52,17 @@ for (const worker of saved.acceptance.workers) {
 
 ## 优先查看待处理事项
 
-摘要与本会话列表项的 `attention.items` 优先列出外部核验、失败、Worker 待决、结果缺失/截断和结果待复核。卡片不重复逐步进度；完整状态、guidance 和结果仍保留在 JSON。待决事项只给步骤与结果哈希入口，须读取原报告后由 Lead 判断，不能把它当执行授权或自动暂停。
+摘要与本会话列表项的 `attention.items` 仍保留外部核验、失败、Worker 待决、结果缺失/截断和结果待复核。卡片默认只展开前四类必须处理事项；结果待复核留在详情，不触发默认提醒。卡片不重复逐步进度；完整状态、guidance 和结果仍保留在 JSON。待决事项只给步骤与结果哈希入口，须读取原报告后由 Lead 判断，不能把它当执行授权或自动暂停。
 
-常规进度没有提醒事项时 `notification.shouldNotify=false`；上层可按 `notification.key` 合并同一事项提醒。键不是已发送/已读标志，查询不会确认或清除事项；本轮没有外部推送或持久化去重账本。
+没有必须处理事项时 `notification.shouldNotify=false`。上层可按 `notification.key` 合并同一提醒，也可在自己的界面忽略该键；忽略不是运行时状态，不改变结果，也不算验收。键不是已发送、已读或已忽略标志，查询不会确认或清除事项；本运行时没有外部推送或投递去重；问题已知悉需显式调用 runtime_acknowledge，查询本身不会写记录。当前页只汇总各类事项计数，不折叠不同运行；即使事项相同，也逐项保留每个 runId、状态、结果读取入口与 Job 提示。所有待办均提供只读 runtime_result 定位；恢复、Job 处置和 owner 复核仍须先检查证据后显式请求，不自动执行。
 
-`waiting.steps` 区分等待依赖、等待批次调度、真实重试退避；仅退避有实际观察到的开始和下次尝试时间。重启不补猜时间，终态不再显示待执行步骤为活跃等待。清理等待仅指本进程，不代表外部 Job 退出；容量满仍按原行为拒绝，并未新增队列。
+`waiting.steps` 区分等待依赖、等待批次调度、真实重试退避。退避若带 `disposition:waiting_retry`，表示本次失败按既有策略等待只读重试，不升级为待处理；`needs_action` 表示该类别不能据此重试。仅退避有实际观察到的开始和下次尝试时间。重启不补猜时间，终态不再显示待执行步骤为活跃等待。清理等待仅指本进程，不代表外部 Job 退出；容量满仍按原行为拒绝，并未新增队列，也未给 edit/write/pwsh/agent 增加自动重试。
+
+## 记录问题已知悉（1.6.0）
+
+先读取问题及已保存结果，在原 owner 会话用 runtime_acknowledge 提交当前 attention 的 snapshotHash、items[].key、revision（作为 expectedRevision）和非空 reason。仅已停止调度的 succeeded/failed/cancelled 运行可用，活动/清理中/interrupted 拒绝。不要为了知悉而取消待恢复运行。
+
+已知悉不等于解决或验收，失败和风险仍在卡片中；普通问题减少重复提醒，未知副作用即使知悉仍警示并提醒。执行问题版本变化后旧知悉失效。每run最多32条，记录随run清理；完整历史由 runtime_result 返回，理由不进入展示。新版本快照不是结果分页 hash。锁忙和离线清锁边界与 owner 复核相同，不自动覆盖旧revision。成功结果验收处置仍走 runtime_review。
 
 ## 常见故障
 

@@ -117,6 +117,15 @@ export function runRecovery(run, settled) {
         message =
             "检查已保存结果及证据；执行成功或 Worker 自报覆盖均不代表独立验收通过，缺失或截断结果不完整。";
     }
+    // Keep the checklist in the existing message contract: display-only advice,
+    // never an executable recovery plan or a claim that any check has run.
+    if (nextAction === "inspect_external_state")
+        message +=
+            " 核对清单（由 owner 核验，此处未执行）：" +
+                "①读取完整已保存结果与调用回执，缺失或截断不算完成；" +
+                "②核对相关后台 Job/进程是否仍运行，无法确认就保留未知，不自动停止；" +
+                "③检查目标文件或远端状态，确认操作是否已生效，不将未知当作未执行；" +
+                "④继续前核对原计划、未启动步骤和下一次操作的授权范围，核验本身不授予重试、恢复或重发权限。";
     return {
         resultCertainty,
         cleanup: settled === true ? "settled" : settled === false ? "pending" : "unknown",
