@@ -1,7 +1,8 @@
 /** Validate data descriptors before reading any caller-provided criterion values. */
+import { ERRORS } from "../error-codes.js";
 export function parseAcceptanceCriteria(raw) {
     const fail = () => {
-        throw Error("RUNTIME_AGENT_INVALID_INPUT");
+        throw Error(ERRORS.RUNTIME_AGENT_INVALID_INPUT);
     };
     if (!Array.isArray(raw) || raw.length < 1 || raw.length > 16)
         return fail();
@@ -57,7 +58,7 @@ export const WORKER_REPORT_INSTRUCTIONS = "Return only one JSON object, without 
     "No other fields are allowed at any level, including verified. The entire UTF-8 response, including whitespace, must not exceed 16384 bytes. " +
     "Character limits count JavaScript UTF-16 code units. Evidence is self-reported, not independently verified, and does not establish acceptance.";
 function invalid() {
-    throw Error("RUNTIME_AGENT_REPORT_INVALID");
+    throw Error(ERRORS.RUNTIME_AGENT_REPORT_INVALID);
 }
 function isObject(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -76,7 +77,7 @@ export function parseWorkerReport(output, criteria) {
     if (typeof output !== "string")
         return invalid();
     if (Buffer.byteLength(output, "utf8") > 16_384)
-        throw Error("RUNTIME_AGENT_REPORT_TOO_LARGE");
+        throw Error(ERRORS.RUNTIME_AGENT_REPORT_TOO_LARGE);
     let value;
     try {
         value = JSON.parse(output);

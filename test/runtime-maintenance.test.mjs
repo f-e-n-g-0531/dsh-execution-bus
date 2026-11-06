@@ -44,7 +44,7 @@ test("successful atomic save consumes its temp file without a cleanup probe", ()
     assert.deepEqual(fs.readdirSync(root), [record.runId + ".json"]);
   }));
 
-for (const stage of ["writeFileSync", "renameSync"]) {
+for (const stage of ["writeFileSync", "fsyncSync", "renameSync"]) {
   test(`failed ${stage} cleans the unique temp and preserves the last checkpoint`, () =>
     fixture((store, record, root) => {
       store.save(record);
@@ -74,6 +74,24 @@ for (const stage of ["writeFileSync", "renameSync"]) {
       assert.deepEqual(fs.readdirSync(root), [record.runId + ".json"]);
     }));
 }
+
+test("successful save fsyncs checkpoint data before the atomic rename", () =>
+  fixture((store, record) => {
+    const order = [];
+    const actualFsync = fs.fsyncSync;
+    const actualRename = fs.renameSync;
+    mock.method(fs, "fsyncSync", (...args) => {
+      order.push("fsync");
+      return actualFsync(...args);
+    });
+    mock.method(fs, "renameSync", (...args) => {
+      order.push("rename");
+      return actualRename(...args);
+    });
+    syncBuiltinESMExports();
+    store.save(record);
+    assert.deepEqual(order, ["fsync", "rename"]);
+  }));
 
 test("failed exclusive temp open never removes an unowned path", () =>
   fixture((store, record) => {

@@ -10,6 +10,7 @@ import { setSandboxMode } from "@deepseek-ai/dsh-sandbox-policy";
 import { setApprovalPolicy } from "@deepseek-ai/dsh-user-approval";
 import type {} from "@deepseek-ai/dsh-agent-preset-registry";
 import type {} from "@deepseek-ai/dsh-working-directory";
+import { ERRORS } from "../error-codes.js";
 import {
   parseWorkerReport,
   parseAcceptanceCriteria,
@@ -37,7 +38,7 @@ export interface AgentInput {
 /** Keep the public wire names; never interpret prompt text as authorization. */
 export function parseAgentInput(raw: unknown): AgentInput {
   const invalid = () => {
-    throw Error("RUNTIME_AGENT_INVALID_INPUT");
+    throw Error(ERRORS.RUNTIME_AGENT_INVALID_INPUT);
   };
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return invalid();
   const prototype = Object.getPrototypeOf(raw);
@@ -105,7 +106,7 @@ export function parseAgentInput(raw: unknown): AgentInput {
   // A path realpath check followed by host edit/write is not an atomic boundary.
   // Until the public host exposes scope-bound writes, reject rather than promise
   // confinement that a symlink/reparse-point swap can bypass.
-  if (value.access === "write") throw Error("RUNTIME_AGENT_WRITE_UNSUPPORTED");
+  if (value.access === "write") throw Error(ERRORS.RUNTIME_AGENT_WRITE_UNSUPPORTED);
   if (Array.isArray(value.write_scopes) && value.write_scopes.length)
     return invalid();
   if (
@@ -178,15 +179,15 @@ export async function executeAgent(
 }> {
   const input = parseAgentInput(raw);
   const parent = exec.agent;
-  if (!parent || !exec.toolSet) throw Error("RUNTIME_AGENT_PARENT_REQUIRED");
+  if (!parent || !exec.toolSet) throw Error(ERRORS.RUNTIME_AGENT_PARENT_REQUIRED);
   const combined = signal;
-  if (combined.aborted) throw Error("RUNTIME_AGENT_ABORTED");
+  if (combined.aborted) throw Error(ERRORS.RUNTIME_AGENT_ABORTED);
   // rc1 cannot publicly select only missing parent policies. Never guess at
   // private scope internals or replay the full parent chain as a substitute.
   if (typeof delegationPolicy?.checkParentPolicy !== "function")
-    throw Error("RUNTIME_AGENT_POLICY_UNSUPPORTED");
+    throw Error(ERRORS.RUNTIME_AGENT_POLICY_UNSUPPORTED);
   const route = parent.model.current();
-  if (!route) throw Error("RUNTIME_AGENT_MODEL_REQUIRED");
+  if (!route) throw Error(ERRORS.RUNTIME_AGENT_MODEL_REQUIRED);
   const instructions = workerInstructions(input);
   const trace: WorkerTrace = {
     promptVersion: WORKER_PROMPT_VERSION,
@@ -199,7 +200,7 @@ export async function executeAgent(
   const allowed = ["read", "glob", "grep"].filter((name) =>
     ctx.tools.executable(name, parent, exec.toolSet),
   );
-  if (!allowed.length) throw Error("RUNTIME_AGENT_TOOLS_UNAVAILABLE");
+  if (!allowed.length) throw Error(ERRORS.RUNTIME_AGENT_TOOLS_UNAVAILABLE);
   let handle: AgentHandle | undefined;
   let child: Agent | undefined;
   let end: TurnEndReason | undefined;
@@ -248,39 +249,51 @@ export async function executeAgent(
           allow: allowed.filter((name) => inherited.has(name)),
         });
         // Native dispatch remains responsible for the child's global/preset/local
-        // policies exactly once. Only the trusted host can supplement missing
-        // parent policies without duplicating that native chain.
+        // policies exactly once. Register globally so a later child-scoped
+        // listener cannot sit outside this supplemental parent check.
+        const parentChecked = new WeakSet<object>();
         const parentDenied = new WeakSet<object>();
-        childCtx.on("tools/pre-execute", async (call, next) => {
-          if (call.agent !== agent) return next();
-          if (combined.aborted)
-            return { kind: "deny", reason: "RUNTIME_AGENT_ABORTED" };
-          try {
-            const decision = await delegationPolicy.checkParentPolicy({
-              childCall: call,
-              parentCall: {
-                ...call,
-                agent: parent,
-                toolSet: exec.toolSet,
-                parent: exec.token,
-                rootCallId: exec.rootCallId,
-              },
-            });
-            if (decision?.kind === "allow" && !combined.aborted) return next();
-          } catch {
-            // Supplemental policy failures cannot become authorization.
-          }
-          parentDenied.add(call);
-          return { kind: "deny", reason: "RUNTIME_AGENT_PARENT_POLICY_DENIED" };
-        });
+        childCtx.on(
+          "tools/pre-execute",
+          async (call, next) => {
+            if (call.agent !== agent) return next();
+            parentChecked.add(call);
+            if (combined.aborted) {
+              parentDenied.add(call);
+              return { kind: "deny", reason: ERRORS.RUNTIME_AGENT_ABORTED };
+            }
+            try {
+              const decision = await delegationPolicy.checkParentPolicy({
+                childCall: call,
+                parentCall: {
+                  ...call,
+                  agent: parent,
+                  toolSet: exec.toolSet,
+                  parent: exec.token,
+                  rootCallId: exec.rootCallId,
+                },
+              });
+              if (decision?.kind === "allow" && !combined.aborted)
+                return next();
+            } catch {
+              // Supplemental policy failures cannot become authorization.
+            }
+            parentDenied.add(call);
+            return {
+              kind: "deny",
+              reason: ERRORS.RUNTIME_AGENT_PARENT_POLICY_DENIED,
+            };
+          },
+          { global: true },
+        );
         childCtx.tools.guard((call) => {
-          // A surrounding waterfall may rewrite a deny to allow; the supplemental
-          // parent decision remains a monotonic denial at the final guard stage.
-          if (parentDenied.has(call))
-            return "RUNTIME_AGENT_PARENT_POLICY_DENIED";
-          if (combined.aborted) return "RUNTIME_AGENT_ABORTED";
+          // A child-scoped allow that skips next() never reaches the parent hook.
+          // Missing proof of that hook is therefore a denial, not authorization.
+          if (!parentChecked.has(call) || parentDenied.has(call))
+            return ERRORS.RUNTIME_AGENT_PARENT_POLICY_DENIED;
+          if (combined.aborted) return ERRORS.RUNTIME_AGENT_ABORTED;
           if (call.agent !== agent || !allowed.includes(call.name))
-            return "RUNTIME_AGENT_TOOL_DENIED";
+            return ERRORS.RUNTIME_AGENT_TOOL_DENIED;
           const admitted = ctx.tools.executable(
             call.name,
             parent,
@@ -291,7 +304,7 @@ export async function executeAgent(
             childCtx.tools.executable(call.name, agent, call.toolSet) !==
               admitted
           )
-            return "RUNTIME_AGENT_TOOL_DENIED";
+            return ERRORS.RUNTIME_AGENT_TOOL_DENIED;
           return undefined;
         });
         childCtx.on("agent/pre-step", async (payload, next) => {
@@ -302,7 +315,10 @@ export async function executeAgent(
           }
           if (++steps > input.max_steps) {
             limited = true;
-            agent.cancel({ kind: "hook", reason: "RUNTIME_AGENT_STEP_LIMIT" });
+            agent.cancel({
+              kind: "hook",
+              reason: ERRORS.RUNTIME_AGENT_STEP_LIMIT,
+            });
             return { kind: "reject" };
           }
           return next();
@@ -312,9 +328,13 @@ export async function executeAgent(
           if (event.type === "turn/end") end = event.data.reason;
           if (event.type === "request/header") {
             const resolved = modelRoute(event.data.header.config);
+            // Mirror the stored-trace cap in validWorkerTrace: an extreme
+            // route-flapping turn must stay checkpointable instead of failing
+            // validation and surfacing as a storage failure.
             if (
+              trace.requestModels.length < 64 &&
               JSON.stringify(trace.requestModels.at(-1)) !==
-              JSON.stringify(resolved)
+                JSON.stringify(resolved)
             )
               trace.requestModels.push(resolved);
           }
@@ -323,7 +343,7 @@ export async function executeAgent(
     });
     child = handle.agent;
     onCreated?.(child.id, structuredClone(trace));
-    if (combined.aborted) throw Error("RUNTIME_AGENT_ABORTED");
+    if (combined.aborted) throw Error(ERRORS.RUNTIME_AGENT_ABORTED);
     child.followup(
       createUserMessage({
         content: [{ type: "text", text: input.prompt }],
@@ -331,23 +351,23 @@ export async function executeAgent(
       }),
     );
     await child.whenIdle();
-    if (combined.aborted) throw Error("RUNTIME_AGENT_ABORTED");
+    if (combined.aborted) throw Error(ERRORS.RUNTIME_AGENT_ABORTED);
     onTrace?.(child.id, structuredClone(trace));
-    if (limited) throw Error("RUNTIME_AGENT_STEP_LIMIT");
+    if (limited) throw Error(ERRORS.RUNTIME_AGENT_STEP_LIMIT);
     if (!end || end.kind !== "completed")
-      throw Error("RUNTIME_AGENT_TURN_FAILED");
+      throw Error(ERRORS.RUNTIME_AGENT_TURN_FAILED);
     const last = child.session.deriveMessages().at(-1);
     if (
       last?.role !== "assistant" ||
       last.content.some((block) => block.type === "tool-call")
     )
-      throw Error("RUNTIME_AGENT_OUTPUT_MISSING");
+      throw Error(ERRORS.RUNTIME_AGENT_OUTPUT_MISSING);
     const output = last.content
       .filter((block) => block.type === "text")
       .map((block) => block.text)
       .join("");
     if (input.output_format !== "report" && !output.trim())
-      throw Error("RUNTIME_AGENT_OUTPUT_MISSING");
+      throw Error(ERRORS.RUNTIME_AGENT_OUTPUT_MISSING);
     return {
       sessionId: child.id,
       output,
@@ -363,8 +383,8 @@ export async function executeAgent(
       throw error;
     throw Error(
       combined.aborted
-        ? "RUNTIME_AGENT_ABORTED"
-        : "RUNTIME_AGENT_EXECUTION_FAILED",
+        ? ERRORS.RUNTIME_AGENT_ABORTED
+        : ERRORS.RUNTIME_AGENT_EXECUTION_FAILED,
       { cause: error },
     );
   } finally {

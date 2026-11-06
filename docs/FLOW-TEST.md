@@ -2,7 +2,7 @@
 
 1. 对当前源码执行 check、verify:package、pack:candidate，在隔离 DSH 配置安装同一候选 tgz，确认预设 **xiao-he-runtime** 出现且默认预设未变。不要覆盖日常配置，不要以另开网页服务器代替现有桌面。
 2. 在目标预设的实际 `run_code` 中，通过生成 SDK 调用 `runtime_run`，提交两独立 read + 依赖 write/pwsh 的计划，核对真实文件、结果、cwd 和父权限链；普通预设仍无运行时工具。分别运行只读拒绝、工作区允许写/工作区外拒绝，以及审批拒绝，核对禁止路径没有副作用。
-3. 提交 `async:true` 计划，用 `runtime_status`/`runtime_result` 取回；成功接收后外层 signal 不应取消它。同步 run/resume 应绑定外层 signal；`runtime_cancel` 应及时停止调度，但不能据此断言不合作工具已退出或副作用已回滚。
+3. 标准模型调用携带 `exec.toolSet` 时，普通工具 `async:true` 计划应在创建 run 前报 `RUNTIME_ASYNC_ADMISSION_UNSUPPORTED`，且无步骤副作用；改用同步调用。仅无批次准入集合的受控宿主集成可提交普通工具 `async:true` 计划，用 `runtime_status`/`runtime_result` 取回，成功接收后外层 signal 不应取消它。同步 run/resume 应绑定外层 signal；`runtime_cancel` 应及时停止调度，但不能据此断言不合作工具已退出或副作用已回滚。
 4. 中断宿主后重启并检查 `runtime_status`：遗留运行应为 `interrupted`。检查每步 checkpoint 已保存成功步骤；resume 可重排在途只读步骤，但未知副作用必须使整个 run 失败且不调新步骤。
 5. 验证普通 Agent 看不到 `runtime_*` 工具，宿主写策略拒绝仍生效。
 6. 核对同 root 单进程共享 8 个 active run、run/resume 准入和 status 分页（`limit` 1–100、`offset` 0–10000）；默认仅清理超过最新 100 条的终态，保护 `running/interrupted`。

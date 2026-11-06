@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, fstatSync, mkdirSync, openSync, readdirSync, readSync, renameSync, rmSync, writeFileSync, } from "node:fs";
+import { closeSync, fstatSync, fsyncSync, mkdirSync, openSync, readdirSync, readSync, renameSync, rmSync, writeFileSync, } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ERRORS } from "../error-codes.js";
@@ -7,6 +7,12 @@ import { parsePlan, RUNTIME_LIMITS } from "./plan.js";
 import { validWorkerTrace } from "./agent-trace.js";
 const RUN_ID = /^run-[0-9a-z-]{8,80}$/;
 const RECORD_BYTES = 4 * 1024 * 1024;
+// A live owner checkpoints at every step boundary, and a single attempt is
+// bounded by its timeout (<10 min) plus bounded retry backoff. A running
+// record whose foreign PID still probes alive but has not checkpointed for an
+// hour is therefore a dead owner whose PID was reused, not a live run: recover
+// it instead of stranding the record with no resume/cancel/prune path.
+const STALE_RUNNING_MS = 3_600_000;
 // Process-wide derived metadata only: never retain a RunRecord or its payload.
 const METADATA_ENTRIES = 16_384;
 const METADATA_BYTES = 4 * 1024 * 1024;
@@ -415,6 +421,12 @@ export class RunStore {
             fd = openSync(temp, "wx", 0o600);
             created = true;
             writeFileSync(fd, json, "utf8");
+            // Durability: flush the temp content before the atomic replacement so a
+            // post-rename reader never observes a torn or zero-length checkpoint
+            // after power loss. A lost rename itself rolls back to the previous
+            // checkpoint, which the recovery scan already handles; directory fsync
+            // is not portable to Windows.
+            fsyncSync(fd);
             closeSync(fd);
             fd = undefined;
             renameSync(temp, target);
@@ -453,10 +465,18 @@ export class RunStore {
         return this.readRecord(runId)?.run;
     }
     readRecord(runId, hint = false) {
+        // Reject malformed run IDs before any filesystem accounting: a caller
+        // error is not a storage read failure and must not inflate diagnostics.
+        let target;
+        try {
+            target = this.pathFor(runId);
+        }
+        catch {
+            return undefined;
+        }
         let fd;
         let key;
         try {
-            const target = this.pathFor(runId);
             key = path.resolve(target);
             fd = openSync(target, "r");
             const stat = fstatSync(fd, { bigint: true });
@@ -650,10 +670,13 @@ export class RunStore {
             if (!fresh?.run || fresh.metadata.signature !== candidate.signature)
                 continue;
             const run = fresh.run;
-            if (run.state !== "running" ||
-                (run.ownerPid !== undefined &&
-                    run.ownerPid !== process.pid &&
-                    alive(run.ownerPid)))
+            // PID liveness alone cannot prove owner identity: a reused PID keeps a
+            // dead owner's record alive forever. Freshness bounds that trust window.
+            const foreignAlive = run.ownerPid !== undefined &&
+                run.ownerPid !== process.pid &&
+                alive(run.ownerPid) &&
+                Date.now() - run.updatedAt < STALE_RUNNING_MS;
+            if (run.state !== "running" || foreignAlive)
                 continue;
             const now = Math.max(Date.now(), run.updatedAt);
             run.state = "interrupted";

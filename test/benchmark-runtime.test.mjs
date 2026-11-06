@@ -1,4 +1,37 @@
 import { test } from "node:test";
+import * as benchmarkIdentity from "../scripts/benchmark-runtime.mjs";
+
+test("runtime digest binds all current local dependencies and legacy absence", () => {
+  const digest = benchmarkIdentity.runtimeArtifactDigest;
+  assert.equal(typeof digest, "function");
+  const optional = ["retry", "agent", "agent-report", "agent-trace", "worker-quota"].map(n => "runtime/" + n + ".js");
+  const required = ["runtime/executor.js", "runtime/store.js", "runtime/plan.js", "runtime/service.js", "error-codes.js", "presentation.js"];
+  const files = new Map([...required, ...optional].map(n => [n, Buffer.from(n)]));
+  const read = url => {
+    const name = decodeURIComponent(new URL(url).pathname).split("/fixture-dist/")[1];
+    if (!files.has(name)) throw Object.assign(Error("missing"), { code: "ENOENT" });
+    return files.get(name);
+  };
+  const root = new URL("file:///fixture-dist/");
+  const initial = digest(root, read);
+  for (const name of optional) {
+    const original = files.get(name);
+    files.set(name, Buffer.from("changed"));
+    assert.notEqual(digest(root, read), initial, name);
+    files.delete(name);
+    assert.notEqual(digest(root, read), initial, name + " missing");
+    files.set(name, original);
+  }
+  assert.throws(() => digest(root, url => {
+    if (String(url).endsWith("runtime/retry.js")) throw Object.assign(Error("optional denied"), { code: "EACCES" });
+    return read(url);
+  }), /optional denied/);
+  for (const name of optional) files.delete(name);
+  assert.match(digest(root, read), /^[a-f0-9]{64}$/);
+  files.delete(required[0]);
+  assert.throws(() => digest(root, read), /missing/);
+  assert.throws(() => digest(root, () => { throw Object.assign(Error("denied"), { code: "EACCES" }); }), /denied/);
+});
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";

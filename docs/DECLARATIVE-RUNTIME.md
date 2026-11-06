@@ -26,7 +26,7 @@
 
 Lead 仍用 PTC 拆分任务，通过 `runtime_run` 的 `tool:agent` 启动独立上下文只读 Worker，再核实输出并负责修改、验收。Worker 由公开 `agents.create` + `agentPresets.composeFrom` 创建并继承模型路由，强制 `NativeToolExecutor`（不是 PTC）；同时设置宿主 read-only 沙箱、approval never，guard 仅准入 `read/glob/grep` 且与父 admission identity 取交集。Worker 不可使用 `run_code`、命令、写入或递归委派；提示词不是权限边界。
 
-Agent 输入为 `{prompt, access?:"read", max_steps?:1..32, output_format?:"text"|"report"}`，默认 12 步；`output_format` 省略保留旧文本行为，`report` 要求严格 JSON 报告（`outcome/summary/evidence/limitations` 与可选 `requestedDecision`），总计不超过 16KiB。不提供 write 或写入范围授权，非空 `write_scopes` 拒绝，空数组仅作兼容归一化。直接依赖结果缺失/截断或追加后 prompt >64KiB 拒绝执行，不向其他工具插值。含 Agent 的计划不支持 `async:true` 或 service `background=true`，以 `RUNTIME_AGENT_ASYNC_UNSUPPORTED` 在创建 run/Worker 前拒绝；父 `exec.toolSet` 随外层工具批次返回而 dispose，不能安全 detach Worker。普通工具 async 不变。Agent 不 retry、不自动重放；子会话 ID 写入 checkpoint 并在摘要可见。`whenIdle` 后检查结束事件与最终文本，执行 `succeeded` 不代表内容验收通过。完整示例与错误码见[协议](<protocol.md#agent-步骤受控宿主集成>)。
+Agent 输入为 `{prompt, access?:"read", max_steps?:1..32, output_format?:"text"|"report"}`，默认 12 步；`output_format` 省略保留旧文本行为，`report` 要求严格 JSON 报告（`outcome/summary/evidence/limitations` 与可选 `requestedDecision`），总计不超过 16KiB。不提供 write 或写入范围授权，非空 `write_scopes` 拒绝，空数组仅作兼容归一化。直接依赖结果缺失/截断或追加后 prompt >64KiB 拒绝执行，不向其他工具插值。含 Agent 的计划不支持 `async:true` 或 service `background=true`，以 `RUNTIME_AGENT_ASYNC_UNSUPPORTED` 在创建 run/Worker 前拒绝；父 `exec.toolSet` 随外层工具批次返回而 dispose，不能安全 detach Worker。普通工具计划若携带 `exec.toolSet`，异步或 service 后台提交也在创建 run 前以 `RUNTIME_ASYNC_ADMISSION_UNSUPPORTED` 拒绝；宿主批次结束会销毁该准入集合，没有公开续租接口。不得删除准入集合或重新解析以绕过限制；请使用同步调用。Agent 不 retry、不自动重放；子会话 ID 写入 checkpoint 并在摘要可见。`whenIdle` 后检查结束事件与最终文本，执行 `succeeded` 不代表内容验收通过。完整示例与错误码见[协议](<protocol.md#agent-步骤受控宿主集成>)。
 
 报告模式保留原始 `output` 与 `verification:"not_independently_verified"`，另返回解析的 `report`；所有模式均通过步骤记录和摘要的可选 `workerTrace` 暴露追溯；`results[step].value` 仅含 `sessionId/output/verification` 与 report 模式的 `report`，不含 trace。追溯不进入依赖 JSON，也不占用原有单步结果 64KiB 配额。`promptVersion/promptHash` 仅追溯运行时角色与输出契约，不是完整宿主 prompt；`taskPromptHash` 覆盖追加依赖后的精确任务 prompt。`selectedModel` 是创建时选择，`requestModels` 是 `request/header` 记录的连续去重 resolved routes，不是请求次数或网络成功凭证。仅任务启动前和 `whenIdle` 后写追溯 checkpoint，取消/中途崩溃可能只有初始空 `requestModels`，不证明从未请求模型。
 
@@ -38,7 +38,7 @@ Agent 输入为 `{prompt, access?:"read", max_steps?:1..32, output_format?:"text
 
 | 工具 | 作用 |
 |---|---|
-| `runtime_run` | 提交计划；默认等待完成并返回步骤状态，仅不含 Agent 的计划可用 `async:true` 立即返回 `runId` |
+| `runtime_run` | 提交计划；默认等待完成并返回步骤状态，仅不含 Agent 且调用未携带 `exec.toolSet` 的受控宿主计划可用 `async:true` 立即返回 `runId` |
 | `runtime_status` | 无 `runId` 按本会话分页：`limit` 1–100（默认 20）、`offset` 0–10000（默认 0）；带 `runId` 返回步骤状态（不含结果），不能同时传分页参数 |
 | `runtime_result` | 读取已保存的步骤结果（单步 >64KiB 只返回 truncated/bytes） |
 | `runtime_cancel` | 停止调度、传播取消 |
@@ -51,7 +51,7 @@ Agent 输入为 `{prompt, access?:"read", max_steps?:1..32, output_format?:"text
 - 同一记录 root 在单进程内共享最多 8 个 active run，`runtime_run/runtime_resume` 均需准入；新建 service scope 不会把本进程活跃运行误判为中断。这不是跨进程锁或分布式配额。
 - 每步调用前、完成与重试时写 checkpoint，不等整批结束；已落盘的成功步骤不重放。checkpoint 失败以 `RUNTIME_STORAGE_FAILED` 停止后续调度。
 - 运行记录保存在 `DSH_HOME/tmp/xiaohe-runtime/runs`（可用 `XIAOHE_RUNTIME_DIR` 覆盖），按会话隔离。默认仅保留最新 100 条终态（`succeeded/failed/cancelled`），`running/interrupted` 不计入预算且不被清理；恢复可能扫描到更老记录。损坏、超大或不合法记录隔离忽略，列表返回脱敏诊断。
-- 取消及时停止调度并传播 signal；Agent 取消/超时由同步 run/服务 dispose 等待 Worker dispose；`runtime_cancel` 仅发起取消，返回不证明已清理，普通工具不等待不合作工具真正退出，也不允许晚到结果改回成功。在途副作用可为 `unknown`，不表示已停止或 rollback。同步 run/resume 绑定外层 signal；仅不含 Agent 的计划可用 `async:true`，受理后脱离外层信号，不代表脱离宿主进程。
+- 取消及时停止调度并传播 signal；Agent 取消/超时由同步 run/服务 dispose 等待 Worker dispose；`runtime_cancel` 仅发起取消，返回不证明已清理，普通工具不等待不合作工具真正退出，也不允许晚到结果改回成功。在途副作用可为 `unknown`，不表示已停止或 rollback。同步 run/resume 绑定外层 signal；仅不含 Agent 且调用未携带 `exec.toolSet` 的受控宿主计划可用 `async:true`，受理后脱离外层信号，不代表脱离宿主进程。
 - 崩溃/重启后遗留运行标记 `interrupted`，在途步骤 `unknown`。**不保证 exactly-once**：副作用可能已发生；恢复遇到未知副作用或未知 Agent 将步骤标为 `failed/RUNTIME_INTERRUPTED`、整个 run 标为 `failed`，不调度包括无关 pending 在内的新步骤。不存在失败时才重排在途 `read/glob/grep` 步骤。
 - `pwsh` 显式 `run_in_background:true` 在执行前预检拒绝（`RUNTIME_BACKGROUND_UNSUPPORTED`）；非零退出、超时/中止或沙箱失败不算命令成功。宿主自动转后台时 run 为 `failed`、步骤为 `unknown`，结果保留 `kind/jobId`；须用原生 `job_output/job_kill` 收集或停止 Job，不能把后台回执称为命令完成。
 - 不做跨进程执行、不做分布式队列；运行时随宿主进程退出。

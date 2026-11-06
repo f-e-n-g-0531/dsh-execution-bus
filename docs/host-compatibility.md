@@ -9,7 +9,7 @@ v1.4.0 目标宿主：DSH **0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node
 - 工具注册仍使用 `ctx.tools.register`；rc.1 的 `ctx.tools.execute` 已为 batch 接口，不能沿用旧单调用形式。运行时通过公开 `ToolExecutionPipeline.prepare/dispatch/complete` 执行嵌套工具，传递 `parent: exec.token`、`rootCallId`、`agent`、`signal` 与 `toolSet`，沿用宿主权限、工作目录与沙箱，不绕过宿主策略。
 - 预设派生：通过 `agentPresets.readDocument("ptc")` 读取公开声明，再用 `register` 注册派生预设；不修改默认预设或全局工具。
 - 模式提示：`ctx.systemPrompt.section` 追加运行时说明。
-- 同步 run/resume 传播外层 signal；仅不含 Agent 的计划可用 `async:true`，成功接收后脱离外层信号，但仍在宿主进程内。取消不保证不合作工具退出。
+- 同步 run/resume 传播外层 signal；仅不含 Agent 且调用未携带 `exec.toolSet` 的受控宿主计划可用 `async:true`，成功接收后脱离外层信号，但仍在宿主进程内。取消不保证不合作工具退出。
 - `pwsh` 前台返回须检查退出码、中止/超时与沙箱失败；显式 `run_in_background:true` 被运行时预检拒绝。自动转后台只表示已生成 Job，运行时标为失败/`unknown` 并保留 `jobId`，用宿主原生 `job_output/job_kill` 收集或停止。
 
 ## rc.1 迁移与历史证据边界

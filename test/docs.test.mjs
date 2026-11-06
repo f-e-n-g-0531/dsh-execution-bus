@@ -72,6 +72,16 @@ test("current runtime docs keep migration and acceptance boundaries explicit", (
   const validation = readFileSync("docs/validation.md", "utf8");
   assert.doesNotMatch(validation, /全量\s*\*\*\d+\*\*\s*项测试通过/);
   assert.match(validation, /npm run check/);
+  for (const file of ["README.md", "docs/protocol.md", "docs/DECLARATIVE-RUNTIME.md", "docs/PRODUCT.md", "docs/host-compatibility.md", "docs/validation.md", "docs/FLOW-TEST.md"]) {
+    const text = readFileSync(file, "utf8");
+    assert.match(text, /exec\.toolSet/, file);
+    assert.doesNotMatch(text, /普通工具 async 不变|普通工具计划的 async 行为不变/, file);
+  }
+  assert.match(readFileSync("docs/protocol.md", "utf8"), /RUNTIME_ASYNC_ADMISSION_UNSUPPORTED/);
+  const release = readFileSync("docs/releases/1.4.1.md", "utf8");
+  assert.match(release, /不保证目录项级持久性或断电事务/);
+  assert.match(release, /首次写入也无上一检查点可回退/);
+  assert.doesNotMatch(release, /掉电不再出现撕裂/);
   assert.match(validation, /shell bridge[^\n]*不是实际 sandbox/);
   assert.match(validation, /真实模型\/桌面 UI\/实际沙箱[^\n]*未验收/);
 });

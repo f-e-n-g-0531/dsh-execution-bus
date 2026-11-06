@@ -1,3 +1,4 @@
+import { ERRORS } from "../error-codes.js";
 /** One synchronous admission budget for all Worker lifetimes under a run root. */
 export class WorkerQuota {
     limit;
@@ -13,7 +14,7 @@ export class WorkerQuota {
     }
     reserve() {
         if (this.active >= this.limit)
-            throw Error("RUNTIME_AGENT_CAPACITY_EXCEEDED");
+            throw Error(ERRORS.RUNTIME_AGENT_CAPACITY_EXCEEDED);
         this.active++;
         let released = false;
         return () => {

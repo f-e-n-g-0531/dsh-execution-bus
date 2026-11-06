@@ -8,6 +8,8 @@ test("research plan separates public baseline, pending acceptance and conditiona
   for (const text of [plan, validation]) {
     assert.match(text, /v1\.3\.2/);
     assert.match(text, /8d1a5bf/);
+    assert.match(text, /固定的历史参考基线为/);
+    assert.doesNotMatch(text, /当前公开基线为/);
     assert.match(text, /v1\.3\.0 是历史研发起点/);
     assert.match(text, /RESEARCH-READINESS\.md/);
     assert.match(text, /pending/);

@@ -196,11 +196,12 @@ test("恢复：legacy running变interrupted，运行步骤unknown，排除active
     assert.equal(store.load(id(3))?.state, "succeeded");
   }));
 
-test("恢复：外部活进程和EPERM跳过，ESRCH恢复，未识别探测错误保守跳过", () =>
+test("恢复：新鲜记录外部活进程和EPERM跳过，ESRCH恢复，未识别探测错误保守跳过", () =>
   fixture((store) => {
     for (let n = 1; n <= 4; n++) {
       const record = run(id(n));
       record.ownerPid = process.pid + 100 + n;
+      record.updatedAt = Date.now(); // Fresh checkpoint: PID trust window holds.
       store.save(record);
     }
     const alive = process.pid + 101;
@@ -222,6 +223,31 @@ test("恢复：外部活进程和EPERM跳过，ESRCH恢复，未识别探测错�
     assert.equal(store.load(id(2))?.state, "running");
     assert.equal(store.load(id(3))?.state, "interrupted");
     assert.equal(store.load(id(4))?.state, "running");
+  }));
+
+test("恢复：PID复用——过期的外部活PID记录按失联回收，新鲜记录仍跳过", () =>
+  fixture((store) => {
+    const reused = run(id(1));
+    reused.ownerPid = process.pid + 100; // updatedAt stays 10: ancient checkpoint.
+    store.save(reused);
+    const fresh = run(id(2));
+    fresh.ownerPid = process.pid + 101;
+    fresh.updatedAt = Date.now();
+    store.save(fresh);
+    withMock(
+      process,
+      "kill",
+      (pid, signal) => {
+        assert.equal(signal, 0);
+        return true; // Both foreign PIDs probe alive (PID reuse).
+      },
+      () => assert.equal(store.markInterrupted(), 1),
+    );
+    assert.equal(store.load(id(1))?.state, "interrupted");
+    assert.equal(store.load(id(2))?.state, "running");
+    // The recovered record now has resume/cancel/prune paths available again.
+    const record = store.load(id(1));
+    assert.equal(record?.steps[0]?.state, "pending");
   }));
 
 test("校验：坏JSON/版本/owner/Plan/steps/results/state/timestamps逐个隔离", () =>
@@ -762,6 +788,22 @@ test("故障：open/read/readdir/remove/构造失败全部稳定隔离或脱敏"
     );
     assert.equal(store.diagnostics().readFailures, 3);
     assert.equal(store.diagnostics().writeFailures, 2);
+  }));
+
+test("诊断：非法 runId 读取不计入 readFailures，真实读取失败仍计数", () =>
+  fixture((store) => {
+    assert.equal(store.load("../escape"), undefined);
+    assert.equal(store.load("not-a-run-id"), undefined);
+    assert.equal(store.diagnostics().readFailures, 0);
+    withMock(
+      fs,
+      "openSync",
+      () => {
+        throw errno("EACCES");
+      },
+      () => assert.equal(store.load(id(1)), undefined),
+    );
+    assert.equal(store.diagnostics().readFailures, 1);
   }));
 
 test("save：非法/循环/超大记录不会覆盖上一份有效记录", () =>

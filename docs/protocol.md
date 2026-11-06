@@ -6,7 +6,7 @@
 
 | 工具 | 输入 | 返回 |
 |---|---|---|
-| `runtime_run` | `{ plan, async? }` | 同步：运行摘要与步骤状态；仅不含 Agent 的计划可用 `async:true`：受理后立即返回 `{ runId, state:"running" }` |
+| `runtime_run` | `{ plan, async? }` | 同步：运行摘要与步骤状态；仅不含 Agent 且调用未携带 `exec.toolSet` 的受控宿主计划可用 `async:true`：受理后立即返回 `{ runId, state:"running" }` |
 | `runtime_status` | `{}`、`{ limit?, offset? }` 或 `{ runId }` | 本会话最近运行列表与脱敏存储诊断，或指定运行元数据（不含结果） |
 | `runtime_result` | `{ runId }` | 运行摘要 + 已保存步骤结果（`truncated/bytes` 标记） |
 | `runtime_cancel` | `{ runId }` | 发起取消后的运行摘要；不保证 Worker 已清理或宿主操作已实际停止 |
@@ -50,12 +50,12 @@
 ```
 
 - `input = { prompt, access?:"read", max_steps?, output_format?:"text"|"report" }`：`output_format` 省略保留旧 `text` 行为；显式值仅接受 `text/report`。prompt 必须是非空字符串；`access` 默认 `read`，`max_steps` 为 1–32 的整数、默认 12。未知字段、`access:"write"` 与非空 `write_scopes` 拒绝；`write_scopes:[]` 仅作兼容归一化，不授予写权限。Agent 不允许非零 `retry`，也不自动重放。
-- 含 `agent` 的计划以 `async:true` 或 service `background=true` 提交时，在创建 run/Worker 前以 `RUNTIME_AGENT_ASYNC_UNSUPPORTED` 预检拒绝。父 `exec.toolSet` 在外层工具批次返回时 dispose，不能安全 detach Worker，也不能合成更宽权限代替原 admission。普通工具计划的 async 行为不变。
+- 含 `agent` 的计划以 `async:true` 或 service `background=true` 提交时，在创建 run/Worker 前以 `RUNTIME_AGENT_ASYNC_UNSUPPORTED` 预检拒绝。父 `exec.toolSet` 在外层工具批次返回时 dispose，不能安全 detach Worker，也不能合成更宽权限代替原 admission。普通工具计划若携带 `exec.toolSet`，异步或 service 后台提交也在创建 run 前以 `RUNTIME_ASYNC_ADMISSION_UNSUPPORTED` 拒绝；宿主批次结束会销毁该准入集合，没有公开续租接口。不得删除准入集合或重新解析以绕过限制；请使用同步调用。
 - Lead 仍在 PTC 中编排；公开 `agents.create` 与 `agentPresets.composeFrom` 创建独立上下文 Worker，继承模型路由，强制使用 `NativeToolExecutor`，不是 PTC Worker。宿主 `sandbox:read-only`、`approval:never` 与 `tools.guard` 同时约束，仅允许 `read/glob/grep`，且不能放宽父调用 admission identity 的准入。禁止 `run_code`、命令、写入及递归委派；提示词不是权限控制。
-- 工具白名单包含 Worker 实际继承的 preset 作用域工具，并继续核对父 admission identity。Worker 的原生管线检查其 global/preset/local 策略一次；可信宿主适配器只补查父级缺失策略（含局部 hooks/guards），不得再次执行公共层。适配器的 `deny/ask/cancel`、异常及非 allow 返回均拒绝调用，不弹审批。适配器仅由宿主通过 `RuntimeService` 第三个构造参数或 `executeAgent` 第七参数注入，不接受模型 input；缺省拒绝创建 Worker。
+- 工具白名单包含 Worker 实际继承的 preset 作用域工具，并继续核对父 admission identity。Worker 的原生管线检查其 global/preset/local 策略一次；可信宿主适配器只补查父级缺失策略（含局部 hooks/guards），不得再次执行公共层。补查监听以全局可见性（`{global:true}`）注册在 Worker 子上下文、随 Worker 清理注销，子作用域后注册并直接返回 allow、不调用 `next()` 的监听不能跳过它；没有补查证据时最终 guard 拒绝。适配器的 `deny/ask/cancel`、异常及非 allow 返回均拒绝调用，不弹审批。适配器仅由宿主通过 `RuntimeService` 第三个构造参数或 `executeAgent` 第七参数注入，不接受模型 input；缺省拒绝创建 Worker。
 - 仅把直接依赖的已保存结果按 `{id,result}` 数组序列化为不可信 JSON，追加至 Agent prompt，不是新指令或授权。无结果 value 或结果截断以 `RUNTIME_AGENT_DEPENDENCY_UNAVAILABLE` 拒绝；追加后 prompt >64KiB 以 `RUNTIME_AGENT_CONTEXT_TOO_LARGE` 拒绝。不会向其他工具插值结果。
 - `whenIdle` 后检查 `turn/end` 和最终 assistant 文本；未正常结束或无最终文本不作为成功。子会话 ID 写入 checkpoint 并在运行摘要可见；运行时 `results[step].value` 在所有模式下均为 `{sessionId, output, verification:"not_independently_verified"}`，report 模式另含解析后的 `report`，原始 `output` 不被替换；追溯通过 `steps[].workerTrace` 暴露，不内嵌于结果 value；验收状态保持未验证。`succeeded` 只表示执行结束，不证明结论正确、测试通过或任务已验收；Lead 负责核实。
-- 取消/超时传播至 Worker，同步 run 的执行等待其 dispose 后才释放调度槽，服务 dispose 也等待所属运行；`runtime_cancel` 仅发起取消，不等待清理，其返回不是 Worker 已清理的证明。恢复遇到未知 Agent 时失败整个 run，不自动重发。真实模型、桌面 UI 与实际 OS 沙箱仍未验收。
+- 取消/超时传播至 Worker，同步 run 的执行等待其 dispose 后才释放调度槽；服务 dispose 同步发起所属运行的取消并落终态检查点，再等待其清理（即使调用方不等待返回的 Promise，取消也已发起）。`runtime_cancel` 仅发起取消，不等待清理，其返回不是 Worker 已清理的证明。恢复遇到未知 Agent 时失败整个 run，不自动重发。真实模型、桌面 UI 与实际 OS 沙箱仍未验收。
 
 ### 结构化报告与追溯
 
@@ -102,27 +102,27 @@
 - 运行：`running | succeeded | failed | cancelled | interrupted`。
 - 步骤：`pending | running | succeeded | failed | cancelled | unknown`。
 - `unknown` 表示副作用是否完成无法确认，不是“未执行”；不自动重试或回滚。
-- 同步 `runtime_run` 与 `runtime_resume` 绑定外层取消信号；仅不含 Agent 的计划支持 `async:true`，受理成功后脱离外层等待信号，用 `runtime_cancel` 显式取消。
+- 同步 `runtime_run` 与 `runtime_resume` 绑定外层取消信号；仅不含 Agent 且调用未携带 `exec.toolSet` 的受控宿主计划支持 `async:true`，受理成功后脱离外层等待信号，用 `runtime_cancel` 显式取消。
 - 取消立即停止新步骤调度，并向在途工具传播信号；未开始步骤标 `cancelled`，已开始的副作用标 `unknown`。忽略取消的工具可能继续，晚到结果不覆盖已提交终态。
 - 超时的副作用或 Agent 步骤标 `unknown/RUNTIME_STEP_TIMEOUT`，运行失败；超时 `read/glob/grep` 步骤失败，不自动重试。Agent 取消/超时等待 Worker dispose；普通工具不保证实际停止。
 - 卸载关闭服务后拒绝新操作，取消并等待本作用域调度退出；不取消其他作用域拥有的运行，也不承诺强杀不合作的宿主操作。
 
 ## 持久化与恢复
 
-- 记录路径：`DSH_HOME/tmp/xiaohe-runtime/runs/<runId>.json`（`XIAOHE_RUNTIME_DIR` 可覆盖）。每次工具尝试前、每步完成和重试时写检查点；同目录唯一临时文件替换，失败清理。原子替换不等于掉电耐久事务。
-- 记录保留 version 1，新增可选进程所有权字段；新会话不会把本进程其他活跃运行误标中断。其他仍存活进程的记录保守跳过，不据此提供跨进程锁或分布式保证。
+- 记录路径：`DSH_HOME/tmp/xiaohe-runtime/runs/<runId>.json`（`XIAOHE_RUNTIME_DIR` 可覆盖）。每次工具尝试前、每步完成和重试时写检查点；同目录唯一临时文件先 fsync 刷盘再原子替换，失败清理。掉电最多回退到上一检查点或由恢复扫描回收，Windows 不保证目录项级持久性；这仍不是分布式事务。
+- 记录保留 version 1，新增可选进程所有权字段；新会话不会把本进程其他活跃运行误标中断。其他仍存活进程的记录在新鲜期内保守跳过；PID 探测存活不能证明属主身份，活属主每个步骤边界都写检查点且单次尝试受超时上界约束，故外部 PID 仍探测存活但超过 1 小时未写检查点的 `running` 记录按失联回收（防 PID 复用形成无法恢复、取消或清理的僵尸记录）。迟到的原属主再次写检查点会把状态覆盖回去；本协议不提供跨进程锁或分布式保证。
 - 仅失联的 `running` 记录标 `interrupted`，在途步骤标 `unknown`；不自动执行恢复。
 - 显式恢复保留已保存成功步骤，仅 `read/glob/grep` 在途步骤重新排队；若存在未知副作用或未知 Agent，标 `failed/RUNTIME_INTERRUPTED` 并停止整个恢复计划，不再启动任何新步骤。**不保证 exactly-once**。
 - 默认持续保留最近 100 个终态运行（`succeeded/failed/cancelled`），不删除 `running/interrupted`。中断记录可能长期保留，应由所有者确认后取消；本轮不提供 TTL 或归档接口。
 - status/result/cancel/resume 只允许所有者会话。单步结果 >64KiB 只保存截断标记；记录读取上限 4MiB，结构、计划、步骤、结果和时间戳不一致的记录隔离忽略。
-- `runtime_status` 列表附 `diagnostics`：当前存储实例有界累计计数 `invalidRecords/oversizedRecords/readFailures/writeFailures`，不含记录路径或正文；重复扫描可重复计数，不代表损坏文件去重数量。
+- `runtime_status` 列表附 `diagnostics`：当前存储实例有界累计计数 `invalidRecords/oversizedRecords/readFailures/writeFailures`，不含记录路径或正文；重复扫描可重复计数，不代表损坏文件去重数量；非法 runId 属调用方错误，不计入读取失败。
 - 保存失败以 `RUNTIME_STORAGE_FAILED` 停止调度并尝试提交失败状态；若磁盘不可写，只能在进程内保留最多 100 个失败摘要，不能承诺重启后仍可查询。记录正文可能含敏感输入或结果，保管记录目录与权限仍是部署者责任。
 
 ## 错误码（运行时）
 
-`INVALID_PLAN`、`PLAN_TOO_LARGE`、`PLAN_DUPLICATE_ID`、`PLAN_UNKNOWN_DEP`、`PLAN_CYCLE`、`PLAN_UNKNOWN_TOOL`、`PLAN_RETRY_DENIED`、`RUNTIME_NOT_FOUND`、`RUNTIME_INVALID_STATE`、`RUNTIME_STEP_TIMEOUT`、`RUNTIME_CANCELLED`、`RUNTIME_INTERRUPTED`、`RUNTIME_STEP_FAILED`、`RUNTIME_BUSY`、`RUNTIME_STORAGE_FAILED`、`RUNTIME_COMMAND_FAILED`、`RUNTIME_BACKGROUND_UNSUPPORTED`、`OWNING_SESSION_REQUIRED`、`CLOSED`。预设派生错误沿用 `PTC_PRESET_*`。
+`INVALID_PLAN`、`PLAN_TOO_LARGE`、`PLAN_DUPLICATE_ID`、`PLAN_UNKNOWN_DEP`、`PLAN_CYCLE`、`PLAN_UNKNOWN_TOOL`、`PLAN_RETRY_DENIED`、`RUNTIME_NOT_FOUND`、`RUNTIME_INVALID_STATE`、`RUNTIME_STEP_TIMEOUT`、`RUNTIME_CANCELLED`、`RUNTIME_INTERRUPTED`、`RUNTIME_STEP_FAILED`、`RUNTIME_BUSY`、`RUNTIME_STORAGE_FAILED`、`RUNTIME_COMMAND_FAILED`、`RUNTIME_BACKGROUND_UNSUPPORTED`、`RUNTIME_ASYNC_ADMISSION_UNSUPPORTED`、`RUNTIME_TASK_LINK_INVALID`、`RUNTIME_RESULT_UNAVAILABLE`、`RUNTIME_RESULT_CHANGED`、`OWNING_SESSION_REQUIRED`、`CLOSED`。预设派生错误沿用 `PTC_PRESET_*`。
 
-含 Agent 的异步提交预检使用 `RUNTIME_AGENT_ASYNC_UNSUPPORTED`。Agent 适配器使用 `RUNTIME_AGENT_INVALID_INPUT`、`RUNTIME_AGENT_WRITE_UNSUPPORTED`、`RUNTIME_AGENT_PARENT_REQUIRED`、`RUNTIME_AGENT_MODEL_REQUIRED`、`RUNTIME_AGENT_TOOLS_UNAVAILABLE`、`RUNTIME_AGENT_TOOL_DENIED`、`RUNTIME_AGENT_PARENT_POLICY_DENIED`、`RUNTIME_AGENT_ABORTED`、`RUNTIME_AGENT_STEP_LIMIT`、`RUNTIME_AGENT_TURN_FAILED`、`RUNTIME_AGENT_OUTPUT_MISSING`、`RUNTIME_AGENT_EXECUTION_FAILED`；报告解析使用 `RUNTIME_AGENT_REPORT_INVALID`、`RUNTIME_AGENT_REPORT_TOO_LARGE`；依赖传递使用 `RUNTIME_AGENT_DEPENDENCY_UNAVAILABLE`、`RUNTIME_AGENT_CONTEXT_TOO_LARGE`。错误码不代表底层操作已被强杀或内容已经验收。
+含 Agent 的异步提交预检使用 `RUNTIME_AGENT_ASYNC_UNSUPPORTED`；未注入可信适配器的入口对含 Agent 计划以 `RUNTIME_AGENT_POLICY_UNSUPPORTED` 预检拒绝；Worker 配额满载使用 `RUNTIME_AGENT_CAPACITY_EXCEEDED`。Agent 适配器使用 `RUNTIME_AGENT_INVALID_INPUT`、`RUNTIME_AGENT_WRITE_UNSUPPORTED`、`RUNTIME_AGENT_PARENT_REQUIRED`、`RUNTIME_AGENT_MODEL_REQUIRED`、`RUNTIME_AGENT_TOOLS_UNAVAILABLE`、`RUNTIME_AGENT_TOOL_DENIED`、`RUNTIME_AGENT_PARENT_POLICY_DENIED`、`RUNTIME_AGENT_ABORTED`、`RUNTIME_AGENT_STEP_LIMIT`、`RUNTIME_AGENT_TURN_FAILED`、`RUNTIME_AGENT_OUTPUT_MISSING`、`RUNTIME_AGENT_EXECUTION_FAILED`；报告解析使用 `RUNTIME_AGENT_REPORT_INVALID`、`RUNTIME_AGENT_REPORT_TOO_LARGE`；依赖传递使用 `RUNTIME_AGENT_DEPENDENCY_UNAVAILABLE`、`RUNTIME_AGENT_CONTEXT_TOO_LARGE`。错误码不代表底层操作已被强杀或内容已经验收。
 
 ## 兼容性
 

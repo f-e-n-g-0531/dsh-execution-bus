@@ -169,23 +169,26 @@ export class RuntimeService {
   dispose(): Promise<void> {
     if (this.disposal) return this.disposal;
     this.closed = true;
-    this.disposal = Promise.resolve().then(async () => {
-      const own = [...this.manager.active.values()].filter(
-        (entry) => entry.owner === this,
-      );
-      for (const entry of own) {
-        try {
-          entry.executor.cancel(entry.run);
-        } catch {
-          this.rememberStorageFailure(entry.run);
-        } finally {
-          entry.controller.abort();
-        }
+    const own = [...this.manager.active.values()].filter(
+      (entry) => entry.owner === this,
+    );
+    // Cancel and abort synchronously: a host that drops the returned promise
+    // or tears the process down right after dispose() still stops scheduling
+    // and gets terminal checkpoints. Only the settlement await stays async.
+    for (const entry of own) {
+      try {
+        entry.executor.cancel(entry.run);
+      } catch {
+        this.rememberStorageFailure(entry.run);
+      } finally {
+        entry.controller.abort();
       }
+    }
+    this.disposal = (async () => {
       await Promise.allSettled(own.map((entry) => entry.promise));
       this.manager.references--;
       this.releaseManager();
-    });
+    })();
     return this.disposal;
   }
 
@@ -207,7 +210,11 @@ export class RuntimeService {
       (background || input.async === true) &&
       plan.steps.some((step) => step.tool === "agent")
     )
-      throw Error("RUNTIME_AGENT_ASYNC_UNSUPPORTED");
+      throw Error(ERRORS.RUNTIME_AGENT_ASYNC_UNSUPPORTED);
+    // Ordinary nested tools also lose their step admission after detaching.
+    // Do not drop or re-resolve it to synthesize broader host permissions.
+    if ((background || input.async === true) && exec.toolSet !== undefined)
+      throw Error(ERRORS.RUNTIME_ASYNC_ADMISSION_UNSUPPORTED);
     if (plan.previousRunId !== undefined) {
       const previous = this.owned(plan.previousRunId, sessionId);
       if (
@@ -215,13 +222,13 @@ export class RuntimeService {
         !["succeeded", "failed", "cancelled"].includes(previous.state) ||
         this.manager.active.has(previous.runId)
       )
-        throw Error("RUNTIME_TASK_LINK_INVALID");
+        throw Error(ERRORS.RUNTIME_TASK_LINK_INVALID);
     }
     if (
       plan.steps.some((step) => step.tool === "agent") &&
       typeof this.delegationPolicy?.checkParentPolicy !== "function"
     )
-      throw Error("RUNTIME_AGENT_POLICY_UNSUPPORTED");
+      throw Error(ERRORS.RUNTIME_AGENT_POLICY_UNSUPPORTED);
     this.admit(exec);
     const executor = this.executor(exec);
     const run = executor.createRun(sessionId, plan, {
@@ -297,11 +304,11 @@ export class RuntimeService {
         ? run.results[input.stepId]
         : undefined;
       if (!stored || stored.truncated || !Object.hasOwn(stored, "value"))
-        throw Error("RUNTIME_RESULT_UNAVAILABLE");
+        throw Error(ERRORS.RUNTIME_RESULT_UNAVAILABLE);
       const text = JSON.stringify(stored.value);
       const hash = createHash("sha256").update(text).digest("hex");
       if (input.hash !== undefined && input.hash !== hash)
-        throw Error("RUNTIME_RESULT_CHANGED");
+        throw Error(ERRORS.RUNTIME_RESULT_CHANGED);
       // Code-point offsets never split surrogate pairs. Each page is <= 16KiB UTF-8.
       const chars = Array.from(text);
       const offset = pageNumber(input.offset, 0, chars.length);
@@ -380,7 +387,7 @@ export class RuntimeService {
       run.plan.steps.some((step) => step.tool === "agent") &&
       typeof this.delegationPolicy?.checkParentPolicy !== "function"
     )
-      throw Error("RUNTIME_AGENT_POLICY_UNSUPPORTED");
+      throw Error(ERRORS.RUNTIME_AGENT_POLICY_UNSUPPORTED);
     this.admit(exec);
     return summary(
       await this.start(run, this.executor(exec), exec, true, false),

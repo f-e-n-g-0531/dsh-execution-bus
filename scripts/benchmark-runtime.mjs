@@ -109,6 +109,28 @@ export function parseArgs(argv) {
   return validateOptions(out);
 }
 
+// Known local execution closure; optional modules preserve pre-Agent build comparisons.
+export const RUNTIME_ARTIFACT_FILES = Object.freeze([
+  "runtime/executor.js", "runtime/store.js", "runtime/plan.js", "runtime/service.js",
+  "error-codes.js", "presentation.js", "runtime/retry.js", "runtime/agent.js",
+  "runtime/agent-report.js", "runtime/agent-trace.js", "runtime/worker-quota.js",
+]);
+export function runtimeArtifactDigest(dist, read = readFileSync) {
+  const root = dist instanceof URL ? dist : pathToFileURL(path.resolve(dist) + path.sep);
+  const hash = createHash("sha256");
+  for (const [index, name] of RUNTIME_ARTIFACT_FILES.entries()) {
+    hash.update(name + "\0");
+    let bytes;
+    try { bytes = read(new URL(name, root)); } catch (error) {
+      if (index < 6 || error?.code !== "ENOENT") throw error;
+      hash.update("missing\0");
+      continue;
+    }
+    hash.update("present\0" + bytes.length + "\0").update(bytes);
+  }
+  return hash.digest("hex");
+}
+
 export async function loadRuntime() {
   try {
     const [executor, store, plan, service] = await Promise.all([
@@ -117,21 +139,13 @@ export async function loadRuntime() {
       import("../dist/runtime/plan.js"),
       import("../dist/runtime/service.js"),
     ]);
-    const artifactHash = createHash("sha256");
-    for (const name of ["executor", "store", "plan", "service"]) {
-      artifactHash.update(name + "\0");
-      artifactHash.update(
-        readFileSync(
-          new URL("../dist/runtime/" + name + ".js", import.meta.url),
-        ),
-      );
-    }
+    const artifactDigest = runtimeArtifactDigest(new URL("../dist/", import.meta.url));
     return {
       ...executor,
       ...store,
       ...plan,
       ...service,
-      artifactDigest: artifactHash.digest("hex"),
+      artifactDigest,
     };
   } catch {
     throw Error(

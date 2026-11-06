@@ -1,6 +1,7 @@
-import { test } from "node:test";
+import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -202,6 +203,66 @@ test("a new same-root scope still discovers records created after the first scop
     );
     assert.equal(external.load(orphan.runId).state, "interrupted");
   } finally {
+    await f.close();
+  }
+});
+
+test("cancel fails closed on a running record owned outside this registry", async () => {
+  const f = fixture();
+  const foreign = process.pid + 100;
+  const kill = process.kill;
+  mock.method(process, "kill", (pid, signal) => {
+    if (pid === foreign && signal === 0) return true;
+    return kill(pid, signal);
+  });
+  syncBuiltinESMExports();
+  try {
+    const external = new RunStore(f.root);
+    const executor = new RuntimeExecutor(external, async () => ({}));
+    // Fresh checkpoint plus a live foreign PID: recovery conservatively skips
+    // it, and this registry never started the run. Cancelling it would corrupt
+    // another process's live checkpoint on disk.
+    const live = executor.createRun("owner", parsePlan(plan("external")), {
+      ownerPid: foreign,
+      ownerProcess: "live-elsewhere",
+    });
+    external.save(live);
+    const service = f.create(undefined, new RunStore(f.root));
+    assert.equal(
+      service.status({ runId: live.runId }, exec()).state,
+      "running",
+    );
+    assert.throws(
+      () => service.cancel({ runId: live.runId }, exec()),
+      /^Error: RUNTIME_BUSY$/,
+    );
+    assert.equal(external.load(live.runId).state, "running");
+  } finally {
+    mock.restoreAll();
+    syncBuiltinESMExports();
+    await f.close();
+  }
+});
+
+test("dispose cancels owned runs synchronously before its promise settles", async () => {
+  const entered = deferred();
+  const gate = deferred();
+  const f = fixture(async () => {
+    entered.resolve();
+    return gate.promise;
+  });
+  try {
+    const service = f.create();
+    const started = await service.run({ plan: plan(), async: true }, exec());
+    await bounded(entered.promise, "tool entry");
+    const disposing = service.dispose();
+    // Without awaiting the returned promise, cancellation already ran: the
+    // terminal checkpoint is durable even if the host tears down immediately.
+    assert.equal(f.store.load(started.runId).state, "cancelled");
+    gate.resolve({});
+    await bounded(disposing, "disposal");
+  } finally {
+    gate.resolve({});
     await f.close();
   }
 });
@@ -602,6 +663,57 @@ test("offline interrupted cancellation save failure remains visible through vola
   } finally {
     f.store.fail = false;
     await f.close();
+  }
+});
+
+test("detached ordinary plans reject step-owned admission before recording or invoking", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "xiaohe-admission-"));
+  let calls = 0;
+  const ctx = context(async () => { calls++; return true; });
+  const store = new RunStore(root);
+  const service = new RuntimeService(ctx, store);
+  const owner = exec();
+  const toolSet = await ctx.tools.resolve({
+    agent: owner.agent,
+    signal: owner.signal,
+    modelSelection: { provider: "offline", model: "fixture" },
+  });
+  const admitted = { ...owner, toolSet };
+  try {
+    assert.ok(toolSet.view(owner.agent).has("read"));
+    for (const [input, background] of [
+      [{ plan: plan(), async: true }, false],
+      [{ plan: plan() }, true],
+    ]) {
+      await assert.rejects(service.run(input, admitted, background), {
+        message: "RUNTIME_ASYNC_ADMISSION_UNSUPPORTED",
+      });
+      assert.equal(calls, 0);
+      assert.deepEqual(store.list(), []);
+    }
+    await assert.rejects(service.run({
+      async: true,
+      plan: { steps: [{ id: "worker", tool: "agent", input: { prompt: "inspect" } }] },
+    }, admitted), { message: "RUNTIME_AGENT_ASYNC_UNSUPPORTED" });
+    assert.deepEqual(store.list(), []);
+    assert.equal((await service.run({ plan: plan() }, admitted)).state, "succeeded");
+    assert.equal(calls, 1, "synchronous nested admission remains supported");
+    toolSet.dispose();
+    assert.equal(toolSet.view(owner.agent).size, 0);
+    for (const [input, background] of [
+      [{ plan: plan(), async: true }, false],
+      [{ plan: plan() }, true],
+    ]) {
+      const receipt = await service.run(input, owner, background);
+      assert.equal(receipt.state, "running");
+      await nextTurn();
+      assert.equal(service.status({ runId: receipt.runId }, owner).state, "succeeded");
+    }
+    assert.equal(calls, 3, "controlled calls without step admission retain async compatibility");
+  } finally {
+    toolSet.dispose();
+    await service.dispose();
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

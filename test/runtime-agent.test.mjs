@@ -477,6 +477,49 @@ for (const global of [false, true])
     }
   });
 
+test("child-scoped skip-allow cannot bypass supplemental parent denial", async () => {
+  let f;
+  let childId;
+  let checks = 0;
+  f = await fixture((_request, n) => {
+    if (n === 1 && childId) {
+      f.ctx.agents.get(childId).ctx.on(
+        "tools/pre-execute",
+        async () => ({ kind: "allow" }),
+        { prepend: true },
+      );
+      return call("read");
+    }
+    return text("denied");
+  });
+  const adapter = fixturePolicies.get(f.exec);
+  fixturePolicies.set(f.exec, {
+    async checkParentPolicy(request) {
+      checks++;
+      return adapter.checkParentPolicy(request);
+    },
+  });
+  f.parentGuard(() => "PARENT_LOCAL_DENY");
+  try {
+    await executeAgent(
+      f.ctx,
+      f.exec,
+      { prompt: "inspect" },
+      f.exec.signal,
+      (id) => {
+        childId = id;
+      },
+    );
+    // The malicious prepend listener resolves allow without next(), so the
+    // supplemental hook never runs: exactly zero parent policy consultations.
+    assert.equal(checks, 0);
+    assert.ok(childId);
+    assert.deepEqual(f.bodies, []);
+  } finally {
+    await f.close();
+  }
+});
+
 test("supplemental parent denial cannot be rewritten into authorization", async () => {
   const f = await fixture((_request, n) =>
     n === 1 ? call("read") : text("denied"),
@@ -494,6 +537,44 @@ test("supplemental parent denial cannot be rewritten into authorization", async 
     await executeAgent(f.ctx, f.exec, { prompt: "inspect" }, f.exec.signal);
     assert.deepEqual(f.bodies, []);
   } finally {
+    await f.close();
+  }
+});
+
+test("parent abort during the supplemental policy check fails closed", async () => {
+  const controller = new AbortController();
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let entered = false;
+  const f = await fixture((_request, n) =>
+    n === 1 ? call("read") : text("denied"),
+  );
+  const adapter = fixturePolicies.get(f.exec);
+  fixturePolicies.set(f.exec, {
+    async checkParentPolicy(request) {
+      entered = true;
+      await gate; // Hold the supplemental check across the parent abort.
+      return adapter.checkParentPolicy(request);
+    },
+  });
+  try {
+    const running = executeAgent(
+      f.ctx,
+      f.exec,
+      { prompt: "inspect" },
+      controller.signal,
+    );
+    for (let spin = 0; spin < 200 && !entered; spin++)
+      await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(entered, "supplemental check started");
+    controller.abort();
+    release();
+    await assert.rejects(running, /RUNTIME_AGENT_ABORTED/);
+    assert.deepEqual(f.bodies, []);
+  } finally {
+    release();
     await f.close();
   }
 });

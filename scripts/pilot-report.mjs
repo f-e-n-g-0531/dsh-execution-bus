@@ -93,6 +93,13 @@ export function normalizeObservation(raw) {
 /** Parse recoverably: malformed JSONL lines and rejected rows remain diagnostic counts. */
 export function collectObservations(text) {
   if (typeof text !== "string" || Buffer.byteLength(text) > MAX_BYTES) fail();
+  return parseObservations(text);
+}
+
+// The byte cap belongs to external input, not its expanded internal projection.
+// Keep row limits and normalization shared across both paths.
+function parseObservations(text) {
+  if (typeof text !== "string") fail();
   const diagnostics = { malformed: 0, rejected: 0, inconsistentToolCounts: 0 };
   let rows;
   const trimmed = text.trim();
@@ -191,8 +198,9 @@ const summarize = (rows) => ({
 });
 
 export function buildReport(input) {
-  // Re-project even programmatic input; arbitrary properties never enter reports.
-  const clean = collectObservations(JSON.stringify(input));
+  // Re-project even programmatic input; preserve JSON semantics and row limits.
+  // External reads already enforce MAX_BYTES before normalization fills missing fields.
+  const clean = parseObservations(JSON.stringify(input));
   const rows = clean.observations;
   const paired = new Map();
   for (const row of rows) {

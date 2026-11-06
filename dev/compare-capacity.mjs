@@ -9,16 +9,12 @@ import { performance } from "node:perf_hooks";
 import {
   runBenchmark,
   benchmarkAlgorithmDigest,
+  runtimeArtifactDigest,
 } from "../scripts/benchmark-runtime.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 const MODULES = ["executor", "store", "plan", "service"];
-// Hash the known local execution closure; only MODULES are explicitly imported.
-const ARTIFACT_FILES = [
-  ...MODULES.map((name) => "runtime/" + name + ".js"),
-  "error-codes.js",
-  "presentation.js",
-];
+// Shared digest includes the known local execution closure, including optional legacy modules.
 const OPERATIONS = ["list", "warm-list", "prune", "startup"];
 const MAX_OUTPUT = 1024 * 1024;
 const integer = (n, lo, hi) => Number.isSafeInteger(n) && n >= lo && n <= hi;
@@ -119,12 +115,7 @@ export function parseComparisonArgs(argv) {
   return validateComparisonOptions(out);
 }
 
-function artifactDigest(dist) {
-  const hash = createHash("sha256");
-  for (const name of ARTIFACT_FILES)
-    hash.update(name + "\0").update(readFileSync(path.join(dist, name)));
-  return hash.digest("hex");
-}
+const artifactDigest = runtimeArtifactDigest;
 function dependencyDigests() {
   const out = {};
   for (const [name, url] of [

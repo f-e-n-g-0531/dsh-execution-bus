@@ -8,7 +8,6 @@ export interface WorkerReportCriterion {
     evidence_indices: number[];
     note: string;
 }
-/** Validate data descriptors before reading any caller-provided criterion values. */
 export declare function parseAcceptanceCriteria(raw: unknown): AcceptanceCriterion[];
 export declare function workerCriteriaInstructions(criteria: AcceptanceCriterion[]): string;
 export interface WorkerReportEvidence {

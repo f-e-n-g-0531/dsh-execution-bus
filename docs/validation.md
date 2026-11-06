@@ -1,6 +1,6 @@
 # 验证范围与使用限制
 
-本文说明证据边界，不是生产环境认证。当前公开基线为 **v1.3.2**（提交 `8d1a5bf`），已于 2026-11-04 发布至 [npm](https://registry.npmjs.org/@feng0531/dsh-execution-bus/1.3.2) 和 [GitHub Release](https://github.com/f-e-n-g-0531/dsh-execution-bus/releases/tag/v1.3.2)，交付范围见[发布说明](<releases/1.3.2.md>)；v1.3.0 是历史研发起点，v1.3.2 生产运行时与 v1.3.1 一致；版本发布不代表下述真实环境验收已经完成。v1.4.0 依赖目标为 **DSH 0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node ≥22；包版本为 1.4.0，多 Agent 编排随本版发布，公开 1.3.3 的原包兼容范围不因本次适配而改变，兼容范围见[宿主兼容性](<host-compatibility.md>)。历史 v1.2.0 的 Windows、Node.js 24.21.0、DSH rc.2 组件验证记录只属于当时版本，不能代替 rc.1 工作树候选的复核。后续研发与真实验收门禁见[研发计划](<DEVELOPMENT-PLAN.md>)。
+本文说明证据边界，不是生产环境认证。本文固定的历史参考基线为 **v1.3.2**（提交 `8d1a5bf`），已于 2026-11-04 发布至 [npm](https://registry.npmjs.org/@feng0531/dsh-execution-bus/1.3.2) 和 [GitHub Release](https://github.com/f-e-n-g-0531/dsh-execution-bus/releases/tag/v1.3.2)，交付范围见[发布说明](<releases/1.3.2.md>)；v1.3.0 是历史研发起点，v1.3.2 生产运行时与 v1.3.1 一致；版本发布不代表下述真实环境验收已经完成。v1.4.0 依赖目标为 **DSH 0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node ≥22；包版本为 1.4.0，多 Agent 编排随本版发布，公开 1.3.3 的原包兼容范围不因本次适配而改变，兼容范围见[宿主兼容性](<host-compatibility.md>)。历史 v1.2.0 的 Windows、Node.js 24.21.0、DSH rc.2 组件验证记录只属于当时版本，不能代替 rc.1 工作树候选的复核。后续研发与真实验收门禁见[研发计划](<DEVELOPMENT-PLAN.md>)。
 
 公开版本验证只属于其原始候选；工作树或包内容变化后须重新绑定候选 SHA，不沿用公开包验证结论。环境与预算按[研发准备记录](<RESEARCH-READINESS.md>)确认，模板完整不代表已验收。
 
@@ -24,7 +24,7 @@
 
 - `agent` 只读输入与默认 12/上限 32 步，拒绝 write、非空 write_scopes、未知字段与非零 retry；空 write_scopes 仅作兼容归一化，不提供写权限。
 - 公开 agents.create/composeFrom、独立上下文和模型路由；read-only 沙箱 + approval never、NativeToolExecutor、guard 的 read/glob/grep 白名单与父 admission identity 交集。拒绝 run_code、命令、写入及递归委派，不能把提示词当权限。
-- 含 Agent 的计划以 async:true 或 service background=true 提交，在创建 run/Worker 前报 `RUNTIME_AGENT_ASYNC_UNSUPPORTED`；父 exec.toolSet 随外层工具批次返回而 dispose，不能安全 detach Worker；普通工具 async 不变。
+- 含 Agent 的计划以 async:true 或 service background=true 提交，在创建 run/Worker 前报 `RUNTIME_AGENT_ASYNC_UNSUPPORTED`；父 exec.toolSet 随外层工具批次返回而 dispose，不能安全 detach Worker；普通工具计划若携带 `exec.toolSet`，异步或 service 后台提交也在创建 run 前以 `RUNTIME_ASYNC_ADMISSION_UNSUPPORTED` 拒绝；宿主批次结束会销毁该准入集合，没有公开续租接口。不得删除准入集合或重新解析以绕过限制；请使用同步调用。
 - 可选 `output_format:report` 严格 JSON、16KiB UTF-8 上限、证据与状态约束、未知字段拒绝；`partial/blocked` 只是 Worker 自报结果，不改变执行成功或授予写权限，所有模式保留未独立验收标记。
 - `workerTrace` 记录运行时提示词版本/hash、精确任务 hash、创建选择与请求头路由；旧记录可缺省、非法追溯拒绝保存、摘要深拷贝。取消/中途崩溃可能只有初始追溯，空路由不证明没有请求。
 - 直接依赖结果按不可信 JSON 追加；缺失/截断及追加后 prompt >64KiB 拒绝，其他工具不插值。
@@ -68,6 +68,6 @@
 
 1. 每步调用前、完成/重试时 checkpoint；落盘失败停止后续调度。进程退出后仅保留已落盘状态。恢复未知副作用或未知 Agent 使整个 run `failed`，不再调新步骤；只读超时不 retry，避免与原调用重叠。
 2. 计划质量由模型决定；稳定流程适合，探索型任务用原工具。
-3. 取消及时停止调度并传播信号，Agent 取消/超时由同步 run/服务 dispose 等待 Worker dispose，runtime_cancel 仅发起取消、返回不证明清理完成，但普通工具可能不合作；`unknown` 不等于已停止或 rollback。同步 run/resume 绑定外层 signal；仅不含 Agent 的计划可用 `async:true`，受理后脱离外层信号。
+3. 取消及时停止调度并传播信号，Agent 取消/超时由同步 run/服务 dispose 等待 Worker dispose，runtime_cancel 仅发起取消、返回不证明清理完成，但普通工具可能不合作；`unknown` 不等于已停止或 rollback。同步 run/resume 绑定外层 signal；仅不含 Agent 且调用未携带 `exec.toolSet` 的受控宿主计划可用 `async:true`，受理后脱离外层信号。
 4. 同 root 单进程共享 8 active，run/resume 都需准入。status 列表仅本会话，`limit` 1–100（默认 20）、`offset` 0–10000（默认 0）。默认仅保留最新 100 条终态，保护 `running/interrupted`；恢复可能有老记录。
 5. 显式 `pwsh run_in_background:true` 预检拒绝；auto-promote 后 run 失败、步骤 `unknown`，保留 `jobId`，需用原生 `job_output/job_kill` 收集或停止，不表示命令已完成。

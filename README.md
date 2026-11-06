@@ -4,7 +4,7 @@
 
 当前 mode 从 PTC 原地派生，Lead 仍用 PTC；仓库 dsh-execution-bus、npm 包名、预设 ID `xiao-he-runtime` 保持不变，不新增 team 模式。多 Agent 编排能力随 1.4.0 发布；标准插件入口对含 `agent` 计划的拒绝边界不变，见下方安全兼容边界。历史 0.x 版本说明保留当时名称。
 
-DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.4.0**
+DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.4.1**
 
 > 1.0 起产品从“执行总线模式”切换为**声明式运行时**：`runtime_run` 接收 DAG 计划，运行时按依赖并行执行、对只读步骤重试、逐步落盘并支持重启后恢复。旧的 `execution_bus` 工具与 `./core` 导出已移除；0.12.1 是最后一个总线版本，仍可在 npm/git 历史中查看。
 
@@ -21,7 +21,7 @@ DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.4.0**
 | 需要独立上下文分工 | `tool:agent` 启动独立只读 Worker；输出仍需 Lead 核实 |
 | 只读步骤偶发失败 | 仅 `read/glob/grep` 可配置失败重试 `retry`（0–3）；超时不重试，避免重叠调用 |
 | 单步卡死 | 每步 `timeout_ms`（1s–600s） |
-| 长任务跨步骤 | 默认同步等待；仅不含 Agent 的计划可用 `async:true` 返回 `runId`，用 `runtime_status/runtime_result` 取回 |
+| 长任务跨步骤 | 默认同步等待；仅不含 Agent 且调用未携带 `exec.toolSet` 的受控宿主计划可用 `async:true` 返回 `runId`，用 `runtime_status/runtime_result` 取回 |
 | 进程重启/崩溃 | 运行记录落盘，重启后标记 `interrupted`，`runtime_resume` 仅重排在途 `read/glob/grep`，未知 Agent 不重放 |
 | 需要停止 | `runtime_cancel` 停止调度并传播取消 |
 
@@ -30,7 +30,7 @@ DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.4.0**
 本版目标宿主为 **DSH 0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0，DSH peer 精确锁定 0.2.2-rc.1，不推导兼容其他宿主版本。旧版 1.3.3 的宿主目标仍为 0.2.1-rc.5。依赖安全告警及验证边界见[宿主兼容性](<docs/host-compatibility.md>)。
 
 ```text
-npm install --ignore-scripts @feng0531/dsh-execution-bus@1.4.0
+npm install --ignore-scripts @feng0531/dsh-execution-bus@1.4.1
 ```
 
 从源码验证待发布版本时，先用 `npm run pack:candidate` 生成本地 tgz，在隔离配置安装，不替换日常 DSH；正式包可用性以 npm 公开元数据及对应 GitHub Release 为准。
@@ -41,7 +41,7 @@ npm install --ignore-scripts @feng0531/dsh-execution-bus@1.4.0
 
 | 工具 | 作用 |
 |---|---|
-| `runtime_run` | 提交计划；默认等待完成返回步骤状态；仅不含 Agent 的计划支持 `async:true` 立即返回 `runId` |
+| `runtime_run` | 提交计划；默认等待完成返回步骤状态；仅不含 Agent 且调用未携带 `exec.toolSet` 的受控宿主计划支持 `async:true` 立即返回 `runId` |
 | `runtime_status` | 无 `runId` 按本会话分页（`limit` 1–100，默认 20；`offset` 0–10000，默认 0）；带 `runId` 返回步骤状态（不含结果） |
 | `runtime_result` | 读取已保存的步骤结果（单步 >64KiB 只返回 `truncated/bytes`） |
 | `runtime_cancel` | 停止调度、传播取消 |
@@ -69,7 +69,7 @@ Lead 可用 `runtime_result({runId,stepId,offset,limit,hash})` 分页读取已�
 
 ### 只读 Worker
 
-含 `agent` 的计划不支持 `async:true` 或 service `background=true`：父调用 `exec.toolSet` 随外层工具批次返回而 dispose，不能安全 detach Worker。以 `RUNTIME_AGENT_ASYNC_UNSUPPORTED` 在创建 run/Worker 前预检拒绝；普通工具计划的 async 行为不变。
+含 `agent` 的计划不支持 `async:true` 或 service `background=true`：父调用 `exec.toolSet` 随外层工具批次返回而 dispose，不能安全 detach Worker。以 `RUNTIME_AGENT_ASYNC_UNSUPPORTED` 在创建 run/Worker 前预检拒绝；普通工具计划若携带 `exec.toolSet`，异步或 service 后台提交也在创建 run 前以 `RUNTIME_ASYNC_ADMISSION_UNSUPPORTED` 拒绝；请使用同步调用，不得删除准入集合绕过限制。
 
 `agent` 的 `input` 为 `{"prompt":"核查指定模块并报告证据","access":"read","max_steps":12,"output_format":"report"}`；`access` 可省略，`max_steps` 为 1–32、默认 12。`output_format` 可选 `text` 或 `report`，省略保留旧文本行为；`report` 要求严格 JSON，包含 `outcome/summary/evidence/limitations` 与可选 `requestedDecision`，限制见[报告契约](<docs/protocol.md#结构化报告与追溯>)。不支持 `write` 访问或写入范围授权；非空 `write_scopes` 拒绝，空数组仅作兼容归一化。
 
@@ -89,7 +89,7 @@ report 模式可提供 `acceptance_criteria:[{id,description}]`（1–16 项、I
 - 只读工具重试根据结构化错误分类：明确权限、参数、资源不存在等确定性错误不重试，瞬态错误可重试；缺少结构化信息的未知错误保留旧重试行为，不解析错误正文猜测原因。退避为 100/200/400ms，可取消；超时仍不重试。
 - 每步 checkpoint；记录在 `DSH_HOME/tmp/xiaohe-runtime/runs`（`XIAOHE_RUNTIME_DIR` 可覆盖），按会话隔离。默认保留最新 100 条终态，保护 `running/interrupted`。
 - 取消停止调度，不保证普通工具实际停止或 rollback；Agent 取消/超时须等待 Worker dispose 后释放调度槽；`runtime_cancel` 仅发起取消，返回不证明清理完成，同步 run 或服务 dispose 才等待清理。**不保证 exactly-once**。恢复遇到未知副作用或未知 Agent 使整个 run `failed`，不再调新步骤。
-- 同步 run/resume 绑定外层 signal；不含 Agent 的计划才可用 `async:true`，受理后脱离外层信号。`pwsh` 显式后台预检拒绝，自动转后台不算命令完成，保留 `jobId` 供原生 `job_output/job_kill` 收集。详见[协议与恢复边界](<docs/protocol.md>)。
+- 同步 run/resume 绑定外层 signal；仅不含 Agent 且未携带批次准入集合的受控宿主调用才可用 `async:true`，受理后脱离外层信号。`pwsh` 显式后台预检拒绝，自动转后台不算命令完成，保留 `jobId` 供原生 `job_output/job_kill` 收集。详见[协议与恢复边界](<docs/protocol.md>)。
 - 运行时随宿主进程退出，不做跨进程执行或分布式队列。
 - 计划质量是新的失败来源；稳定、可枚举的流程适合，探索型任务仍用原工具。
 
@@ -108,5 +108,5 @@ npm run test:install   # 临时目录安装验证
 
 - [声明式运行时设计](<docs/DECLARATIVE-RUNTIME.md>)、[协议](<docs/protocol.md>)、[验证范围](<docs/validation.md>)、[产品结构](<docs/PRODUCT.md>)
 - [运行状态与故障处置](<docs/OPERATIONS.md>)、[验收与对照试验](<docs/FLOW-TEST.md>)、[研发路线](<docs/DEVELOPMENT-PLAN.md>)
-- [1.4.0 发布说明](<docs/releases/1.4.0.md>)、[发布流程](<docs/RELEASING.md>)、[第三方说明](<THIRD_PARTY_NOTICES.md>)
+- [1.4.1 发布说明](<docs/releases/1.4.1.md>)、[发布流程](<docs/RELEASING.md>)、[第三方说明](<THIRD_PARTY_NOTICES.md>)
 - 0.x 总线历史与复盘：[复盘](<docs/RETROSPECTIVE.md>)、[整合说明](<docs/INTEGRATION.md>)

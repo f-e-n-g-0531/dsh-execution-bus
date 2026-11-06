@@ -264,6 +264,73 @@ test("combined input files obey byte/row/count limits and collect reentry keeps 
   assert.deepEqual(first, third);
 });
 
+test("legal compact 50k observations report despite internal projection expansion", async (t) => {
+  const root = fixture(t);
+  const input = path.join(root, "compact.json");
+  const text = JSON.stringify(Array.from({ length: 50000 }, () => row()));
+  assert.ok(Buffer.byteLength(text) < 16 * 1024 * 1024);
+  const collected = collectObservations(text);
+  const expanded = JSON.stringify(collected);
+  assert.ok(Buffer.byteLength(expanded) > 16 * 1024 * 1024);
+  // Expanded envelopes supplied as external text still obey the public byte cap.
+  assert.throws(() => collectObservations(expanded), /INVALID_PILOT_INPUT/);
+  const report = buildReport(collected);
+  assert.equal(report.arms.native.attemptedTasks, 50000);
+  assert.equal(report.arms.native.outcomes.succeeded, 50000);
+  assert.equal(report.arms.native.metrics.wallTimeMs.missing, 50000);
+  writeFileSync(input, text);
+  assert.deepEqual(
+    main(["report", "--input", input, "--json"], () => {}),
+    report,
+  );
+  const { createTemplate, checkManifest } = await import(
+    "../scripts/pilot-manifest.mjs"
+  );
+  const sha = "a".repeat(64);
+  const manifest = {
+    ...createTemplate(sha),
+    hostId: "fixture-host",
+    modelId: "fixture-model",
+    sandbox: "read-only",
+    executionMode: "per-call",
+    presentation: { native: "native", runtime: "ptc" },
+    snapshotSha256: sha,
+    planSha256: sha,
+    successCriteriaSha256: sha,
+    decisionThresholdsSha256: sha,
+    modelSettingsSha256: sha,
+    registeredAt: "2026-11-06T00:00:00Z",
+    concurrency: { native: 2, runtime: 2 },
+    order: { strategy: "alternating", firstArm: "native", pairs: 25000 },
+  };
+  const checked = checkManifest(manifest, sha, Buffer.from(text));
+  assert.deepEqual(checked.report, report);
+  assert.equal(checked.evidenceReady, false);
+});
+
+test("programmatic reports retain row caps, JSON metric semantics and redaction", () => {
+  const collected = collectObservations(JSON.stringify(row()));
+  collected.observations[0].metrics.wallTimeMs = NaN;
+  collected.observations[0].metrics.promptTokens = undefined;
+  collected.observations[0].secret = "private-business";
+  collected.diagnostics.malformed = 2;
+  const report = buildReport(collected);
+  assert.equal(report.diagnostics.malformed, 2);
+  assert.equal(report.arms.native.metrics.wallTimeMs.missing, 1);
+  assert.equal(report.arms.native.metrics.promptTokens.missing, 1);
+  assert.doesNotMatch(JSON.stringify(report), /private-business/);
+  collected.diagnostics.rejected = 100000;
+  assert.throws(() => buildReport(collected), /INVALID_PILOT_INPUT/);
+  assert.throws(
+    () => buildReport(Array(100001).fill(null)),
+    /INVALID_PILOT_INPUT/,
+  );
+  assert.throws(
+    () => collectObservations(" ".repeat(16 * 1024 * 1024 + 1)),
+    /INVALID_PILOT_INPUT/,
+  );
+});
+
 test("CLI collect/report read only local inputs, combine diagnostics, and never echo file errors", (t) => {
   const root = fixture(t);
   const input = path.join(root, "secret-business.jsonl");

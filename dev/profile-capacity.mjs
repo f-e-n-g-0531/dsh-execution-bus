@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
-import { historyRecord } from "../scripts/benchmark-runtime.mjs";
+import { historyRecord, runtimeArtifactDigest } from "../scripts/benchmark-runtime.mjs";
 import { measureFsCalls } from "./fs-probe.mjs";
 import { RunStore } from "../dist/runtime/store.js";
 import { parsePlan } from "../dist/runtime/plan.js";
@@ -50,16 +50,11 @@ function digest() {
     "dev/fs-probe.mjs",
     "scripts/benchmark-runtime.mjs",
     "scripts/pilot-report.mjs",
-    "dist/runtime/store.js",
-    "dist/runtime/plan.js",
-    "dist/runtime/service.js",
-    "dist/runtime/executor.js",
-    "dist/error-codes.js",
-    "dist/presentation.js",
   ])
     h.update(file + "\0").update(
       fs.readFileSync(new URL("../" + file, import.meta.url)),
     );
+  h.update(runtimeArtifactDigest(new URL("../dist/", import.meta.url)));
   return h.digest("hex");
 }
 export async function profileCapacity(options) {

@@ -11,9 +11,11 @@ export interface WorkerReportCriterion {
 }
 
 /** Validate data descriptors before reading any caller-provided criterion values. */
+import { ERRORS } from "../error-codes.js";
+
 export function parseAcceptanceCriteria(raw: unknown): AcceptanceCriterion[] {
   const fail = (): never => {
-    throw Error("RUNTIME_AGENT_INVALID_INPUT");
+    throw Error(ERRORS.RUNTIME_AGENT_INVALID_INPUT);
   };
   if (!Array.isArray(raw) || raw.length < 1 || raw.length > 16) return fail();
   if (
@@ -106,7 +108,7 @@ export const WORKER_REPORT_INSTRUCTIONS =
   "Character limits count JavaScript UTF-16 code units. Evidence is self-reported, not independently verified, and does not establish acceptance.";
 
 function invalid(): never {
-  throw Error("RUNTIME_AGENT_REPORT_INVALID");
+  throw Error(ERRORS.RUNTIME_AGENT_REPORT_INVALID);
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -134,7 +136,7 @@ export function parseWorkerReport(
 ): WorkerReport {
   if (typeof output !== "string") return invalid();
   if (Buffer.byteLength(output, "utf8") > 16_384)
-    throw Error("RUNTIME_AGENT_REPORT_TOO_LARGE");
+    throw Error(ERRORS.RUNTIME_AGENT_REPORT_TOO_LARGE);
   let value: unknown;
   try {
     value = JSON.parse(output);

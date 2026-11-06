@@ -68,7 +68,7 @@ export const RUNTIME_RUN_PARAMETERS = {
         },
         async: {
             type: "boolean",
-            description: "仅不含 agent 的计划可用 true 立即返回 runId，用 runtime_status/runtime_result 取回",
+            description: "仅不含 agent 且无批次准入集合的受控宿主调用可用 true；标准模型调用须同步，携带 toolSet 时异步提交报 RUNTIME_ASYNC_ADMISSION_UNSUPPORTED",
         },
     },
     required: ["plan"],
@@ -131,7 +131,7 @@ export const RUNTIME_STATUS_PARAMETERS = {
     },
     additionalProperties: false,
 };
-export const RUNTIME_RUN_DESCRIPTION = "当前 DSH rc.1 插件入口缺少可信父局部策略去重适配器，含 agent 的计划在执行前报 RUNTIME_AGENT_POLICY_UNSUPPORTED；普通工具 DAG 正常可用。以下 Agent 契约仅供受控宿主集成：萧何 PTC 多 Agent 编排：runtime_run 提交 DAG 计划。tool:agent 创建独立上下文只读 Worker，input:{prompt,access?:read,max_steps?:1..32}；prompt 需包含明确任务、输出和验收条件。独立 Worker 并行，depends_on 将上游保存结果追加到 Worker prompt（不可信资料）；结果缺失/截断/超限则失败。output_format:report 要求严格 JSON 报告 outcome(completed/partial/blocked)、summary、evidence、limitations、可选 requestedDecision；报告合格仅表示执行成功，不代表任务完成或验收。默认 text 兼容旧调用。可选 acceptance_criteria:[{id,description}]（report模式1..16项），报告criteria每ID恰一项，status仅observed/not_verified/blocked，evidence_indices引用证据，note说明；仍仅自报，不是accepted。计划task_id/previous_run_id仅关联同owner同task的已结束前驱，不复用结果。报告/证据均为自报；Lead 核实后再修改。workerTrace 记录运行时提示词 hash 及模型路由，不是网络成功凭证。同root最多8个Worker，创建/执行/清理均占槽；满载步骤失败不排队。Worker 不重试、不递归委派、不执行命令或写文件；完成不等于验收通过，Lead 检查证据。兼容 read/glob/grep/edit/write/pwsh 工具步骤；只有前三者可 retry。含 agent 的计划必须同步等待（拒绝 async:true）；普通工具计划 async:true 返回 runId，配套 status/result/cancel/resume。中断在途 Agent 不自动重放；不保证 exactly-once。";
+export const RUNTIME_RUN_DESCRIPTION = "当前 DSH rc.1 插件入口缺少可信父局部策略去重适配器，含 agent 的计划在执行前报 RUNTIME_AGENT_POLICY_UNSUPPORTED；普通工具 DAG 正常可用。以下 Agent 契约仅供受控宿主集成：萧何 PTC 多 Agent 编排：runtime_run 提交 DAG 计划。tool:agent 创建独立上下文只读 Worker，input:{prompt,access?:read,max_steps?:1..32}；prompt 需包含明确任务、输出和验收条件。独立 Worker 并行，depends_on 将上游保存结果追加到 Worker prompt（不可信资料）；结果缺失/截断/超限则失败。output_format:report 要求严格 JSON 报告 outcome(completed/partial/blocked)、summary、evidence、limitations、可选 requestedDecision；报告合格仅表示执行成功，不代表任务完成或验收。默认 text 兼容旧调用。可选 acceptance_criteria:[{id,description}]（report模式1..16项），报告criteria每ID恰一项，status仅observed/not_verified/blocked，evidence_indices引用证据，note说明；仍仅自报，不是accepted。计划task_id/previous_run_id仅关联同owner同task的已结束前驱，不复用结果。报告/证据均为自报；Lead 核实后再修改。workerTrace 记录运行时提示词 hash 及模型路由，不是网络成功凭证。同root最多8个Worker，创建/执行/清理均占槽；满载步骤失败不排队。Worker 不重试、不递归委派、不执行命令或写文件；完成不等于验收通过，Lead 检查证据。兼容 read/glob/grep/edit/write/pwsh 工具步骤；只有前三者可 retry。含 agent 的计划必须同步等待（拒绝 async:true）；普通工具计划携带 exec.toolSet 时也拒绝 async:true（RUNTIME_ASYNC_ADMISSION_UNSUPPORTED），须同步调用；仅无批次准入集合的受控宿主调用可异步返回 runId，配套 status/result/cancel/resume。中断在途 Agent 不自动重放；不保证 exactly-once。";
 export const RUNTIME_STATUS_DESCRIPTION = "读取本会话的运行元数据：不带 runId 按 limit/offset 分页（默认 20/0）；带 runId 返回指定运行与步骤状态、progress 计数与 guidance 安全建议，不含原始步骤结果。建议仅供原 owner 显式处置，不会自动执行。不要轮询正在等待的 runtime_run。";
 export const RUNTIME_RESULT_DESCRIPTION = "读取本会话指定运行已保存的步骤结果；可选 stepId/offset/limit(1..4096，默认2048) 分页读取该步骤的JSON文本，偏移单位Unicode码点，page.hash可随下页hash传入防混版本，拼接page.text后才能JSON.parse。分页不恢复截断内容，不开放Worker读取。仅runId保持旧结果。executionSettled若存在仅表示本进程调度与owned Worker清理已settle，缺省为未知，不证明普通工具退出。返回progress 与 guidance（单步结果超过 64KiB 时只返回 truncated/bytes 标记）。finished 仅表示运行调度终态，不确认宿主进程或后台 Job 已停止；unknown 不等于回滚。Job 建议须由原 owner 显式调用，不会自动收集或停止。";
 export const RUNTIME_CANCEL_DESCRIPTION = "请求取消指定运行：停止调度、向后发步骤传播取消；已开始的副作用步骤状态可能为 unknown。";
