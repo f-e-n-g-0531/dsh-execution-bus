@@ -17,6 +17,8 @@ export function verifyReport(r, p) {
     "package.json",
     "README.md",
     "cordis.patch.yml",
+    "locale/en.json",
+    "locale/zh.json",
     "dist/error-codes.js",
     "dist/error-codes.d.ts",
     "dist/mode.js",
@@ -101,9 +103,13 @@ export function verifyReport(r, p) {
     "./mode": "./dist/mode.js",
     "./test-mode": "./dist/mode.js",
     "./preset": "./dist/preset.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
   });
-  for (const target of Object.values(p.exports))
+  for (const target of Object.values(p.exports)) {
+    if (target.includes("*")) continue;
     assert.ok(paths.has(target.slice(2)));
+  }
   assert.deepEqual(p.peerDependencies, {
     "@deepseek-ai/cordis": "~4.1.0",
     "@deepseek-ai/cordis-plugin-include": "~1.1.0",

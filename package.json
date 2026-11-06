@@ -1,6 +1,6 @@
 {
   "name": "@feng0531/dsh-execution-bus",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "type": "module",
   "private": false,
   "license": "SEE LICENSE IN LICENSE",
@@ -18,11 +18,14 @@
     ".": "./dist/plugin.js",
     "./mode": "./dist/mode.js",
     "./test-mode": "./dist/mode.js",
-    "./preset": "./dist/preset.js"
+    "./preset": "./dist/preset.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "dist",
     "cordis.patch.yml",
+    "locale",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "README.md",

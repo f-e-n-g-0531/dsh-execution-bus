@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "萧何 / Xiao He",
+    "description": "DSH 的 PTC 多 Agent 编排与声明式工具 DAG 运行时：调度、重试、持久化与恢复。"
+  }
+}

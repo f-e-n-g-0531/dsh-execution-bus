@@ -37,3 +37,4 @@ Worker 通过公开 `agents.create` + `agentPresets.composeFrom` 创建独立上
 - 工具名与公开导出变更必须升主版本；工具 schema 变更需同步文档与测试。
 - 运行记录格式带 `version:1`；破坏兼容需迁移或拒绝旧记录。每步 checkpoint；默认只保留最新 100 条终态，保护 `running/interrupted`，不能假设恢复记录都是近期记录。
 - 发布门禁：全量测试、包白名单、标签 CI 四矩阵、npm 后公开校验、GitHub Release。
+- 宿主插件列表显示名通过 `locale/en.json`/`locale/zh.json` 的 `meta.title` 提供，统一为 `PRODUCT.name`（萧何 / Xiao He）；中文资源文件名使用宿主活动语言 ID `zh`。npm 包名、预设 ID、工具名、运行记录格式不随显示名变化。
