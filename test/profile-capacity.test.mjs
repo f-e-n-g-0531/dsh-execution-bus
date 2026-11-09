@@ -117,7 +117,19 @@ for (const ratio of [0, 0.5, 1])
       for (const s of report.samples) {
         assert.equal(s.verified, true);
         assert.ok(s.wallTimeMs >= 0);
-        assert.ok(Object.values(s.diagnostics).every((n) => n === 0));
+        assert.ok(
+          [
+            "invalidRecords",
+            "oversizedRecords",
+            "readFailures",
+            "writeFailures",
+          ].every((key) => s.diagnostics[key] === 0),
+        );
+        assert.ok(
+          Object.values(s.diagnostics.lastObservedAt).every(
+            (at) => at === null,
+          ),
+        );
       }
       assert.ok(!JSON.stringify(report).includes(os.tmpdir()));
       assert.ok(!JSON.stringify(report).includes(process.cwd()));

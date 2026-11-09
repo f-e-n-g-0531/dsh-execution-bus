@@ -4,7 +4,7 @@ import * as benchmarkIdentity from "../scripts/benchmark-runtime.mjs";
 test("runtime digest binds all current local dependencies and legacy absence", () => {
   const digest = benchmarkIdentity.runtimeArtifactDigest;
   assert.equal(typeof digest, "function");
-  const optional = ["retry", "agent", "agent-report", "agent-trace", "worker-quota", "attention", "insights", "waiting", "review"].map(n => "runtime/" + n + ".js");
+  const optional = ["retry", "agent", "agent-report", "agent-trace", "worker-quota", "attention", "insights", "waiting", "review", "plan-diff"].map(n => "runtime/" + n + ".js");
   const required = ["runtime/executor.js", "runtime/store.js", "runtime/plan.js", "runtime/service.js", "error-codes.js", "presentation.js"];
   const files = new Map([...required, ...optional].map(n => [n, Buffer.from(n)]));
   const read = url => {
@@ -201,7 +201,7 @@ test("native scheduler bounds concurrency, respects dependencies, and drains fai
   assert.deepEqual(failedCalls, ["a"]);
 });
 
-test("actual runtime batch barrier differs from work-conserving native, without wall-time thresholds", async () => {
+test("actual read-only runtime refills like work-conserving native, without wall-time thresholds", async () => {
   const runtime = await loadRuntime();
   const gates = { slow: deferred(), fast: deferred() };
   const fastFinished = deferred(),
@@ -229,9 +229,10 @@ test("actual runtime batch barrier differs from work-conserving native, without 
   await bounded(fastFinished.promise);
   // A turn boundary lets runStep publish fast success; slow remains deliberately blocked.
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(calls, ["slow", "fast"]);
-  gates.slow.resolve();
-  await bounded(childStarted.promise);
+  try {
+    await bounded(childStarted.promise);
+    assert.deepEqual(calls, ["slow", "fast", "child"]);
+  } finally { gates.slow.resolve(); }
   const result = await bounded(execution);
   assert.equal(result.state, "succeeded");
   assert.equal(result.toolRequests, 3);
@@ -272,7 +273,7 @@ test("short DAG benchmark exercises both real executor and native at equal concu
   assert.match(report.environment.benchmarkAlgorithmDigest, /^[a-f0-9]{64}$/);
   assert.equal(report.dag.summary.length, 4);
   assert.match(report.interpretation, /NOT model\/agent benefit/);
-  assert.match(report.contracts.runtime, /batch barriers/);
+  assert.match(report.contracts.runtime, /completion-driven/);
   assert.match(report.contracts.native, /work-conserving/);
   assert.equal(report.capacity, undefined);
   for (const sample of report.dag.samples) {

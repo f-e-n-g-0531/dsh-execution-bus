@@ -409,8 +409,11 @@ test("校验：坏JSON/版本/owner/Plan/steps/results/state/timestamps逐个隔
     assert.ok(diagnostics.invalidRecords >= mutations.length + 1);
     assert.deepEqual(Object.keys(diagnostics).sort(), [
       "invalidRecords",
+      "lastObservedAt",
+      "observedAt",
       "oversizedRecords",
       "readFailures",
+      "startedAt",
       "writeFailures",
     ]);
     assert.ok(!JSON.stringify(diagnostics).includes(dir));

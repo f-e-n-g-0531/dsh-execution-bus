@@ -8,6 +8,7 @@ import { validWorkerTrace } from "./agent-trace.js";
 import { MAX_OWNER_REVIEWS, ownerReview, reviewSnapshot, validOwnerReviews, } from "./review.js";
 import { MAX_ACKNOWLEDGEMENTS, validAcknowledgements, } from "./acknowledgement.js";
 import { runAttention } from "./attention.js";
+import { MAX_DECISIONS, validDecisionDispositions, validDecisionInput } from "./decision.js";
 const RUN_ID = /^run-[0-9a-z-]{8,80}$/;
 const RECORD_BYTES = 4 * 1024 * 1024;
 // A live owner checkpoints at every step boundary, and a single attempt is
@@ -38,6 +39,7 @@ function metadata(run, stamp) {
         state: run.state,
         updatedAt: run.updatedAt,
         signature: stamp,
+        ...(run.plan.taskId === undefined ? {} : { taskId: run.plan.taskId }),
     };
 }
 function compareMetadata(a, b) {
@@ -59,6 +61,7 @@ function rememberMetadata(key, value) {
         Buffer.byteLength(value.ownerSessionId) +
         Buffer.byteLength(value.state) +
         Buffer.byteLength(value.signature) +
+        Buffer.byteLength(value.taskId ?? "") +
         64;
     if (bytes > METADATA_BYTES)
         return;
@@ -92,6 +95,7 @@ const RUN_KEYS = new Set([
     "results",
     "ownerReviews",
     "acknowledgements",
+    "decisionDispositions",
     "createdAt",
     "updatedAt",
     "finishedAt",
@@ -99,6 +103,8 @@ const RUN_KEYS = new Set([
 ]);
 const PLAN_KEYS = new Set([
     "goal",
+    "provenance",
+    "handoff",
     "taskId",
     "previousRunId",
     "steps",
@@ -174,6 +180,9 @@ function validRun(value, runId) {
     if (value.acknowledgements !== undefined &&
         !validAcknowledgements(value.acknowledgements, createdAt))
         return false;
+    if (value.decisionDispositions !== undefined &&
+        !validDecisionDispositions(value.decisionDispositions, createdAt))
+        return false;
     const withinRun = (time) => timestamp(time) && time >= createdAt && time <= updatedAt;
     if (value.state === "running") {
         if (value.finishedAt !== undefined)
@@ -218,6 +227,8 @@ function validRun(value, runId) {
     try {
         parsed = parsePlan({
             ...(plan.goal === undefined ? {} : { goal: plan.goal }),
+            ...(plan.provenance === undefined ? {} : { provenance: plan.provenance }),
+            ...(plan.handoff === undefined ? {} : { handoff: plan.handoff }),
             ...(plan.taskId === undefined ? {} : { task_id: plan.taskId }),
             ...(plan.previousRunId === undefined
                 ? {}
@@ -230,7 +241,9 @@ function validRun(value, runId) {
         return false;
     }
     const storedSteps = plan.steps;
-    if (parsed.taskId !== plan.taskId ||
+    if (JSON.stringify(parsed.provenance) !== JSON.stringify(plan.provenance) ||
+        JSON.stringify(parsed.handoff) !== JSON.stringify(plan.handoff) ||
+        parsed.taskId !== plan.taskId ||
         parsed.previousRunId !== plan.previousRunId ||
         plan.previousRunId === value.runId ||
         parsed.concurrency !== plan.concurrency ||
@@ -386,6 +399,8 @@ export function defaultRunRoot() {
 /** Pure file persistence: bounded reads, atomic replacement, no cross-process lock. */
 export class RunStore {
     root;
+    // Wall-clock milliseconds for this store instance, not the host process.
+    startedAt = Date.now();
     counters = {
         invalidRecords: 0,
         oversizedRecords: 0,
@@ -401,12 +416,28 @@ export class RunStore {
             throw Error(ERRORS.RUNTIME_STORAGE_FAILED);
         }
     }
-    /** Fixed-size, saturated counters only: never return paths, IDs or record contents. */
+    lastObservedAt = {
+        invalidRecords: null,
+        oversizedRecords: null,
+        readFailures: null,
+        writeFailures: null,
+    };
+    /**
+     * Store-instance cumulative, saturated counts and wall-clock observation times.
+     * These in-memory observations are not health judgments or persisted history;
+     * repeated observations of one record count again. Never expose paths, IDs or text.
+     */
     diagnostics() {
-        return { ...this.counters };
+        return {
+            ...this.counters,
+            startedAt: this.startedAt,
+            observedAt: Date.now(),
+            lastObservedAt: { ...this.lastObservedAt },
+        };
     }
     count(key) {
         this.counters[key] = Math.min(1_000_000, this.counters[key] + 1);
+        this.lastObservedAt[key] = Date.now();
     }
     pathFor(runId) {
         if (!RUN_ID.test(runId))
@@ -585,6 +616,61 @@ export class RunStore {
             }
         }
     }
+    /** Owner declarations share the review/removal lock and never mutate execution. */
+    recordDecision(runId, ownerSessionId, input) {
+        if (!validDecisionInput(input))
+            throw Error(ERRORS.INVALID_PLAN);
+        const lock = this.pathFor(runId) + ".review-lock";
+        let fd;
+        try {
+            fd = openSync(lock, "wx", 0o600);
+        }
+        catch (cause) {
+            if (cause.code === "EEXIST")
+                throw Error(ERRORS.RUNTIME_BUSY);
+            throw Error(ERRORS.RUNTIME_STORAGE_FAILED, { cause });
+        }
+        try {
+            const run = this.load(runId);
+            if (!run || run.ownerSessionId !== ownerSessionId)
+                throw Error(ERRORS.RUNTIME_NOT_FOUND);
+            if (!TERMINAL.has(run.state))
+                throw Error(ERRORS.RUNTIME_INVALID_STATE);
+            const attention = runAttention(run);
+            const revision = run.decisionDispositions?.at(-1)?.revision ?? 0;
+            if (!attention.snapshotHash || attention.snapshotHash !== input.snapshotHash || revision !== input.expectedRevision)
+                throw Error(ERRORS.RUNTIME_RESULT_CHANGED);
+            if (!attention.items.some((item) => item.key === input.key && item.kind === "decision_required") || revision >= MAX_DECISIONS)
+                throw Error(ERRORS.RUNTIME_INVALID_STATE);
+            if (input.successorRunId !== undefined) {
+                const successor = this.load(input.successorRunId);
+                if (!successor || successor.ownerSessionId !== ownerSessionId)
+                    throw Error(ERRORS.RUNTIME_NOT_FOUND);
+                if (successor.runId === runId || !run.plan.taskId?.trim() || successor.plan.taskId !== run.plan.taskId || successor.plan.previousRunId !== runId)
+                    throw Error(ERRORS.RUNTIME_INVALID_STATE);
+            }
+            const entry = {
+                revision: revision + 1, snapshotHash: attention.snapshotHash, key: input.key,
+                disposition: input.disposition, reason: input.reason.trim(),
+                ...(input.answerRef === undefined ? {} : { answerRef: input.answerRef.trim() }),
+                ...(input.successorRunId === undefined ? {} : { successorRunId: input.successorRunId }),
+                at: Math.max(Date.now(), run.updatedAt, run.decisionDispositions?.at(-1)?.at ?? 0),
+            };
+            const next = { ...run, decisionDispositions: [...(run.decisionDispositions ?? []), entry] };
+            this.save(next);
+            return next;
+        }
+        finally {
+            try {
+                closeSync(fd);
+            }
+            catch { /* preserve stable errors */ }
+            try {
+                rmSync(lock);
+            }
+            catch { /* committed declarations remain committed */ }
+        }
+    }
     load(runId) {
         // Public reads are authoritative, full, strictly validated snapshots. A stat
         // signature can accelerate candidate selection, never authorize a result.
@@ -703,15 +789,19 @@ export class RunStore {
         }
         return runs.sort(compareMetadata);
     }
-    list(limit = 20, ownerSessionId, offset = 0) {
+    list(limit = 20, ownerSessionId, offset = 0, taskId, strict = false) {
         if (!timestamp(limit) || !timestamp(offset))
             throw Error(ERRORS.RUNTIME_INVALID_STATE);
         const end = Math.min(Number.MAX_SAFE_INTEGER, offset + limit);
         // A changed selected page is retried, not silently shortened or refilled out
         // of order. Under persistent churn return no page rather than wrong offsets.
         for (let attempt = 0; attempt < 2; attempt++) {
-            const candidates = this.scan(true).filter((entry) => ownerSessionId === undefined ||
-                entry.ownerSessionId === ownerSessionId);
+            const failuresBefore = this.counters.readFailures;
+            const candidates = this.scan(true).filter((entry) => (ownerSessionId === undefined ||
+                entry.ownerSessionId === ownerSessionId) &&
+                (taskId === undefined || entry.taskId === taskId));
+            if (strict && this.counters.readFailures !== failuresBefore)
+                throw Error(ERRORS.RUNTIME_STORAGE_FAILED);
             const page = [];
             let changed = false;
             for (const candidate of candidates.slice(offset, end)) {
@@ -720,7 +810,8 @@ export class RunStore {
                     fresh.metadata.signature !== candidate.signature ||
                     fresh.metadata.ownerSessionId !== candidate.ownerSessionId ||
                     fresh.metadata.updatedAt !== candidate.updatedAt ||
-                    fresh.metadata.state !== candidate.state) {
+                    fresh.metadata.state !== candidate.state ||
+                    fresh.metadata.taskId !== candidate.taskId) {
                     changed = true;
                     break;
                 }
@@ -729,6 +820,8 @@ export class RunStore {
             if (!changed)
                 return page;
         }
+        if (strict)
+            throw Error(ERRORS.RUNTIME_BUSY);
         return [];
     }
     remove(runId) {

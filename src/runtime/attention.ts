@@ -3,6 +3,8 @@ import { runAcceptance, runRecovery } from "./insights.js";
 import type { RunRecord } from "./store.js";
 import { ownerReview } from "./review.js";
 import { attentionSnapshot } from "./acknowledgement.js";
+import { currentDecision } from "./decision.js";
+import type { DecisionDisposition } from "./decision.js";
 
 export type AttentionKind =
   | "inspect_external_state"
@@ -18,6 +20,7 @@ export interface AttentionItem {
   stepId?: string;
   resultHash?: string;
   acknowledged?: true;
+  disposition?: DecisionDisposition;
 }
 
 export interface RunAttention {
@@ -119,6 +122,10 @@ export function runAttention(run: RunRecord, settled?: boolean): RunAttention {
 
   const snapshotHash = attentionSnapshot(run);
   for (const item of items) {
+    if (item.kind === "decision_required") {
+      const record = currentDecision(run, snapshotHash, item.key);
+      if (record) item.disposition = record.disposition;
+    }
     if (
       run.acknowledgements?.some(
         (entry) =>
@@ -131,6 +138,7 @@ export function runAttention(run: RunRecord, settled?: boolean): RunAttention {
   const alerts = items.filter(
     (item) =>
       NOTIFY_KINDS.has(item.kind) &&
+      !(item.kind === "decision_required" && item.disposition) &&
       (!item.acknowledged || item.kind === "inspect_external_state"),
   );
   return {

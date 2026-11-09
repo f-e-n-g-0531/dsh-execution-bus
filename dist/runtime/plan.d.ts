@@ -1,3 +1,4 @@
+import type { HandoffSnapshot } from "./handoff.js";
 /** 声明式运行时只允许调用这些宿主工具；新增工具需同时更新幂等性判断。 */
 export declare const RUNTIME_TOOLS: readonly ["read", "glob", "grep", "edit", "write", "pwsh", "agent"];
 export type RuntimeTool = (typeof RUNTIME_TOOLS)[number];
@@ -11,11 +12,19 @@ export interface PlanStep {
     retry: number;
     timeoutMs: number;
 }
+/** Caller-supplied source labels only; never fetched or treated as authorization. */
+export interface PlanProvenance {
+    request_ref?: string;
+    scope_summary?: string;
+    context_refs?: string[];
+}
 export interface Plan {
     goal?: string;
     /** Display/history linkage only; never authorization or result reuse. */
     taskId?: string;
     previousRunId?: string;
+    provenance?: PlanProvenance;
+    handoff?: HandoffSnapshot;
     steps: PlanStep[];
     concurrency: number;
 }

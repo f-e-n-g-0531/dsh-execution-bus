@@ -41,7 +41,7 @@ function executeAgent(ctx, exec, raw, signal, onCreated, onTrace) {
   );
 }
 
-async function fixture(respond, preset = false) {
+async function fixture(respond, preset = false, configureHost) {
   const root = new Context();
   let ctx, loop, ready;
   const requests = [],
@@ -116,6 +116,7 @@ async function fixture(respond, preset = false) {
         },
       });
     }
+    configureHost?.(c);
     c.on("session/event", (session, event) => events.push({ session, event }));
   });
   await host.await();
@@ -483,11 +484,11 @@ test("child-scoped skip-allow cannot bypass supplemental parent denial", async (
   let checks = 0;
   f = await fixture((_request, n) => {
     if (n === 1 && childId) {
-      f.ctx.agents.get(childId).ctx.on(
-        "tools/pre-execute",
-        async () => ({ kind: "allow" }),
-        { prepend: true },
-      );
+      f.ctx.agents
+        .get(childId)
+        .ctx.on("tools/pre-execute", async () => ({ kind: "allow" }), {
+          prepend: true,
+        });
       return call("read");
     }
     return text("denied");
@@ -1135,5 +1136,320 @@ test("runtime keeps near-limit legacy text intact with trace outside result and 
     await service.dispose();
     await f.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Host-owned reader registration is separate from the per-child capability binding.
+function dependencyReaderFixture() {
+  const bindings = new Map();
+  const bound = [],
+    released = [],
+    reads = [];
+  return {
+    bindings,
+    bound,
+    released,
+    reads,
+    register(ctx) {
+      ctx.tools.register({
+        name: "runtime_dependency_read",
+        description: "Read a supplied dependency reference",
+        parameters: { type: "object", properties: {} },
+        output: {
+          schema: { type: "string" },
+          render: (_args, value) => [{ type: "text", text: value }],
+        },
+        execute(args, exec) {
+          const context = bindings.get(exec.agent);
+          assert.ok(
+            context,
+            "reader must be bound to this exact child identity",
+          );
+          reads.push({ agent: exec.agent, context, args });
+          return context.read(args).text;
+        },
+      });
+    },
+    hostOptions: {
+      dependencyReader: {
+        toolName: "runtime_dependency_read",
+        bind(agent, context) {
+          assert.equal(bindings.has(agent), false);
+          bindings.set(agent, context);
+          bound.push({ agent, context });
+          return () => {
+            assert.equal(bindings.get(agent), context);
+            bindings.delete(agent);
+            released.push(agent);
+          };
+        },
+      },
+    },
+  };
+}
+
+function hostDependencyContext(label) {
+  return {
+    ownerSessionId: "parent",
+    runId: "run-" + label,
+    stepId: label,
+    previews: [],
+    read() {
+      return {
+        ref: label,
+        hash: label,
+        offset: 0,
+        total: label.length,
+        text: label,
+      };
+    },
+  };
+}
+
+test("host dependency reader uses admitted tool and isolates concurrent child bindings", async () => {
+  const reader = dependencyReaderFixture();
+  let arrivals = 0,
+    open;
+  const together = new Promise((resolve) => {
+    open = resolve;
+  });
+  const f = await fixture(
+    async (request) => {
+      if (!request.messages.some((message) => message.role === "tool")) {
+        if (++arrivals === 2) open();
+        await together;
+        return call("runtime_dependency_read");
+      }
+      return text("read complete");
+    },
+    false,
+    (ctx) => reader.register(ctx),
+  );
+  const contexts = [
+    hostDependencyContext("alpha"),
+    hostDependencyContext("beta"),
+  ];
+  try {
+    const results = await Promise.all(
+      contexts.map((context) =>
+        executeAgentWithoutPolicy(
+          f.ctx,
+          f.exec,
+          { prompt: "inspect reference", max_steps: 2 },
+          f.exec.signal,
+          undefined,
+          undefined,
+          f.policy,
+          reader.hostOptions,
+          context,
+        ),
+      ),
+    );
+    assert.deepEqual(
+      results.map((result) => result.output),
+      ["read complete", "read complete"],
+    );
+    assert.equal(reader.bound.length, 2);
+    assert.notEqual(reader.bound[0].agent, reader.bound[1].agent);
+    assert.equal(reader.reads.length, 2);
+    for (const { agent, context } of reader.reads) {
+      assert.notEqual(agent, f.parent.agent);
+      assert.equal(
+        reader.bound.find((entry) => entry.agent === agent)?.context,
+        context,
+      );
+      assert.ok(contexts.includes(context));
+    }
+    assert.deepEqual(
+      new Set(reader.reads.map((entry) => entry.context)),
+      new Set(contexts),
+    );
+    assert.equal(reader.bindings.size, 0);
+    assert.deepEqual(
+      new Set(reader.released),
+      new Set(reader.bound.map((entry) => entry.agent)),
+    );
+    assert.deepEqual(f.bodies, []);
+  } finally {
+    await f.close();
+  }
+});
+
+test("host dependency reader parent policy denial prevents every read and releases binding", async () => {
+  const reader = dependencyReaderFixture();
+  const f = await fixture(
+    (_request, n) =>
+      n === 1 ? call("runtime_dependency_read") : text("denied"),
+    false,
+    (ctx) => reader.register(ctx),
+  );
+  let checks = 0;
+  f.parentGuard((execution) => {
+    assert.equal(execution.agent, f.parent.agent);
+    assert.equal(execution.name, "runtime_dependency_read");
+    checks++;
+    return "host refuses dependency read";
+  });
+  try {
+    await executeAgentWithoutPolicy(
+      f.ctx,
+      f.exec,
+      { prompt: "inspect reference" },
+      f.exec.signal,
+      undefined,
+      undefined,
+      f.policy,
+      reader.hostOptions,
+      hostDependencyContext("denied"),
+    );
+    assert.equal(checks, 1);
+    assert.equal(reader.reads.length, 0);
+    assert.equal(reader.released.length, 1);
+    assert.equal(reader.bindings.size, 0);
+    assert.ok(
+      f.events.some(
+        ({ event }) =>
+          event.type === "tool/result" &&
+          JSON.stringify(event.data).includes(
+            "RUNTIME_AGENT_PARENT_POLICY_DENIED",
+          ),
+      ),
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("host dependency reader absent from parent admission fails before bind or model", async () => {
+  const reader = dependencyReaderFixture();
+  // The host option alone cannot register or admit a tool.
+  const f = await fixture(() => text("must not run"));
+  try {
+    await assert.rejects(
+      executeAgentWithoutPolicy(
+        f.ctx,
+        f.exec,
+        { prompt: "inspect reference" },
+        f.exec.signal,
+        undefined,
+        undefined,
+        f.policy,
+        reader.hostOptions,
+        hostDependencyContext("unadmitted"),
+      ),
+      /RUNTIME_AGENT_TOOLS_UNAVAILABLE/,
+    );
+    assert.equal(reader.bound.length, 0);
+    assert.equal(reader.reads.length, 0);
+    assert.equal(f.requests.length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("host options do not bypass default missing-policy gate", async () => {
+  const reader = dependencyReaderFixture();
+  const f = await fixture(
+    () => text("must not run"),
+    false,
+    (ctx) => reader.register(ctx),
+  );
+  try {
+    await assert.rejects(
+      executeAgentWithoutPolicy(
+        f.ctx,
+        f.exec,
+        { prompt: "inspect reference" },
+        f.exec.signal,
+        undefined,
+        undefined,
+        undefined,
+        reader.hostOptions,
+        hostDependencyContext("no-policy"),
+      ),
+      /RUNTIME_AGENT_POLICY_UNSUPPORTED/,
+    );
+    assert.equal(reader.bound.length, 0);
+    assert.equal(f.requests.length, 0);
+    assert.deepEqual(f.bodies, []);
+  } finally {
+    await f.close();
+  }
+});
+
+test("throwing host model wait callback preserves output and reader release", async () => {
+  const reader = dependencyReaderFixture();
+  const notifications = [];
+  const f = await fixture(
+    () => text("observer cannot disrupt this output"),
+    false,
+    (ctx) => reader.register(ctx),
+  );
+  try {
+    const result = await executeAgentWithoutPolicy(
+      f.ctx,
+      f.exec,
+      { prompt: "inspect reference" },
+      f.exec.signal,
+      undefined,
+      undefined,
+      f.policy,
+      {
+        ...reader.hostOptions,
+        onModelWait(id, status) {
+          notifications.push({ id, status });
+          throw Error("observer failure");
+        },
+      },
+      hostDependencyContext("observed"),
+    );
+    assert.equal(result.output, "observer cannot disrupt this output");
+    assert.ok(notifications.length > 0);
+    assert.ok(notifications.every((entry) => entry.id === result.sessionId));
+    assert.equal(notifications.at(-1).status, undefined);
+    assert.equal(reader.released.length, 1);
+    assert.equal(reader.released[0].id, result.sessionId);
+    assert.equal(reader.bindings.size, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("host dependency binding releases when subsequent child setup fails", async () => {
+  const reader = dependencyReaderFixture();
+  const f = await fixture(
+    () => text("must not run"),
+    false,
+    (ctx) => reader.register(ctx),
+  );
+  const presets = f.ctx.agentPresets;
+  const originalCompose = presets.composeFrom;
+  presets.composeFrom = () => {
+    throw Error("fixture child setup failure after bind");
+  };
+  try {
+    await assert.rejects(
+      executeAgentWithoutPolicy(
+        f.ctx,
+        f.exec,
+        { prompt: "inspect reference" },
+        f.exec.signal,
+        undefined,
+        undefined,
+        f.policy,
+        reader.hostOptions,
+        hostDependencyContext("setup-failure"),
+      ),
+      /RUNTIME_AGENT_EXECUTION_FAILED/,
+    );
+    assert.equal(reader.bound.length, 1);
+    assert.equal(reader.released.length, 1);
+    assert.equal(reader.released[0], reader.bound[0].agent);
+    assert.equal(reader.bindings.size, 0);
+    assert.equal(reader.reads.length, 0);
+    assert.equal(f.requests.length, 0);
+  } finally {
+    presets.composeFrom = originalCompose;
+    await f.close();
   }
 });

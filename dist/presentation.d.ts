@@ -23,7 +23,6 @@ export interface RunGuidance {
 export declare function runProgress(run: RunRecord): RunProgress;
 /** Advice is not an execution policy, authorization, or proof a Job stopped. */
 export declare function runGuidance(run: RunRecord): RunGuidance[];
-/** Host-supported subset: dynamic step result keys/values deliberately remain JSON. */
 export declare const RUNTIME_OUTPUT_SCHEMAS: Record<string, JsonSchemaNode>;
 /** Replayable metadata excludes inputs, raw result values and owner identity. */
 export declare function runtimePresentationMeta(_args: unknown, value: unknown): {

@@ -1,3 +1,4 @@
+import { parseHandoffSnapshot } from "./handoff.js";
 import { ERRORS } from "../error-codes.js";
 import { parseAgentInput } from "./agent.js";
 /** 声明式运行时只允许调用这些宿主工具；新增工具需同时更新幂等性判断。 */
@@ -30,6 +31,8 @@ const PLAN_KEYS = new Set([
     "goal",
     "task_id",
     "previous_run_id",
+    "provenance",
+    "handoff",
     "steps",
     "concurrency",
 ]);
@@ -51,6 +54,51 @@ function isPlainObject(value) {
     const proto = Object.getPrototypeOf(value);
     return proto === Object.prototype || proto === null;
 }
+function parseProvenance(value) {
+    if (!isPlainObject(value))
+        invalid();
+    const result = {};
+    const keys = Reflect.ownKeys(value);
+    if (keys.length === 0)
+        invalid();
+    for (const key of keys) {
+        if (key !== "request_ref" &&
+            key !== "scope_summary" &&
+            key !== "context_refs")
+            invalid();
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!("value" in descriptor) || !descriptor.enumerable)
+            invalid();
+        const field = descriptor.value;
+        if (key === "context_refs") {
+            if (!Array.isArray(field) ||
+                Object.getPrototypeOf(field) !== Array.prototype ||
+                field.length < 1 ||
+                field.length > 8)
+                invalid();
+            // Check descriptors before serialization: getters/toJSON must not execute.
+            if (Reflect.ownKeys(field).length !== field.length + 1)
+                invalid();
+            const refs = [];
+            for (let index = 0; index < field.length; index++) {
+                const item = Object.getOwnPropertyDescriptor(field, String(index));
+                if (!item || !("value" in item) || !item.enumerable)
+                    invalid();
+                refs.push(provenanceString(item.value, 1000));
+            }
+            result.context_refs = refs;
+        }
+        else {
+            result[key] = provenanceString(field, key === "request_ref" ? 1000 : 2000);
+        }
+    }
+    return result;
+}
+function provenanceString(value, maxChars) {
+    if (typeof value !== "string" || value.length > maxChars || !value.trim())
+        invalid();
+    return value.trim();
+}
 export function parsePlan(raw) {
     if (!isPlainObject(raw))
         invalid();
@@ -61,6 +109,9 @@ export function parsePlan(raw) {
         if (!("value" in descriptor) || !descriptor.enumerable)
             invalid();
     }
+    // Validate source metadata before JSON.stringify can invoke nested accessors.
+    const provenance = raw.provenance === undefined ? undefined : parseProvenance(raw.provenance);
+    const handoff = raw.handoff === undefined ? undefined : parseHandoffSnapshot(raw.handoff);
     let bytes = 0;
     try {
         bytes = Buffer.byteLength(JSON.stringify(raw));
@@ -84,6 +135,8 @@ export function parsePlan(raw) {
         (taskId === undefined ||
             typeof previousRunId !== "string" ||
             !/^run-[0-9a-z-]{8,80}$/.test(previousRunId)))
+        invalid();
+    if (handoff !== undefined && (taskId !== handoff.taskId || previousRunId !== handoff.sourceRunId))
         invalid();
     const concurrency = raw.concurrency ?? 2;
     if (typeof concurrency !== "number" ||
@@ -118,6 +171,8 @@ export function parsePlan(raw) {
         ...(previousRunId === undefined
             ? {}
             : { previousRunId: previousRunId }),
+        ...(provenance === undefined ? {} : { provenance }),
+        ...(handoff === undefined ? {} : { handoff }),
         steps,
         concurrency,
     };

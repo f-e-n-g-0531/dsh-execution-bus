@@ -5,3 +5,4 @@ dev/github-api.mjs
 dev/wait-ci.mjs
 artifacts/
 *.tgz
+.tmp/

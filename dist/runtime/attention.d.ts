@@ -1,4 +1,5 @@
 import type { RunRecord } from "./store.js";
+import type { DecisionDisposition } from "./decision.js";
 export type AttentionKind = "inspect_external_state" | "inspect_failure" | "resume_read_only" | "decision_required" | "result_unavailable" | "review_results";
 export interface AttentionItem {
     key: string;
@@ -6,6 +7,7 @@ export interface AttentionItem {
     stepId?: string;
     resultHash?: string;
     acknowledged?: true;
+    disposition?: DecisionDisposition;
 }
 export interface RunAttention {
     snapshotHash?: string;

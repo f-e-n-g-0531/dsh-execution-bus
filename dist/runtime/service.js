@@ -1,5 +1,13 @@
 import { randomUUID, createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
+import path from "node:path";
+import { createHandoffSnapshot, parseHandoffInput, parseHandoffSnapshot, verifyHandoffSelections } from "./handoff.js";
+import { runAction } from "./action.js";
+import { HistoryPages } from "./history.js";
+import { parseQuery, queryRuns } from "./query.js";
+import { comparePlans } from "./plan-diff.js";
+import { NotificationStore } from "./notifications.js";
+import { deliverNotification } from "./notification-delivery.js";
 import { ToolExecutionPipeline } from "@deepseek-ai/dsh-tools/pipeline";
 import { ERRORS } from "../error-codes.js";
 import { runProgress, runGuidance } from "../presentation.js";
@@ -9,9 +17,11 @@ import { runAcceptance, runRecovery } from "./insights.js";
 import { runAttention } from "./attention.js";
 import { runWaiting } from "./waiting.js";
 import { ownerReview } from "./review.js";
+import { decisionLedger, validDecisionInput } from "./decision.js";
 import { executeAgent } from "./agent.js";
 import { WorkerQuota } from "./worker-quota.js";
 import { RunStore } from "./store.js";
+import { acquireRootLock } from "./root-lock.js";
 const MAX_ACTIVE_RUNS = 8;
 const PROCESS_ID = randomUUID();
 const RUN_KEYS = new Set(["plan", "async"]);
@@ -25,7 +35,7 @@ function observeSettlement(runId, done) {
     while (settlement.size > 1024)
         settlement.delete(settlement.keys().next().value);
 }
-const STATUS_KEYS = new Set(["runId", "limit", "offset"]);
+const STATUS_KEYS = new Set(["runId", "limit", "offset", "snapshot", "cursor"]);
 // Shared only inside this module/process. A new Agent scope is not a process restart.
 const managers = new Map();
 function summary(run) {
@@ -33,6 +43,9 @@ function summary(run) {
         runId: run.runId,
         state: run.state,
         ...(run.goal === undefined ? {} : { goal: run.goal }),
+        ...(run.plan.provenance === undefined
+            ? {}
+            : { provenance: structuredClone(run.plan.provenance) }),
         ...(run.plan.taskId === undefined ? {} : { taskId: run.plan.taskId }),
         ...(run.plan.previousRunId === undefined
             ? {}
@@ -49,8 +62,10 @@ function summary(run) {
         guidance: runGuidance(run),
         recovery: runRecovery(run, settlement.get(run.runId)),
         attention: runAttention(run, settlement.get(run.runId)),
+        decisionLedger: decisionLedger(run, runAttention(run, settlement.get(run.runId))),
         waiting: runWaiting(run, settlement.get(run.runId)),
         ownerReview: ownerReview(run),
+        action: runAction(run, settlement.get(run.runId)),
         steps: run.steps.map((step) => ({
             id: step.id,
             tool: step.tool,
@@ -102,32 +117,49 @@ function validateExecution(plan) {
 export class RuntimeService {
     ctx;
     delegationPolicy;
+    workerHostOptions;
+    history = new HistoryPages();
     store;
+    notifications;
     key;
     manager;
     closed = false;
     disposal;
-    constructor(ctx, store, delegationPolicy) {
+    constructor(ctx, store, delegationPolicy, workerHostOptions) {
         this.ctx = ctx;
         this.delegationPolicy = delegationPolicy;
+        this.workerHostOptions = workerHostOptions;
         this.store = store ?? new RunStore();
         const root = realpathSync(this.store.root);
         this.key = process.platform === "win32" ? root.toLowerCase() : root;
-        const manager = managers.get(this.key) ?? {
+        const existing = managers.get(this.key);
+        const manager = existing ?? {
+            releaseRoot: acquireRootLock(root),
             workerQuota: new WorkerQuota(),
             active: new Map(),
             failures: new Map(),
             references: 0,
         };
-        this.store.maintain(new Set(manager.active.keys()), 100);
+        // Publish before initialization for synchronous re-entry; every initialization
+        // write/maintenance is behind the root lock, including notification setup.
+        managers.set(this.key, manager);
         manager.references++;
         this.manager = manager;
-        managers.set(this.key, manager);
+        try {
+            this.notifications = new NotificationStore(path.join(root, "notifications"));
+            this.store.maintain(new Set(manager.active.keys()), 100);
+        }
+        catch (error) {
+            manager.references--;
+            this.releaseManager();
+            throw error;
+        }
     }
     dispose() {
         if (this.disposal)
             return this.disposal;
         this.closed = true;
+        this.history.clear();
         const own = [...this.manager.active.values()].filter((entry) => entry.owner === this);
         // Cancel and abort synchronously: a host that drops the returned promise
         // or tears the process down right after dispose() still stops scheduling
@@ -149,6 +181,25 @@ export class RuntimeService {
             this.releaseManager();
         })();
         return this.disposal;
+    }
+    /** Host-only aggregate of this module/process and canonical root. No paths, IDs or IO.
+     * Executing includes admitted resume initialization (still interrupted).
+     * Cleanup means a terminal run whose owned execution has not settled; it is not
+     * proof that ordinary host calls or background Jobs have exited. */
+    capacity() {
+        this.ensureOpen();
+        const occupiedRuns = this.manager.active.size;
+        const executingRuns = [...this.manager.active.values()].filter((entry) => entry.run.state === "running" || entry.run.state === "interrupted").length;
+        return {
+            scope: "module_process_root",
+            observedAt: Date.now(),
+            occupiedRuns,
+            executingRuns,
+            cleanupRuns: occupiedRuns - executingRuns,
+            runLimit: MAX_ACTIVE_RUNS,
+            workersInUse: this.manager.workerQuota.activeCount,
+            workerLimit: 8,
+        };
     }
     /** Descriptive only: no policy checks, tool dispatch, capacity reservation or run creation. */
     capabilities(raw, exec) {
@@ -176,8 +227,14 @@ export class RuntimeService {
                 maxActiveRuns: MAX_ACTIVE_RUNS,
                 maxWorkers: 8,
             },
+            // Coarse shared run admission only: do not expose other owners or counts.
+            capacity: {
+                scope: "module_process_root",
+                observedAt: Date.now(),
+                capacityBusy: this.manager.active.size >= MAX_ACTIVE_RUNS,
+            },
             authorization: "checked_at_execution",
-            message: "能力说明不代表授权、工具/模型可用或容量预留；每次执行仍须通过宿主准入。Worker 需要可信父策略适配器及有效父 toolSet；普通异步调用仅适用于无 toolSet 的受控宿主集成。",
+            message: "能力说明不代表授权、工具/模型可用或容量预留；capacityBusy 仅为同模块/进程/运行根目录的运行准入繁忙瞬时观察，false 不保证有空槽或执行成功，不涵盖普通宿主调用/后台 Job 的实际存活。每次执行仍须通过宿主准入。Worker 需要可信父策略适配器及有效父 toolSet；普通异步调用仅适用于无 toolSet 的受控宿主集成。",
         };
     }
     async run(raw, exec, background = false) {
@@ -197,6 +254,8 @@ export class RuntimeService {
         // Do not drop or re-resolve it to synthesize broader host permissions.
         if ((background || input.async === true) && exec.toolSet !== undefined)
             throw Error(ERRORS.RUNTIME_ASYNC_ADMISSION_UNSUPPORTED);
+        if (plan.handoff !== undefined)
+            this.validateHandoff(plan, sessionId);
         if (plan.previousRunId !== undefined) {
             const previous = this.owned(plan.previousRunId, sessionId);
             if (previous.plan.taskId !== plan.taskId ||
@@ -219,11 +278,59 @@ export class RuntimeService {
             return { runId: run.runId, state: "running" };
         return summary(await promise);
     }
+    /** Owner-scoped metadata search. Never dispatches tools or indexes payload text. */
+    query(raw, exec) {
+        this.ensureOpen();
+        const owner = this.sessionId(exec);
+        const input = parseQuery(raw);
+        // Reject overflow before filtering: a rare old action must never silently
+        // disappear behind a recent-window limit. Existing storage scan semantics apply.
+        const records = new Map(this.store.list(1001, owner, 0, undefined, true).map((run) => [run.runId, run]));
+        for (const run of [
+            ...this.manager.failures.values(),
+            ...[...this.manager.active.values()].map((entry) => entry.run),
+        ]) {
+            if (run.ownerSessionId === owner)
+                records.set(run.runId, run);
+        }
+        if (records.size > 1000)
+            throw Error(ERRORS.RUNTIME_INVALID_STATE);
+        const result = queryRuns([...records.values()], input, (id) => settlement.get(id));
+        return {
+            kind: "owner_metadata_query",
+            runs: result.runs.map((run) => ({
+                runId: run.runId,
+                state: run.state,
+                ...(run.goal === undefined ? {} : { goal: run.goal }),
+                ...(run.plan.provenance === undefined ? {} : { provenance: structuredClone(run.plan.provenance) }),
+                ...(run.plan.taskId === undefined ? {} : { taskId: run.plan.taskId }),
+                ...(run.plan.previousRunId === undefined ? {} : { previousRunId: run.plan.previousRunId }),
+                updatedAt: run.updatedAt,
+                stepCount: run.steps.length,
+                action: runAction(run, settlement.get(run.runId)),
+            })),
+            view: input.view,
+            offset: input.offset,
+            limit: input.limit,
+            matchedCount: result.matchedCount,
+            groups: result.groups,
+            hasMore: result.hasMore,
+            scope: "retained_owner_runs",
+            order: "updatedAt_desc_runId_asc",
+            observedAt: Date.now(),
+            scannedCount: records.size,
+            scanLimit: 1000,
+            diagnostics: this.store.diagnostics(),
+            message: "仅当前owner可读取的保留运行元数据，先筛选后分页；最多1000条候选，超限拒绝而非截取近期记录。groups为其他条件筛选后、view筛选前的互斥运行数；matchedCount为view筛选后运行数，均非事项数。每次查询实时重算，offset翻页不冻结成员；损坏/不可读记录见diagnostics，空结果不证明没有待办。不是全量历史、授权或验收，不搜索原始结果/输入，不自动执行、恢复或投递。",
+        };
+    }
     status(raw, exec) {
         this.ensureOpen();
         const sessionId = this.sessionId(exec);
         const input = plain(raw, STATUS_KEYS);
         if (input.runId === undefined) {
+            if (input.snapshot !== undefined || input.cursor !== undefined)
+                return this.historyPage(input, sessionId);
             const limit = pageNumber(input.limit, 20, 100);
             if (limit === 0)
                 throw Error(ERRORS.INVALID_PLAN);
@@ -245,6 +352,9 @@ export class RuntimeService {
                     runId: run.runId,
                     state: run.state,
                     ...(run.goal === undefined ? {} : { goal: run.goal }),
+                    ...(run.plan.provenance === undefined
+                        ? {}
+                        : { provenance: structuredClone(run.plan.provenance) }),
                     ...(run.plan.taskId === undefined
                         ? {}
                         : { taskId: run.plan.taskId }),
@@ -257,15 +367,214 @@ export class RuntimeService {
                     progress: runProgress(run),
                     guidance: runGuidance(run),
                     attention: runAttention(run, settlement.get(run.runId)),
+                    decisionLedger: decisionLedger(run, runAttention(run, settlement.get(run.runId))),
                     waiting: runWaiting(run, settlement.get(run.runId)),
                     ownerReview: ownerReview(run),
+                    action: runAction(run, settlement.get(run.runId)),
                 })),
                 diagnostics: this.store.diagnostics(),
             };
         }
-        if (input.limit !== undefined || input.offset !== undefined)
+        if (input.limit !== undefined ||
+            input.offset !== undefined ||
+            input.snapshot !== undefined ||
+            input.cursor !== undefined)
             throw Error(ERRORS.INVALID_PLAN);
         return summary(this.owned(input.runId, sessionId));
+    }
+    /** Read-only task page over retained owned records; never a claim of complete history. */
+    task(raw, exec) {
+        this.ensureOpen();
+        const input = plain(raw, new Set(["taskId", "limit", "offset", "snapshot", "cursor"]));
+        const owner = this.sessionId(exec);
+        if (typeof input.taskId !== "string" ||
+            !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(input.taskId))
+            throw Error(ERRORS.INVALID_PLAN);
+        if (input.snapshot !== undefined || input.cursor !== undefined)
+            return this.historyPage(input, owner, input.taskId);
+        const limit = pageNumber(input.limit, 20, 100);
+        const offset = pageNumber(input.offset, 0, 10_000);
+        if (!limit)
+            throw Error(ERRORS.INVALID_PLAN);
+        const volatile = [
+            ...this.manager.failures.values(),
+            ...[...this.manager.active.values()].map((e) => e.run),
+        ].filter((run) => run.ownerSessionId === owner && run.plan.taskId === input.taskId);
+        const records = new Map(this.store
+            .list(offset + limit + volatile.length + 1, owner, 0, input.taskId)
+            .map((run) => [run.runId, run]));
+        for (const run of volatile)
+            records.set(run.runId, run);
+        const ordered = [...records.values()].sort((a, b) => b.updatedAt - a.updatedAt || a.runId.localeCompare(b.runId));
+        const runs = ordered
+            .slice(offset, offset + limit)
+            .map((run) => summary(run));
+        return {
+            taskId: input.taskId,
+            runs,
+            offset,
+            limit,
+            hasMore: ordered.length > offset + limit,
+            scope: "retained_owner_runs",
+            order: "updatedAt_desc_runId_asc",
+            page: {
+                runCount: runs.length,
+                activeCount: runs.filter((run) => run.state === "running").length,
+                attentionCount: runs.reduce((count, run) => count +
+                    run.attention.items.filter((item) => (!item.acknowledged || item.kind === "inspect_external_state") &&
+                        !(item.kind === "decision_required" && item.disposition)).length, 0),
+                reviewCount: runs.filter((run) => run.ownerReview.status !== "accepted" &&
+                    run.attention.items.some((item) => item.kind === "review_results")).length,
+            },
+            diagnostics: this.store.diagnostics(),
+            message: "仅当前owner保留记录的本页汇总，按活动时间排序；历史可能已清理，非全量历史或交付/独立验收结论。previousRunId仅为关联，前驱可能不在本页。结果请按runId用runtime_result读取。",
+        };
+    }
+    /** Freeze membership/order only. Re-read each owned record so actions never use stale state. */
+    historyPage(input, owner, taskId) {
+        if (input.offset !== undefined)
+            throw Error(ERRORS.INVALID_PLAN);
+        const page = this.history.page(owner, taskId, input, () => {
+            const records = new Map(this.store
+                .list(1001, owner, 0, taskId, true)
+                .map((run) => [run.runId, run]));
+            for (const run of [
+                ...this.manager.failures.values(),
+                ...[...this.manager.active.values()].map((entry) => entry.run),
+            ]) {
+                if (run.ownerSessionId === owner &&
+                    (taskId === undefined || run.plan.taskId === taskId))
+                    records.set(run.runId, run);
+            }
+            return [...records.values()]
+                .sort((a, b) => b.updatedAt - a.updatedAt || a.runId.localeCompare(b.runId))
+                .map((run) => run.runId);
+        });
+        const runs = [];
+        for (const id of page.ids) {
+            const run = this.manager.failures.get(id) ??
+                this.manager.active.get(id)?.run ??
+                this.store.load(id);
+            if (!run ||
+                run.ownerSessionId !== owner ||
+                (taskId !== undefined && run.plan.taskId !== taskId))
+                page.pagination.missingRunIds.push(id);
+            else
+                runs.push(summary(run));
+        }
+        return {
+            ...(taskId === undefined ? {} : { taskId }),
+            runs,
+            offset: page.offset,
+            limit: page.limit,
+            hasMore: page.hasMore,
+            scope: "retained_owner_runs",
+            order: "snapshot_membership",
+            pagination: page.pagination,
+            page: {
+                runCount: runs.length,
+                activeCount: runs.filter((run) => run.state === "running").length,
+                attentionCount: runs.reduce((n, run) => n +
+                    run.attention.items.filter((item) => (!item.acknowledged || item.kind === "inspect_external_state") &&
+                        !(item.kind === "decision_required" && item.disposition)).length, 0),
+                reviewCount: runs.filter((run) => run.ownerReview.status !== "accepted" &&
+                    run.attention.items.some((item) => item.kind === "review_results")).length,
+            },
+            diagnostics: this.store.diagnostics(),
+            message: "固定本次捕获的保留运行成员及顺序，状态实时重读；不是完整历史或状态快照。新增运行不插入本快照；缺失/已清理项列于missingRunIds，不自动补位。快照5分钟有效，当前服务销毁、重启或容量淘汰后失效，请重新snapshot:true；不要与最近活动页直接拼接。",
+        };
+    }
+    /** Host-only, explicit delivery using the original owner's context. Not a model tool. */
+    deliverNotification(runId, exec, sender) {
+        this.ensureOpen();
+        if (typeof sender !== "function")
+            throw Error(ERRORS.INVALID_PLAN);
+        return deliverNotification((input) => this.notification(input, exec), () => {
+            const run = this.owned(runId, this.sessionId(exec));
+            const action = runAction(run, settlement.get(run.runId));
+            return [
+                "萧何运行待办",
+                "运行：" + run.runId,
+                "当前行动（" + action.actor + "）：" + action.message,
+                "只读定位：runtime_result(" + JSON.stringify({ runId }) + ")",
+                "通知不表示问题已解决、业务交付或独立验收。",
+            ].join("\n");
+        }, runId, sender, exec.signal);
+    }
+    /** Explicit receipt protocol only. No sender, timer, replay, or DAG invocation. */
+    notification(raw, exec) {
+        this.ensureOpen();
+        const input = plain(raw, new Set([
+            "runId",
+            "operation",
+            "key",
+            "expectedRevision",
+            "attemptToken",
+            "outcome",
+        ]));
+        const owner = this.sessionId(exec);
+        const run = this.owned(input.runId, owner);
+        const operation = input.operation === undefined ? "get" : input.operation;
+        if (!["get", "sync", "claim", "settle"].includes(operation))
+            throw Error(ERRORS.INVALID_PLAN);
+        if (operation === "get" || operation === "sync") {
+            if ([
+                input.key,
+                input.expectedRevision,
+                input.attemptToken,
+                input.outcome,
+            ].some((v) => v !== undefined))
+                throw Error(ERRORS.INVALID_PLAN);
+        }
+        else {
+            if (typeof input.key !== "string" ||
+                !/^[a-f0-9]{64}$/.test(input.key) ||
+                !Number.isSafeInteger(input.expectedRevision) ||
+                input.expectedRevision < 0)
+                throw Error(ERRORS.INVALID_PLAN);
+            if (operation === "claim" &&
+                (input.attemptToken !== undefined || input.outcome !== undefined))
+                throw Error(ERRORS.INVALID_PLAN);
+            if (operation === "settle" &&
+                (typeof input.attemptToken !== "string" ||
+                    !["sent", "failed"].includes(input.outcome)))
+                throw Error(ERRORS.INVALID_PLAN);
+        }
+        if (operation !== "get" && exec.signal?.aborted)
+            throw Error(ERRORS.RUNTIME_CANCELLED);
+        const attention = runAttention(run, settlement.get(run.runId));
+        // Delivery versions also bind the problem snapshot: a later occurrence of the
+        // same action must not be suppressed by a prior sent/withdrawn receipt.
+        const current = {
+            key: createHash("sha256")
+                .update(JSON.stringify([attention.notification.key, attention.snapshotHash]))
+                .digest("hex"),
+            shouldNotify: attention.notification.shouldNotify,
+        };
+        let receipt;
+        if (operation === "get")
+            receipt = this.notifications.get(owner, run.runId);
+        else {
+            // Reconcile immediately before a claim/callback: an obsolete payload cannot settle a newer version.
+            receipt = this.notifications.sync(owner, run.runId, current.key, current.shouldNotify);
+            if (operation === "claim") {
+                if (!current.shouldNotify || input.key !== current.key)
+                    throw Error(ERRORS.RUNTIME_RESULT_CHANGED);
+                receipt = this.notifications.claim(owner, run.runId, input.key, input.expectedRevision);
+            }
+            else if (operation === "settle") {
+                if (!current.shouldNotify || input.key !== current.key)
+                    throw Error(ERRORS.RUNTIME_RESULT_CHANGED);
+                receipt = this.notifications.settle(owner, run.runId, input.key, input.expectedRevision, input.attemptToken, input.outcome);
+            }
+        }
+        return {
+            runId: run.runId,
+            current,
+            ...(receipt === undefined ? {} : { receipt }),
+            verification: "owner_declared_not_delivery_verified",
+            message: "仅通知投递回执协议；sync合并当前事项，claim后由宿主显式投递，settle记录投递方声明。不会自动发送/重试或重跑DAG；sent不证明已阅读、处理、交付或验收。delivering崩溃后须核验渠道，不自动重发。",
+        };
     }
     acknowledge(raw, exec) {
         this.ensureOpen();
@@ -300,6 +609,29 @@ export class RuntimeService {
             ...summary(saved),
             acknowledgementHistory: saved.acknowledgements,
         };
+    }
+    decision(raw, exec) {
+        this.ensureOpen();
+        const sessionId = this.sessionId(exec);
+        const input = plain(raw, new Set([
+            "runId", "snapshotHash", "key", "expectedRevision", "disposition", "reason", "answer_ref", "successor_run_id",
+        ]));
+        const run = this.owned(input.runId, sessionId);
+        if (exec.signal?.aborted)
+            throw Error(ERRORS.RUNTIME_CANCELLED);
+        if (this.manager.active.has(run.runId) || this.manager.failures.has(run.runId) ||
+            run.state === "running" || run.state === "interrupted")
+            throw Error(ERRORS.RUNTIME_INVALID_STATE);
+        const declaration = {
+            snapshotHash: input.snapshotHash, key: input.key, expectedRevision: input.expectedRevision,
+            disposition: input.disposition, reason: input.reason,
+            ...(input.answer_ref === undefined ? {} : { answerRef: input.answer_ref }),
+            ...(input.successor_run_id === undefined ? {} : { successorRunId: input.successor_run_id }),
+        };
+        if (!validDecisionInput(declaration))
+            throw Error(ERRORS.INVALID_PLAN);
+        const saved = this.store.recordDecision(run.runId, sessionId, declaration);
+        return { ...summary(saved), decisionHistory: saved.decisionDispositions };
     }
     review(raw, exec) {
         this.ensureOpen();
@@ -365,6 +697,7 @@ export class RuntimeService {
                 acceptance: runAcceptance(run),
                 ownerReviewHistory: run.ownerReviews ?? [],
                 acknowledgementHistory: run.acknowledgements ?? [],
+                decisionHistory: run.decisionDispositions ?? [],
                 results: {},
                 finished: run.state !== "running" && run.state !== "interrupted",
                 page: {
@@ -388,6 +721,9 @@ export class RuntimeService {
             acceptance: runAcceptance(run),
             ownerReviewHistory: run.ownerReviews ?? [],
             acknowledgementHistory: run.acknowledgements ?? [],
+            decisionHistory: run.decisionDispositions ?? [],
+            ...(run.plan.handoff === undefined ? {} : { handoff: structuredClone(run.plan.handoff) }),
+            planComparison: this.comparePredecessor(run),
             results: structuredClone(run.results),
             finished: run.state !== "running" && run.state !== "interrupted",
         };
@@ -435,6 +771,8 @@ export class RuntimeService {
         const run = this.owned(input.runId, this.sessionId(exec));
         if (run.state !== "interrupted" || this.manager.active.has(run.runId))
             throw Error(ERRORS.RUNTIME_INVALID_STATE);
+        if (run.plan.handoff !== undefined)
+            this.validateHandoff(run.plan, this.sessionId(exec));
         validateExecution(run.plan);
         if (run.plan.steps.some((step) => step.tool === "agent") &&
             typeof this.delegationPolicy?.checkParentPolicy !== "function")
@@ -461,6 +799,9 @@ export class RuntimeService {
         observeSettlement(run.runId, false);
         const promise = Promise.resolve()
             .then(() => {
+            // Recheck source versions after the scheduling boundary, before any dispatch.
+            if (run.plan.handoff !== undefined)
+                this.validateHandoff(run.plan, run.ownerSessionId);
             if (exec.signal?.aborted && !detached)
                 controller.abort();
             this.store.save(run);
@@ -521,8 +862,16 @@ export class RuntimeService {
     releaseManager() {
         if (this.manager.references === 0 &&
             this.manager.active.size === 0 &&
-            managers.get(this.key) === this.manager)
-            managers.delete(this.key);
+            managers.get(this.key) === this.manager) {
+            try {
+                this.manager.releaseRoot();
+            }
+            finally {
+                // Failed release keeps the on-disk lock fail-closed; do not reuse an
+                // owner that has no references or live work.
+                managers.delete(this.key);
+            }
+        }
     }
     ensureOpen() {
         if (this.closed)
@@ -539,6 +888,52 @@ export class RuntimeService {
             throw Error(ERRORS.OWNING_SESSION_REQUIRED);
         return String(exec.agent.id);
     }
+    /** Full result detail only: no list fan-out, checkpoints, result reuse or authority. */
+    comparePredecessor(run) {
+        if (run.plan.previousRunId === undefined)
+            return { comparable: false, reason: "no_previous_run" };
+        let previous;
+        try {
+            previous = this.owned(run.plan.previousRunId, run.ownerSessionId);
+        }
+        catch {
+            // Missing, unreadable, invalid-schema and foreign-owner records are indistinguishable.
+            return { comparable: false, reason: "predecessor_unavailable" };
+        }
+        if (previous.runId === run.runId ||
+            previous.plan.taskId !== run.plan.taskId ||
+            !["succeeded", "failed", "cancelled"].includes(previous.state) ||
+            this.manager.active.has(previous.runId))
+            return { comparable: false, reason: "incompatible_predecessor" };
+        return { comparable: true, changes: comparePlans(previous.plan, run.plan) };
+    }
+    /** Produce only an owner-authored untrusted snapshot; persistence is in a later plan. */
+    handoff(raw, exec) {
+        this.ensureOpen();
+        const input = parseHandoffInput(raw);
+        const source = this.handoffSource(input.runId, this.sessionId(exec));
+        return createHandoffSnapshot(input, source);
+    }
+    handoffSource(runId, owner) {
+        this.owned(runId, owner);
+        const source = this.store.load(runId);
+        if (!source || source.ownerSessionId !== owner)
+            throw Error(ERRORS.RUNTIME_NOT_FOUND);
+        if (!["succeeded", "failed", "cancelled"].includes(source.state) ||
+            this.manager.active.has(runId) || this.manager.failures.has(runId) ||
+            settlement.get(runId) !== true || !source.plan.taskId)
+            throw Error(ERRORS.RUNTIME_INVALID_STATE);
+        return source;
+    }
+    validateHandoff(plan, owner) {
+        const handoff = parseHandoffSnapshot(plan.handoff);
+        if (plan.taskId !== handoff.taskId || plan.previousRunId !== handoff.sourceRunId)
+            throw Error(ERRORS.INVALID_PLAN);
+        const source = this.handoffSource(handoff.sourceRunId, owner);
+        if (source.plan.taskId !== handoff.taskId)
+            throw Error(ERRORS.INVALID_PLAN);
+        verifyHandoffSelections(handoff.selections, source);
+    }
     owned(runId, sessionId) {
         if (typeof runId !== "string")
             throw Error(ERRORS.RUNTIME_NOT_FOUND);
@@ -550,13 +945,13 @@ export class RuntimeService {
         return run;
     }
     executor(exec) {
-        const invoke = async (tool, input, signal, onCreated) => {
+        const invoke = async (tool, input, signal, onCreated, context) => {
             if (tool === "agent") {
                 // Reserve before any host creation code, including synchronous re-entry.
                 // Never queue or detach workers behind the parent admission lifetime.
                 const release = this.manager.workerQuota.reserve();
                 try {
-                    const { trace: _trace, ...result } = await executeAgent(this.ctx, exec, input, signal, onCreated, onCreated, this.delegationPolicy);
+                    const { trace: _trace, ...result } = await executeAgent(this.ctx, exec, input, signal, onCreated, onCreated, this.delegationPolicy, this.workerHostOptions, context);
                     // Audit metadata is already checkpointed in StepRecord. Keep it outside
                     // the legacy result quota and dependency prompt to preserve text budgets.
                     return result;
@@ -619,6 +1014,6 @@ export class RuntimeService {
             }
             return result.value;
         };
-        return new RuntimeExecutor(this.store, invoke);
+        return new RuntimeExecutor(this.store, invoke, this.workerHostOptions?.dependencyReader?.toolName);
     }
 }

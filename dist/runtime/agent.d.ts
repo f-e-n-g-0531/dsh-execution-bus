@@ -1,4 +1,15 @@
+import type { DependencyContext } from "./dependency-context.js";
+import type { ModelWaitStatus } from "./model-wait.js";
+/** Trusted host wiring only; bind an already registered/admitted tool to this child. */
+export interface WorkerHostOptions {
+    dependencyReader?: {
+        toolName: string;
+        bind(agent: Agent, context: DependencyContext): () => void;
+    };
+    onModelWait?: (sessionId: string, status: ModelWaitStatus | undefined) => void;
+}
 import type { Context } from "@deepseek-ai/cordis";
+import type { Agent } from "@deepseek-ai/dsh-agent";
 import type { ToolExecution, ToolRunContext } from "@deepseek-ai/dsh-tools";
 import type { AcceptanceCriterion, WorkerReport } from "./agent-report.js";
 import type { WorkerTrace } from "./agent-trace.js";
@@ -34,7 +45,7 @@ export interface DelegationPolicyAdapter {
     }>;
 }
 /** Independent, bounded native-tool worker. No parent transcript is seeded. */
-export declare function executeAgent(ctx: Context, exec: ToolRunContext, raw: unknown, signal: AbortSignal, onCreated?: (sessionId: string, trace?: WorkerTrace) => void, onTrace?: (sessionId: string, trace: WorkerTrace) => void, delegationPolicy?: DelegationPolicyAdapter): Promise<{
+export declare function executeAgent(ctx: Context, exec: ToolRunContext, raw: unknown, signal: AbortSignal, onCreated?: (sessionId: string, trace?: WorkerTrace) => void, onTrace?: (sessionId: string, trace: WorkerTrace) => void, delegationPolicy?: DelegationPolicyAdapter, hostOptions?: WorkerHostOptions, context?: DependencyContext): Promise<{
     sessionId: string;
     output: string;
     verification: "not_independently_verified";

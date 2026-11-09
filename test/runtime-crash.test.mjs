@@ -170,6 +170,10 @@ test(
         "SIGKILL must not execute graceful disposal",
       );
 
+      // Test operator reconciliation: child exit acknowledged, checkpoint and
+      // recorded effects inspected above. Never remove this lock in production automatically.
+      assert.ok(readFileSync(path.join(f.root, ".runtime-owner.lock"), "utf8"));
+      rmSync(path.join(f.root, ".runtime-owner.lock"));
       const second = f.spawn("completed-write", "resume", started.runId);
       await second.message("ready");
       await second.go();
@@ -232,6 +236,9 @@ test(
       );
       await first.kill();
 
+      // Explicit test-operator reconciliation after confirmed exit and effects inspection.
+      assert.ok(readFileSync(path.join(f.root, ".runtime-owner.lock"), "utf8"));
+      rmSync(path.join(f.root, ".runtime-owner.lock"));
       const second = f.spawn("inflight-write", "resume", started.runId);
       await second.message("ready");
       await second.go();

@@ -1,3 +1,5 @@
+import { parseHandoffSnapshot } from "./handoff.js";
+import type { HandoffSnapshot } from "./handoff.js";
 import { ERRORS } from "../error-codes.js";
 import { parseAgentInput } from "./agent.js";
 
@@ -27,11 +29,19 @@ export interface PlanStep {
   retry: number;
   timeoutMs: number;
 }
+/** Caller-supplied source labels only; never fetched or treated as authorization. */
+export interface PlanProvenance {
+  request_ref?: string;
+  scope_summary?: string;
+  context_refs?: string[];
+}
 export interface Plan {
   goal?: string;
   /** Display/history linkage only; never authorization or result reuse. */
   taskId?: string;
   previousRunId?: string;
+  provenance?: PlanProvenance;
+  handoff?: HandoffSnapshot;
   steps: PlanStep[];
   concurrency: number;
 }
@@ -52,6 +62,8 @@ const PLAN_KEYS = new Set([
   "goal",
   "task_id",
   "previous_run_id",
+  "provenance",
+  "handoff",
   "steps",
   "concurrency",
 ]);
@@ -75,6 +87,54 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
+function parseProvenance(value: unknown): PlanProvenance {
+  if (!isPlainObject(value)) invalid();
+  const result: PlanProvenance = {};
+  const keys = Reflect.ownKeys(value);
+  if (keys.length === 0) invalid();
+  for (const key of keys) {
+    if (
+      key !== "request_ref" &&
+      key !== "scope_summary" &&
+      key !== "context_refs"
+    )
+      invalid();
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+    if (!("value" in descriptor) || !descriptor.enumerable) invalid();
+    const field: unknown = descriptor.value;
+    if (key === "context_refs") {
+      if (
+        !Array.isArray(field) ||
+        Object.getPrototypeOf(field) !== Array.prototype ||
+        field.length < 1 ||
+        field.length > 8
+      )
+        invalid();
+      // Check descriptors before serialization: getters/toJSON must not execute.
+      if (Reflect.ownKeys(field).length !== field.length + 1) invalid();
+      const refs: string[] = [];
+      for (let index = 0; index < field.length; index++) {
+        const item = Object.getOwnPropertyDescriptor(field, String(index));
+        if (!item || !("value" in item) || !item.enumerable) invalid();
+        refs.push(provenanceString(item.value, 1000));
+      }
+      result.context_refs = refs;
+    } else {
+      result[key] = provenanceString(
+        field,
+        key === "request_ref" ? 1000 : 2000,
+      );
+    }
+  }
+  return result;
+}
+
+function provenanceString(value: unknown, maxChars: number): string {
+  if (typeof value !== "string" || value.length > maxChars || !value.trim())
+    invalid();
+  return value.trim();
+}
+
 export function parsePlan(raw: unknown): Plan {
   if (!isPlainObject(raw)) invalid();
   for (const key of Reflect.ownKeys(raw)) {
@@ -82,6 +142,10 @@ export function parsePlan(raw: unknown): Plan {
     const descriptor = Object.getOwnPropertyDescriptor(raw, key)!;
     if (!("value" in descriptor) || !descriptor.enumerable) invalid();
   }
+  // Validate source metadata before JSON.stringify can invoke nested accessors.
+  const provenance =
+    raw.provenance === undefined ? undefined : parseProvenance(raw.provenance);
+  const handoff = raw.handoff === undefined ? undefined : parseHandoffSnapshot(raw.handoff);
   let bytes = 0;
   try {
     bytes = Buffer.byteLength(JSON.stringify(raw));
@@ -109,6 +173,7 @@ export function parsePlan(raw: unknown): Plan {
       !/^run-[0-9a-z-]{8,80}$/.test(previousRunId))
   )
     invalid();
+  if (handoff !== undefined && (taskId !== handoff.taskId || previousRunId !== handoff.sourceRunId)) invalid();
   const concurrency = raw.concurrency ?? 2;
   if (
     typeof concurrency !== "number" ||
@@ -142,6 +207,8 @@ export function parsePlan(raw: unknown): Plan {
     ...(previousRunId === undefined
       ? {}
       : { previousRunId: previousRunId as string }),
+    ...(provenance === undefined ? {} : { provenance }),
+    ...(handoff === undefined ? {} : { handoff }),
     steps,
     concurrency,
   };

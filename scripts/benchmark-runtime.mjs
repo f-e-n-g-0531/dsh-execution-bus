@@ -115,6 +115,7 @@ export const RUNTIME_ARTIFACT_FILES = Object.freeze([
   "error-codes.js", "presentation.js", "runtime/retry.js", "runtime/agent.js",
   "runtime/agent-report.js", "runtime/agent-trace.js", "runtime/worker-quota.js",
   "runtime/attention.js", "runtime/insights.js", "runtime/waiting.js", "runtime/review.js",
+  "runtime/plan-diff.js",
 ]);
 export function runtimeArtifactDigest(dist, read = readFileSync) {
   const root = dist instanceof URL ? dist : pathToFileURL(path.resolve(dist) + path.sep);
@@ -155,7 +156,7 @@ export async function loadRuntime() {
   }
 }
 
-/** Seeded, read-only synthetic calls only. The first slow root exposes batch barriers. */
+/** Seeded, read-only synthetic calls only. The first slow root exposes unnecessary dependency barriers. */
 export function makeDag({
   steps = 16,
   seed = 1,
@@ -559,7 +560,7 @@ export async function runBenchmark(options = {}, runtime) {
       native:
         "work-conserving bounded Promise DAG; no durability/recovery; same concurrency and synthetic tool work",
       runtime:
-        "real RuntimeExecutor with disk RunStore; batch barriers wait for all siblings before next ready batch; includes checkpoints",
+        "real RuntimeExecutor with disk RunStore; pure read/glob/grep DAGs use completion-driven bounded scheduling; mixed plans retain batch barriers; includes checkpoints",
       capacity:
         "fresh synthetic history/root per operation/iteration; setup excluded; list=first list after setup saves, warm-list=same-instance second read before verification; new instances do not isolate module metadata, other roots may be cached; neither is OS-cold; iterations are independent histories, list/warm-list are paired not independent; startup=RuntimeService constructor including markInterrupted and prune(100); no host execution; failed samples remain but missing from timing summaries",
       eventLoop:

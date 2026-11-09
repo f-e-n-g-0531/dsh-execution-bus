@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -259,6 +260,9 @@ test("same-root services share eight pending creations across concurrent runs; n
   const a = first.run(plan(4), f.host.exec);
   const b = second.run(plan(4), f.host.exec);
   await until(() => creates === 8);
+  assert.equal(first.capacity().workersInUse, 8);
+  assert.equal(second.capacity().occupiedRuns, 2);
+  assert.equal(second.capacity().executingRuns, 2);
   assert.equal(first.manager.workerQuota, second.manager.workerQuota);
   assert.equal(first.manager.workerQuota.activeCount, 8);
   const rejected = await second.run(plan(), f.host.exec);
@@ -322,6 +326,10 @@ test(
     assert.equal(service.manager.workerQuota.activeCount, 1);
     assert.equal(f.host.requests.length, 0);
     const successor = f.create();
+    assert.equal(successor.capacity().occupiedRuns, 1);
+    assert.equal(successor.capacity().executingRuns, 0);
+    assert.equal(successor.capacity().cleanupRuns, 1);
+    assert.equal(successor.capacity().workersInUse, 1);
     assert.equal(successor.manager.workerQuota, service.manager.workerQuota);
     assert.equal(
       successor.status({ runId }, f.host.exec).executionSettled,
@@ -339,6 +347,9 @@ test(
       true,
     );
     assert.equal(successor.manager.workerQuota.activeCount, 0);
+    assert.equal(successor.capacity().occupiedRuns, 0);
+    assert.equal(successor.capacity().cleanupRuns, 0);
+    assert.equal(successor.capacity().workersInUse, 0);
   },
 );
 
@@ -523,3 +534,48 @@ test("different store roots have independent Worker budgets", async (t) => {
     (await Promise.all(pending)).every((run) => run.state === "succeeded"),
   );
 });
+
+test(
+  "last service retains directory lock until owned Worker disposal finishes",
+  { timeout: 10000 },
+  async (t) => {
+    const cleaning = deferred(),
+      cleaned = deferred();
+    t.after(() => cleaned.resolve());
+    const f = await services(t, async () => [{ type: "text", text: "done" }]);
+    const service = f.create();
+    const original = f.host.ctx.agents.create.bind(f.host.ctx.agents);
+    f.host.ctx.agents.create = async (options) => {
+      const handle = await original(options);
+      return {
+        agent: handle.agent,
+        async dispose() {
+          await handle.dispose();
+          cleaning.resolve();
+          await cleaned.promise;
+        },
+      };
+    };
+    const done = service.run(plan(), f.host.exec);
+    await cleaning.promise;
+    const closing = service.dispose();
+    const lock = path.join(f.root, ".runtime-owner.lock");
+    assert.equal(existsSync(lock), true);
+    const code = `import {acquireRootLock} from ${JSON.stringify(new URL("../dist/runtime/root-lock.js", import.meta.url).href)};
+    try {const release=acquireRootLock(process.argv[1]);release();} catch(e) {console.error(e.message);process.exitCode=23;}`;
+    const probe = () =>
+      spawnSync(process.execPath, ["--input-type=module", "-e", code, f.root], {
+        encoding: "utf8",
+        timeout: 5000,
+      });
+    const denied = probe();
+    assert.equal(denied.status, 23, denied.stderr);
+    assert.equal(denied.stderr.trim(), "RUNTIME_ROOT_LOCKED");
+    cleaned.resolve();
+    await closing;
+    await done;
+    assert.equal(existsSync(lock), false);
+    const allowed = probe();
+    assert.equal(allowed.status, 0, allowed.stderr);
+  },
+);

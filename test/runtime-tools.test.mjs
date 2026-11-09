@@ -11,6 +11,9 @@ import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
 import Jobs from "@deepseek-ai/dsh-jobs-local";
 import { createScope } from "@deepseek-ai/dsh-scope";
 import * as plugin from "../dist/plugin.js";
+import { RunStore } from "../dist/runtime/store.js";
+import { RuntimeExecutor } from "../dist/runtime/executor.js";
+import { parsePlan } from "../dist/runtime/plan.js";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -395,6 +398,117 @@ test("真实 ToolRuntime 双作用域：另一会话不能读取结果、取消�
     await f.scope.dispose();
     rmSync(f.dir, { recursive: true, force: true });
     delete process.env.XIAOHE_RUNTIME_DIR;
+  }
+});
+
+test("registered task and notification tools preserve typed schemas and owner isolation", async () => {
+  const f = await fixture();
+  let peer;
+  try {
+    const result = await f.call("runtime_run", {
+      plan: {
+        task_id: "tools_task",
+        steps: [{ id: "read", tool: "read", input: { file_path: "sample" } }],
+      },
+    });
+    assert.equal(result.isError, false);
+    const page = await f.call("runtime_task", { taskId: "tools_task" });
+    assert.equal(page.isError, false);
+    assert.equal(page.value.runs[0].runId, result.value.runId);
+    assert.equal(page.value.runs[0].action.kind, "review_results");
+    const queried = await f.call("runtime_query", { taskId: "tools_task", view: "review" });
+    assert.equal(queried.isError, false);
+    assert.equal(queried.value.matchedCount, 1);
+    assert.equal(queried.value.runs[0].runId, result.value.runId);
+    assert.equal(queried.value.groups.review, 1);
+    const receipt = await f.call("runtime_notification", {
+      runId: result.value.runId,
+      operation: "sync",
+    });
+    assert.equal(receipt.isError, false);
+    assert.equal(receipt.value.current.shouldNotify, false);
+    assert.equal(receipt.value.receipt, undefined);
+    peer = f.peer();
+    const denied = await peer.call("runtime_notification", {
+      runId: result.value.runId,
+    });
+    assert.equal(denied.isError, true);
+    const hidden = await peer.call("runtime_task", { taskId: "tools_task" });
+    assert.equal(hidden.isError, false);
+    assert.deepEqual(hidden.value.runs, []);
+    const hiddenQuery = await peer.call("runtime_query", { taskId: "tools_task" });
+    assert.equal(hiddenQuery.isError, false);
+    assert.deepEqual(hiddenQuery.value.runs, []);
+    assert.equal(hiddenQuery.value.matchedCount, 0);
+  } finally {
+    if (peer) await peer.scope.dispose();
+    await f.scope.dispose();
+    rmSync(f.dir, { recursive: true, force: true });
+    delete process.env.XIAOHE_RUNTIME_DIR;
+  }
+});
+
+test("registered decision tool records owner disposition through real pipeline without executing tools", async () => {
+  const f = await fixture();
+  let peer;
+  try {
+    // Seed a terminal Worker result without bypassing the standard plugin's agent gate.
+    const store = new RunStore(f.dir);
+    const executor = new RuntimeExecutor(store, async () => ({ report: {
+      outcome: "blocked", summary: "Need a decision", evidence: [], limitations: ["Scope not selected"], requestedDecision: "Choose next scope",
+    } }));
+    const run = executor.createRun(f.agent.id, parsePlan({ task_id: "decision_task", steps: [{ id: "worker", tool: "agent", input: { prompt: "inspect", output_format: "report" } }] }));
+    await executor.execute(run);
+    const saved = await f.call("runtime_result", { runId: run.runId });
+    assert.equal(saved.isError, false);
+    const question = saved.value.attention.items.find(item => item.kind === "decision_required");
+    const args = { runId: run.runId, snapshotHash: saved.value.attention.snapshotHash, key: question.key,
+      expectedRevision: saved.value.decisionLedger.revision, disposition: "answered", reason: "PRIVATE_DECISION_REASON", answer_ref: "PRIVATE_ANSWER_REF" };
+    peer = f.peer();
+    assert.equal((await peer.call("runtime_decision", args)).isError, true);
+    const before = { ...f.calls };
+    const recorded = await f.call("runtime_decision", args);
+    assert.equal(recorded.isError, false);
+    assert.equal(recorded.value.decisionLedger.items[0].status, "answered");
+    assert.equal(recorded.value.decisionHistory[0].answerRef, "PRIVATE_ANSWER_REF");
+    assert.equal(recorded.value.attention.notification.shouldNotify, false);
+    assert.equal(recorded.value.ownerReview.status, "not_recorded");
+    assert.deepEqual(f.calls, before);
+    assert.equal((await f.call("runtime_decision", args)).isError, true);
+  } finally {
+    if (peer) await peer.scope.dispose();
+    await f.scope.dispose();
+    rmSync(f.dir, { recursive: true, force: true });
+    delete process.env.XIAOHE_RUNTIME_DIR;
+  }
+});
+
+test("registered handoff binds selected results without implicit execution or payload disclosure", async () => {
+  const f = await fixture(); let peer;
+  try {
+    const first = await f.call("runtime_run", { plan: { task_id: "handoff_task", steps: [{ id: "read", tool: "read", input: { file_path: "source" } }] } });
+    assert.equal(first.isError, false);
+    const page = await f.call("runtime_result", { runId: first.value.runId, stepId: "read" });
+    const args = { runId: first.value.runId, selections: [{ stepId: "read", resultHash: page.value.page.hash }], summary: "PRIVATE_HANDOFF_SUMMARY" };
+    const before = { ...f.calls };
+    peer = f.peer();
+    assert.equal((await peer.call("runtime_handoff", args)).isError, true);
+    const snapshot = await f.call("runtime_handoff", args);
+    assert.equal(snapshot.isError, false);
+    assert.equal(snapshot.value.authorized, false);
+    assert.deepEqual(f.calls, before);
+    const next = await f.call("runtime_run", { plan: { task_id: "handoff_task", previous_run_id: first.value.runId, handoff: snapshot.value,
+      steps: [{ id: "read", tool: "read", input: { file_path: "next" } }] } });
+    assert.equal(next.isError, false);
+    const detail = await f.call("runtime_result", { runId: next.value.runId });
+    assert.deepEqual(detail.value.handoff, snapshot.value);
+    assert.equal(detail.value.planComparison.changes.handoffChanged, true);
+    const status = await f.call("runtime_status", { runId: next.value.runId });
+    assert.equal(JSON.stringify(status.value).includes("PRIVATE_HANDOFF_SUMMARY"), false);
+    assert.equal(f.calls.read, before.read + 1);
+  } finally {
+    if (peer) await peer.scope.dispose(); await f.scope.dispose();
+    rmSync(f.dir, { recursive: true, force: true }); delete process.env.XIAOHE_RUNTIME_DIR;
   }
 });
 

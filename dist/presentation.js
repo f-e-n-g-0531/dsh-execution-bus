@@ -221,6 +221,7 @@ const attentionSchema = {
                     stepId: string,
                     resultHash: string,
                     acknowledged: { type: "boolean", const: true },
+                    disposition: { type: "string", enum: ["answered", "superseded", "dismissed"] },
                 },
                 required: ["key", "kind"],
                 additionalProperties: false,
@@ -344,6 +345,38 @@ const acceptanceSchema = {
     required: ["status", "workers"],
     additionalProperties: false,
 };
+const decisionDispositionSchema = { type: "string", enum: ["answered", "superseded", "dismissed"] };
+const decisionLedgerSchema = {
+    type: "object",
+    properties: {
+        revision: integer,
+        verification: { type: "string", const: "owner_declared_not_user_approval" },
+        items: { type: "array", items: {
+                type: "object", properties: {
+                    key: string, stepId: string, resultHash: string,
+                    status: { type: "string", enum: ["open", "answered", "superseded", "dismissed"] },
+                    recordedAt: integer,
+                }, required: ["key", "status"], additionalProperties: false,
+            } },
+    },
+    required: ["revision", "verification", "items"], additionalProperties: false,
+};
+const decisionHistorySchema = {
+    type: "array", items: {
+        type: "object", properties: {
+            revision: integer, snapshotHash: string, key: string,
+            disposition: decisionDispositionSchema, reason: string,
+            answerRef: string, successorRunId: string, at: integer,
+        }, required: ["revision", "snapshotHash", "key", "disposition", "reason", "at"], additionalProperties: false,
+    },
+};
+const handoffSchema = {
+    type: "object", properties: {
+        kind: { type: "string", const: "untrusted_run_handoff" }, sourceRunId: string, taskId: string, summary: string,
+        selections: { type: "array", items: { type: "object", properties: { stepId: string, resultHash: string }, required: ["stepId", "resultHash"], additionalProperties: false } },
+        snapshotHash: string, authorized: { type: "boolean", const: false }, executable: { type: "boolean", const: false },
+    }, required: ["kind", "sourceRunId", "taskId", "summary", "selections", "snapshotHash", "authorized", "executable"], additionalProperties: false,
+};
 const ownerReviewSchema = {
     type: "object",
     properties: {
@@ -377,12 +410,99 @@ const ownerReviewHistorySchema = {
         additionalProperties: false,
     },
 };
+const actionSchema = {
+    type: "object",
+    properties: {
+        kind: {
+            type: "string",
+            enum: [
+                "inspect_external_state",
+                "wait_cleanup",
+                "inspect_failure",
+                "decision_required",
+                "result_unavailable",
+                "resume_read_only",
+                "review_results",
+                "wait_retry",
+                "working",
+                "settled",
+            ],
+        },
+        actor: { type: "string", enum: ["owner", "runtime", "none"] },
+        message: string,
+    },
+    required: ["kind", "actor", "message"],
+    additionalProperties: false,
+};
+const notificationReceiptSchema = {
+    type: "object",
+    properties: {
+        runId: string,
+        key: string,
+        revision: integer,
+        status: {
+            type: "string",
+            enum: ["pending", "delivering", "sent", "failed", "withdrawn"],
+        },
+        attempts: integer,
+        attemptToken: string,
+        updatedAt: integer,
+    },
+    required: ["runId", "key", "revision", "status", "attempts", "updatedAt"],
+    additionalProperties: false,
+};
+const provenanceSchema = {
+    type: "object",
+    properties: {
+        request_ref: string,
+        scope_summary: string,
+        context_refs: { type: "array", items: string },
+    },
+    additionalProperties: false,
+};
+const paginationSchema = {
+    type: "object",
+    properties: {
+        mode: { type: "string", const: "snapshot" },
+        capturedAt: integer,
+        expiresAt: integer,
+        total: integer,
+        missingRunIds: { type: "array", items: string },
+        nextCursor: string,
+    },
+    required: ["mode", "capturedAt", "expiresAt", "total", "missingRunIds"],
+    additionalProperties: false,
+};
+const planComparisonSchema = {
+    oneOf: [
+        { type: "object", properties: {
+                comparable: { type: "boolean", const: true },
+                changes: { type: "object", properties: {
+                        addedSteps: { type: "array", items: string },
+                        removedSteps: { type: "array", items: string },
+                        changedSteps: { type: "array", items: { type: "object", properties: {
+                                    id: string,
+                                    fields: { type: "array", items: { type: "string", enum: ["tool", "input", "dependsOn", "retry", "timeoutMs"] } },
+                                }, required: ["id", "fields"], additionalProperties: false } },
+                        concurrencyChanged: { type: "boolean" },
+                        goalChanged: { type: "boolean" },
+                        provenanceChanged: { type: "boolean" },
+                        handoffChanged: { type: "boolean" },
+                    }, required: ["addedSteps", "removedSteps", "changedSteps", "concurrencyChanged", "goalChanged", "provenanceChanged", "handoffChanged"], additionalProperties: false },
+            }, required: ["comparable", "changes"], additionalProperties: false },
+        { type: "object", properties: {
+                comparable: { type: "boolean", const: false },
+                reason: { type: "string", enum: ["no_previous_run", "predecessor_unavailable", "incompatible_predecessor"] },
+            }, required: ["comparable", "reason"], additionalProperties: false },
+    ],
+};
 const summaryProperties = {
     runId: string,
     state: runState,
     goal: string,
     taskId: string,
     previousRunId: string,
+    provenance: provenanceSchema,
     error: string,
     createdAt: integer,
     updatedAt: integer,
@@ -398,6 +518,8 @@ const summaryProperties = {
     attention: attentionSchema,
     waiting: waitingSchema,
     ownerReview: ownerReviewSchema,
+    decisionLedger: decisionLedgerSchema,
+    action: actionSchema,
     steps: {
         type: "array",
         items: {
@@ -450,6 +572,7 @@ const listSchema = {
                     goal: string,
                     taskId: string,
                     previousRunId: string,
+                    provenance: provenanceSchema,
                     error: string,
                     updatedAt: integer,
                     stepCount: integer,
@@ -458,6 +581,8 @@ const listSchema = {
                     attention: attentionSchema,
                     waiting: waitingSchema,
                     ownerReview: ownerReviewSchema,
+                    decisionLedger: decisionLedgerSchema,
+                    action: actionSchema,
                 },
                 required: ["runId", "state", "updatedAt", "stepCount"],
                 additionalProperties: false,
@@ -470,6 +595,33 @@ const listSchema = {
                 oversizedRecords: integer,
                 readFailures: integer,
                 writeFailures: integer,
+                startedAt: {
+                    type: "integer",
+                    description: "Wall-clock milliseconds when this store instance was created; not process start time.",
+                },
+                observedAt: {
+                    type: "integer",
+                    description: "Wall-clock milliseconds when this diagnostics snapshot was read.",
+                },
+                lastObservedAt: {
+                    type: "object",
+                    description: "Most recent counted observation per category in this store instance, in wall-clock milliseconds; null means none observed. Counts are cumulative and saturated, not health judgments or persisted history.",
+                    properties: {
+                        invalidRecords: { oneOf: [{ type: "integer" }, { type: "null" }] },
+                        oversizedRecords: {
+                            oneOf: [{ type: "integer" }, { type: "null" }],
+                        },
+                        readFailures: { oneOf: [{ type: "integer" }, { type: "null" }] },
+                        writeFailures: { oneOf: [{ type: "integer" }, { type: "null" }] },
+                    },
+                    required: [
+                        "invalidRecords",
+                        "oversizedRecords",
+                        "readFailures",
+                        "writeFailures",
+                    ],
+                    additionalProperties: false,
+                },
             },
             required: [
                 "invalidRecords",
@@ -484,6 +636,45 @@ const listSchema = {
     additionalProperties: false,
 };
 /** Host-supported subset: dynamic step result keys/values deliberately remain JSON. */
+const historyListSchema = {
+    type: "object",
+    properties: {
+        runs: { type: "array", items: summarySchema },
+        offset: integer,
+        limit: integer,
+        hasMore: { type: "boolean" },
+        scope: { type: "string", const: "retained_owner_runs" },
+        order: { type: "string", const: "snapshot_membership" },
+        pagination: paginationSchema,
+        page: {
+            type: "object",
+            properties: {
+                runCount: integer,
+                activeCount: integer,
+                attentionCount: integer,
+                reviewCount: integer,
+            },
+            required: ["runCount", "activeCount", "attentionCount", "reviewCount"],
+            additionalProperties: false,
+        },
+        diagnostics: listSchema.properties
+            .diagnostics,
+        message: string,
+    },
+    required: [
+        "runs",
+        "offset",
+        "limit",
+        "hasMore",
+        "scope",
+        "order",
+        "pagination",
+        "page",
+        "diagnostics",
+        "message",
+    ],
+    additionalProperties: false,
+};
 export const RUNTIME_OUTPUT_SCHEMAS = {
     runtime_capabilities: {
         type: "object",
@@ -515,6 +706,16 @@ export const RUNTIME_OUTPUT_SCHEMAS = {
                 required: ["maxSteps", "maxConcurrency", "maxActiveRuns", "maxWorkers"],
                 additionalProperties: false,
             },
+            capacity: {
+                type: "object",
+                properties: {
+                    scope: { type: "string", const: "module_process_root" },
+                    observedAt: integer,
+                    capacityBusy: { type: "boolean" },
+                },
+                required: ["scope", "observedAt", "capacityBusy"],
+                additionalProperties: false,
+            },
             authorization: { type: "string", const: "checked_at_execution" },
             message: string,
         },
@@ -526,9 +727,41 @@ export const RUNTIME_OUTPUT_SCHEMAS = {
             "workerAsync",
             "workerTools",
             "limits",
+            "capacity",
             "authorization",
             "message",
         ],
+        additionalProperties: false,
+    },
+    runtime_query: {
+        type: "object",
+        properties: {
+            kind: { type: "string", const: "owner_metadata_query" },
+            runs: { type: "array", items: {
+                    type: "object",
+                    properties: { runId: string, state: runState, goal: string, provenance: provenanceSchema,
+                        taskId: string, previousRunId: string, updatedAt: integer, stepCount: integer, action: actionSchema },
+                    required: ["runId", "state", "updatedAt", "stepCount", "action"], additionalProperties: false,
+                } },
+            view: { type: "string", enum: ["all", "needs_action", "review"] },
+            offset: integer, limit: integer, matchedCount: integer,
+            groups: { type: "object", properties: { needsAction: integer, review: integer },
+                required: ["needsAction", "review"], additionalProperties: false },
+            hasMore: { type: "boolean" },
+            scope: { type: "string", const: "retained_owner_runs" },
+            order: { type: "string", const: "updatedAt_desc_runId_asc" },
+            observedAt: integer, scannedCount: integer, scanLimit: { type: "integer", const: 1000 },
+            diagnostics: listSchema.properties.diagnostics,
+            message: string,
+        },
+        required: ["kind", "runs", "view", "offset", "limit", "matchedCount", "groups", "hasMore", "scope", "order", "observedAt", "scannedCount", "scanLimit", "diagnostics", "message"],
+        additionalProperties: false,
+    },
+    runtime_handoff: handoffSchema,
+    runtime_decision: {
+        type: "object",
+        properties: { ...summaryProperties, decisionHistory: decisionHistorySchema },
+        required: [...summaryRequired, "decisionLedger", "decisionHistory"],
         additionalProperties: false,
     },
     runtime_acknowledge: {
@@ -564,11 +797,77 @@ export const RUNTIME_OUTPUT_SCHEMAS = {
         additionalProperties: false,
     },
     runtime_run: { oneOf: [receiptSchema, summarySchema] },
-    runtime_status: { oneOf: [summarySchema, listSchema] },
+    runtime_task: {
+        type: "object",
+        properties: {
+            taskId: string,
+            pagination: paginationSchema,
+            runs: { type: "array", items: summarySchema },
+            offset: integer,
+            limit: integer,
+            hasMore: { type: "boolean" },
+            scope: { type: "string", const: "retained_owner_runs" },
+            order: {
+                type: "string",
+                enum: ["updatedAt_desc_runId_asc", "snapshot_membership"],
+            },
+            page: {
+                type: "object",
+                properties: {
+                    runCount: integer,
+                    activeCount: integer,
+                    attentionCount: integer,
+                    reviewCount: integer,
+                },
+                required: ["runCount", "activeCount", "attentionCount", "reviewCount"],
+                additionalProperties: false,
+            },
+            diagnostics: listSchema.properties
+                .diagnostics,
+            message: string,
+        },
+        required: [
+            "taskId",
+            "runs",
+            "offset",
+            "limit",
+            "hasMore",
+            "scope",
+            "order",
+            "page",
+            "diagnostics",
+            "message",
+        ],
+        additionalProperties: false,
+    },
+    runtime_notification: {
+        type: "object",
+        properties: {
+            runId: string,
+            current: {
+                type: "object",
+                properties: { key: string, shouldNotify: { type: "boolean" } },
+                required: ["key", "shouldNotify"],
+                additionalProperties: false,
+            },
+            receipt: notificationReceiptSchema,
+            verification: {
+                type: "string",
+                const: "owner_declared_not_delivery_verified",
+            },
+            message: string,
+        },
+        required: ["runId", "current", "verification", "message"],
+        additionalProperties: false,
+    },
+    runtime_status: { oneOf: [summarySchema, listSchema, historyListSchema] },
     runtime_result: {
         type: "object",
         properties: {
             ...summaryProperties,
+            planComparison: planComparisonSchema,
+            handoff: handoffSchema,
+            decisionHistory: decisionHistorySchema,
             acceptance: acceptanceSchema,
             ownerReviewHistory: ownerReviewHistorySchema,
             acknowledgementHistory: {
@@ -674,7 +973,8 @@ function actionableItems(value) {
         .map(object)
         .filter((item) => Boolean(item &&
         typeof item.kind === "string" &&
-        Object.hasOwn(attentionPriority, item.kind)))
+        Object.hasOwn(attentionPriority, item.kind) &&
+        !(item.kind === "decision_required" && ["answered", "superseded", "dismissed"].includes(String(item.disposition)))))
         .sort((a, b) => attentionPriority[a.kind] -
         attentionPriority[b.kind]);
 }
@@ -711,6 +1011,55 @@ function runText(value) {
     if (!run || typeof run.runId !== "string" || typeof run.state !== "string")
         return "";
     const lines = [run.runId + " · " + run.state];
+    const action = object(run.action);
+    if (typeof action?.message === "string")
+        lines.push("当前行动：" + action.message);
+    if (typeof run.taskId === "string")
+        lines.push("任务：" + run.taskId);
+    if (typeof run.previousRunId === "string")
+        lines.push("前次运行：" + run.previousRunId + "（仅关联，可能已清理）");
+    const comparison = object(run.planComparison);
+    if (comparison?.comparable === false) {
+        const reasons = {
+            no_previous_run: "未关联前次运行",
+            predecessor_unavailable: "前驱不可用（已清理、不可读或不可比较）",
+            incompatible_predecessor: "前驱关联或状态不兼容",
+        };
+        lines.push("计划差异：不可比较 · " + (reasons[String(comparison.reason)] ?? "原因未知"));
+    }
+    else if (comparison?.comparable === true) {
+        const changes = object(comparison.changes);
+        if (changes) {
+            const added = Array.isArray(changes.addedSteps) ? changes.addedSteps : [];
+            const removed = Array.isArray(changes.removedSteps) ? changes.removedSteps : [];
+            const changed = Array.isArray(changes.changedSteps) ? changes.changedSteps : [];
+            const flags = [changes.concurrencyChanged ? "并发" : "", changes.goalChanged ? "目标" : "", changes.provenanceChanged ? "来源说明" : "", changes.handoffChanged ? "交接上下文" : ""].filter(Boolean);
+            lines.push("计划差异：新增 " + added.length + "、删除 " + removed.length + "、修改 " + changed.length + " 个步骤" + (flags.length ? "；变化：" + flags.join("、") : ""));
+            if (added.length)
+                lines.push("新增步骤：" + added.join("、"));
+            if (removed.length)
+                lines.push("删除步骤：" + removed.join("、"));
+            for (const entry of changed) {
+                const step = object(entry);
+                if (step && Array.isArray(step.fields))
+                    lines.push("修改步骤：" + step.id + "（" + step.fields.join("、") + "）");
+            }
+            if (!added.length && !removed.length && !changed.length && !flags.length)
+                lines.push("已比较：所列计划字段无变化（忽略对象键序、步骤顺序和依赖顺序）。");
+            lines.push("仅计划描述差异，不展示输入正文或哈希；不证明行为等价或安全，不复用结果、不授权、不自动执行。");
+        }
+    }
+    const provenance = object(run.provenance);
+    const shown = (value) => typeof value === "string"
+        ? value.replace(/[\r\n\u0000-\u001f]/g, " ").slice(0, 160) +
+            (value.length > 160 ? "…（完整内容见JSON）" : "")
+        : "未提供";
+    lines.push("请求来源（说明，非授权凭据）：" + shown(provenance?.request_ref));
+    lines.push("约定范围（说明，不改变权限）：" + shown(provenance?.scope_summary));
+    lines.push("仅供参考来源：" +
+        (Array.isArray(provenance?.context_refs)
+            ? provenance.context_refs.map(shown).join("；")
+            : "未提供"));
     const attention = object(run.attention);
     if (attention && Array.isArray(attention.items)) {
         const labels = {
@@ -737,6 +1086,15 @@ function runText(value) {
                 "）；执行成功不代表验收通过，不触发默认提醒。", ...reviews.flatMap((item) => resultLocation(String(run.runId), item)));
         if (!alerts.length)
             lines.push("暂无必须处理提醒；常规进度和结果复核保留在摘要与 JSON 中。");
+    }
+    const decisions = object(run.decisionLedger);
+    if (decisions && Array.isArray(decisions.items)) {
+        const labels = { answered: "已记录答复", superseded: "被替代", dismissed: "不再处理" };
+        for (const raw of decisions.items) {
+            const item = object(raw);
+            if (item && typeof item.status === "string" && Object.hasOwn(labels, item.status))
+                lines.push("决策处置" + (typeof item.stepId === "string" ? "[" + item.stepId + "]" : "") + "：" + labels[item.status] + "（owner声明，不证明用户批准、解决或验收；详情见decisionHistory）。");
+        }
     }
     lines.push(progressText(run.progress));
     if (typeof run.executionSettled === "boolean")
@@ -918,14 +1276,70 @@ export function runtimePresentationMeta(_args, value) {
                 "\n普通异步：" +
                 result.ordinaryAsync +
                 " · Worker 异步：false\n" +
+                (typeof object(result.capacity)?.capacityBusy === "boolean"
+                    ? object(result.capacity)?.capacityBusy
+                        ? "共享运行准入：繁忙（瞬时观察，不排队）\n"
+                        : "共享运行准入：未观察到满载（不保证可用）\n"
+                    : "") +
                 result.message,
         };
+    if (result?.kind === "untrusted_run_handoff")
+        return {
+            title: "萧何运行摘要",
+            text: "显式上下文交接 · 来源 " + result.sourceRunId + " · 任务 " + result.taskId +
+                "\n摘要及所选步骤见工具JSON；内容未经核实，不授权、不执行，不自动注入Worker，不复用执行结果。",
+        };
+    if (result?.verification === "owner_declared_not_delivery_verified") {
+        const receipt = object(result.receipt);
+        return {
+            title: "萧何运行摘要",
+            text: "通知投递：" +
+                (receipt?.status ?? "未入队") +
+                " · revision " +
+                (receipt?.revision ?? 0) +
+                "\n" +
+                result.message,
+        };
+    }
+    if (result?.kind === "owner_metadata_query" && Array.isArray(result.runs)) {
+        const groups = object(result.groups);
+        return {
+            title: "萧何运行摘要",
+            text: "跨任务元数据查询 · " + result.view + " · 匹配运行 " + result.matchedCount +
+                " · 本页 " + result.runs.length + " · offset " + result.offset + " · 后续页 " + result.hasMore +
+                "\n分组（其他条件后、view前）：必须处理 " + groups?.needsAction + " · 待复核 " + groups?.review +
+                "\n" + result.message + "\n\n" +
+                (result.runs.length ? result.runs.map(runText).join("\n\n") : "当前条件及范围内无可读取运行，不证明没有待办。"),
+        };
+    }
     const text = Array.isArray(result?.runs)
         ? result.runs.length
             ? renderRunList(result.runs)
-            : "本会话暂无运行。"
+            : result?.scope === "retained_owner_runs"
+                ? "本页无可读取运行；请检查缺失项及后续页。"
+                : "本会话暂无运行。"
         : runText(value);
-    return { title: "萧何运行摘要", text };
+    return {
+        title: "萧何运行摘要",
+        text: result?.scope === "retained_owner_runs"
+            ? "任务：" +
+                (result.taskId ?? "全部保留运行") +
+                " · offset " +
+                result.offset +
+                " · 后续页 " +
+                result.hasMore +
+                "\n" +
+                result.message +
+                (object(result.pagination)
+                    ? "\n固定快照 · 缺失项 " +
+                        JSON.stringify(object(result.pagination)?.missingRunIds) +
+                        " · 下一页cursor " +
+                        (object(result.pagination)?.nextCursor ?? "无")
+                    : "") +
+                "\n\n" +
+                text
+            : text,
+    };
 }
 export function presentRuntimeResult(_args, result) {
     if (result.isError)

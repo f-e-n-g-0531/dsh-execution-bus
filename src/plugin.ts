@@ -1,6 +1,16 @@
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
 import {
+  RUNTIME_HANDOFF_DESCRIPTION,
+  RUNTIME_HANDOFF_PARAMETERS,
+  RUNTIME_DECISION_DESCRIPTION,
+  RUNTIME_DECISION_PARAMETERS,
+  RUNTIME_QUERY_DESCRIPTION,
+  RUNTIME_QUERY_PARAMETERS,
+  RUNTIME_TASK_DESCRIPTION,
+  RUNTIME_TASK_PARAMETERS,
+  RUNTIME_NOTIFICATION_DESCRIPTION,
+  RUNTIME_NOTIFICATION_PARAMETERS,
   RUNTIME_ACKNOWLEDGE_DESCRIPTION,
   RUNTIME_ACKNOWLEDGE_PARAMETERS,
   RUNTIME_CAPABILITIES_DESCRIPTION,
@@ -23,6 +33,37 @@ import {
   runtimePresentationMeta,
   presentRuntimeResult,
 } from "./presentation.js";
+
+// Public host integration API; no model tool can install or invoke a sender.
+export { RuntimeService };
+export { BusinessPromptHistory } from "./runtime/prompt-history.js";
+export type { BusinessPromptSnapshot, BusinessPromptHistorySummary, BusinessPromptHistoryRead, BusinessPromptHistorySaveInput, BusinessPromptDefaultChanges } from "./runtime/prompt-history.js";
+export type { HandoffSnapshot, HandoffSelection } from "./runtime/handoff.js";
+export type {
+  WorkerHostOptions,
+  DelegationPolicyAdapter,
+} from "./runtime/agent.js";
+export type {
+  DependencyContext,
+  DependencyPage,
+} from "./runtime/dependency-context.js";
+export { ModelWaitObserver } from "./runtime/model-wait.js";
+export type {
+  ModelWaitEvent,
+  ModelWaitStatus,
+  ModelWaitReason,
+} from "./runtime/model-wait.js";
+export {
+  createBusinessPromptOverrides,
+  previewBusinessPrompt,
+  compareBusinessPrompts,
+} from "./runtime/prompt-preview.js";
+export type {
+  BusinessPromptOverrides,
+  BusinessPromptPreview,
+} from "./runtime/prompt-preview.js";
+export type { CapacitySnapshot } from "./runtime/service.js";
+export type { NotificationSender } from "./runtime/notification-delivery.js";
 
 export const name = "xiao-he-runtime";
 // Worker creation and setup must use declared services on the mounting context.
@@ -63,6 +104,36 @@ export function apply(ctx: Context) {
     });
   };
 
+  register(
+    "runtime_handoff",
+    RUNTIME_HANDOFF_DESCRIPTION,
+    RUNTIME_HANDOFF_PARAMETERS,
+    (raw, exec) => runtime.handoff(raw, exec),
+  );
+  register(
+    "runtime_decision",
+    RUNTIME_DECISION_DESCRIPTION,
+    RUNTIME_DECISION_PARAMETERS,
+    (raw, exec) => runtime.decision(raw, exec),
+  );
+  register(
+    "runtime_query",
+    RUNTIME_QUERY_DESCRIPTION,
+    RUNTIME_QUERY_PARAMETERS,
+    (raw, exec) => runtime.query(raw, exec),
+  );
+  register(
+    "runtime_task",
+    RUNTIME_TASK_DESCRIPTION,
+    RUNTIME_TASK_PARAMETERS,
+    (raw, exec) => runtime.task(raw, exec),
+  );
+  register(
+    "runtime_notification",
+    RUNTIME_NOTIFICATION_DESCRIPTION,
+    RUNTIME_NOTIFICATION_PARAMETERS,
+    (raw, exec) => runtime.notification(raw, exec),
+  );
   register(
     "runtime_capabilities",
     RUNTIME_CAPABILITIES_DESCRIPTION,

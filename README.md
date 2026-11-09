@@ -4,9 +4,9 @@
 
 当前 mode 从 PTC 原地派生，Lead 仍用 PTC；仓库 dsh-execution-bus、npm 包名、预设 ID `xiao-he-runtime` 保持不变，不新增 team 模式。多 Agent 编排能力随 1.4.0 发布；标准插件入口对含 `agent` 计划的拒绝边界不变，见下方安全兼容边界。历史 0.x 版本说明保留当时名称。
 
-DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.6.0**
+DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.7.0**
 
-1.6.0 新增原 owner 的问题已知悉记录 `runtime_acknowledge`：普通问题减少重复提醒，问题版本变化后旧知悉失效；未知副作用即使知悉仍警示和提醒。展示按必须处理事项优先，成功结果复核与常规进度不触发默认提醒。知悉不是解决、验收或授权，不改变执行与恢复规则；见[发布说明](<docs/releases/1.6.0.md>)。发布不自动安装或重启日常 DSH。
+1.7.0 新增任务与跨任务查询、成员快照分页、决策处置、显式交接与通知回执，改进纯只读 DAG 调度，并提供可信宿主扩展及离线业务提示词历史。安全门禁与未知副作用不重放规则不变；见[发布说明](<docs/releases/1.7.0.md>)。发布不自动安装或重启日常 DSH。
 
 > 1.0 起产品从“执行总线模式”切换为**声明式运行时**：`runtime_run` 接收 DAG 计划，运行时按依赖并行执行、对只读步骤重试、逐步落盘并支持重启后恢复。旧的 `execution_bus` 工具与 `./core` 导出已移除；0.12.1 是最后一个总线版本，仍可在 npm/git 历史中查看。
 
@@ -32,7 +32,7 @@ DSH 独立插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.6.0**
 本版目标宿主为 **DSH 0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0，DSH peer 精确锁定 0.2.2-rc.1，不推导兼容其他宿主版本。旧版 1.3.3 的宿主目标仍为 0.2.1-rc.5。依赖安全告警及验证边界见[宿主兼容性](<docs/host-compatibility.md>)。
 
 ```text
-npm install --ignore-scripts @feng0531/dsh-execution-bus@1.6.0
+npm install --ignore-scripts @feng0531/dsh-execution-bus@1.7.0
 ```
 
 从源码验证待发布改动时，先用 `npm run pack:candidate` 生成本地 tgz，在隔离配置安装，不替换日常 DSH；正式包可用性以 npm 公开元数据及对应 GitHub Release 为准。
@@ -53,6 +53,77 @@ npm install --ignore-scripts @feng0531/dsh-execution-bus@1.6.0
 | `runtime_review` | 为完整成功且已收束的运行记录 owner 处置，绑定结果快照与 revision；不是人工或独立验收证明 |
 | `runtime_cancel` | 停止调度、传播取消 |
 | `runtime_resume` | 显式恢复 `interrupted` 运行 |
+
+## 行动摘要、任务视图与通知回执（1.7.0）
+
+以下能力随 1.7.0 提供；发布不会自动安装到日常 DSH。
+
+1. 摘要和列表项增加 `action:{kind,actor,message}`，卡片展示下一步行动，仅派生建议。
+2. `runtime_task({taskId,limit?,offset?})` 查询同 owner、同任务保留运行及本页待办计数，不是完整历史；与 `runtime_status` 列表均新增成员快照分页，旧 offset 分页保持不变。
+3. `runtime_notification` 提供显式通知回执：get → sync → claim → 宿主投递 → settle。新内容合并，旧回调拒绝，不自动发送或重跑 DAG。
+4. 包入口导出 `RuntimeService` 和 `NotificationSender` 类型，宿主可显式调用 `service.deliverNotification(runId, ownerExec, sender)`；只对 pending 回执投递一次，使用稳定 messageId，sender 返回 sent/not_sent/unknown。异常、未知或发送后取消保留 delivering，不自动重发；failed 需走回执协议显式核验处置。sender 由宿主绑定渠道和授权，不开放给模型。
+5. sent 仅为投递方声明，不证明实际送达、阅读、处理、交付或验收；delivering 崩溃遗留先核验渠道，不自动重发。
+6. 模型接口契约测试检查实际注册工具、输入/输出 schema、固定提示词、安全措辞和文本体积预算；任务卡片保留任务 ID、前次运行及下一步行动。
+7. RuntimeService 对规范化记录目录取得进程级独占锁；同模块同进程共享，其他持锁者拒绝 RUNTIME_ROOT_LOCKED。崩溃遗留锁不自动抢占，停机核验后手动处置；底层 RunStore/旧版/外部写入不受此合作锁保护。
+8. 存储诊断保留累计计数，并增加实例统计起点、快照观察时间和各类最近错误观察时间；不持久化、不包含路径正文，也不表示故障仍持续或已经恢复。
+
+9. `runtime_status` 列表与 `runtime_task` 可用 `snapshot:true` 获取首屏，或以 `cursor:<nextCursor>` 续页（`limit` 1–100，默认 20）。snapshot/cursor 均与 offset 互斥，cursor 与 snapshot 互斥；status 的 runId 模式不接受快照参数。捕获时按 `updatedAt_desc_runId_asc` 固定成员及顺序，返回 `order:"snapshot_membership"`；不冻结状态，每页重读 owner 记录，新增不插队。清理或不可读的成员显式列于 `pagination.missingRunIds`，不补位。`pagination` 含 `mode:"snapshot"/capturedAt/expiresAt/total/nextCursor?`（total 为捕获成员数）。快照有效 5 分钟，每 RuntimeService 实例最多 16 份（容量满淘汰旧快照），每份最多 1000 ID，超过单份上限拒绝；过期、重启、服务销毁或淘汰后报 `RUNTIME_NOT_FOUND`，需重新 `snapshot:true`，不承诺全量历史，也不要与活动 offset 页直接拼接。
+10. plan 新增可选 `provenance:{request_ref?,scope_summary?,context_refs?}`，至少一字段；文本 trim 后非空，长度上限分别为 1000/2000/每条 1000（UTF-16 code units，按原字符串计），refs 为 1–8 条，未知键拒绝。仅说明来源与范围、不授权、不自动抓取引用、不作为 Worker 指令；按 owner 隔离存储，run/task 卡分栏展示来源信息，缺失显示“未提供”。
+
+11. 完整 `runtime_result({runId})` 新增只读 `planComparison`，按步骤 ID 比较显式前驱的计划，展示新增、删除和字段变化；输入只报是否变化，不展示正文或哈希。前驱不可用时明确不可比较，不跨缺口比较、不复用结果、不授权或自动执行；列表、状态与结果分页不增加前驱读取。
+
+简短使用示例（1.7.0 接口）：
+
+```ts
+const first = await tools.runtime_status({snapshot:true, limit:20});
+if (first.pagination.nextCursor) {
+  const next = await tools.runtime_status({cursor:first.pagination.nextCursor, limit:20});
+  console.log(next.runs, next.pagination.missingRunIds);
+}
+const task = await tools.runtime_task({taskId:"audit", snapshot:true, limit:20});
+// 任务续页保留同一 taskId，并传 task.pagination.nextCursor，不传 snapshot/offset。
+```
+
+完整参数及存储边界见[协议](<docs/protocol.md#行动摘要任务视图与通知回执源码新增>)；计划来源示例见[provenance 契约](<docs/protocol.md#计划来源说明源码新增>)。
+
+### 跨任务待办与历史检索（1.7.0）
+
+当前源码新增只读工具 `runtime_query`，在同 owner 的保留运行内先筛选再分页：
+
+```ts
+await tools.runtime_query({view:"needs_action"}); // 跨任务必须处理事项
+await tools.runtime_query({view:"review"});       // 结果待复核，单独分组
+await tools.runtime_query({q:"issue:42", taskId:"audit", state:"failed", limit:20});
+```
+
+`q` 仅检索目标与 provenance，支持大小写不敏感的字面子串；不检索输入或结果正文。返回摘要、筛选后运行数和互斥分组计数，不自动执行或恢复。候选上限 1000，超限拒绝，不静默截取近期记录；每次查询重算，offset 翻页不冻结成员。完整参数、计数与诊断边界见[查询协议](<docs/protocol.md#跨任务待办与历史元数据检索源码新增未发布>)。
+
+### 显式交接与离线提示词历史（1.7.0）
+
+1. `runtime_handoff` 为同 owner、同任务的终态源运行生成所选结果的版本绑定交接摘要；显式放入后继 `plan.handoff` 才保存。提交与恢复重验来源及结果哈希，来源缺失或变化拒绝。摘要是不可信资料，不自动注入 Worker、不复用执行成功、不扩大授权。
+2. 包入口导出 `BusinessPromptHistory`，由可信宿主指定目录保存最多 32 个离线业务提示词修订，支持历史读取、revision 冲突检查及 `defaultChanges(revision)` 旧业务默认正文比较（缺失保持 unknown）。不注册模型工具、不应用到 Worker，不提供安全段覆盖。
+
+参数、保留及恢复边界见[交接协议](<docs/protocol.md#跨-run-显式上下文交接源码新增未发布>)与[提示词历史](<docs/protocol.md#离线业务提示词版本历史源码新增未发布>)。
+
+### 决策处置关联（1.7.0）
+
+新增 `runtime_decision`，区分“已知悉”与“已记录答复 / 被替代 / 不再处理”。读取完整报告和证据后，由原 owner 对当前问题版本显式留痕，可附答复引用和已存在的后继运行；不是用户批准、问题已解决或验收证明，不回答活 Worker，不自动续跑或改变授权。摘要保留处置状态，完整历史从 `runtime_result` 读取；版本变化后重新待处理。参数与示例见[协议](<docs/protocol.md#决策处置关联源码新增未发布>)。
+
+### 纯只读 DAG 调度（1.7.0）
+
+整份计划仅含 `read/glob/grep` 时，步骤完成且结果落盘后立即用空槽调度已满足依赖的步骤，不再等待同批慢步骤；并发上限不变，重试退避仍占槽，失败、超时、取消或存储故障停止新派发。含 `agent/edit/write/pwsh` 的整份计划保持原批次调度与隔离规则。本项不增加持久队列或自动恢复，发布不会自动安装到日常 DSH。
+
+### 共享容量观察（1.7.0）
+
+`runtime_capabilities({})` 新增 `capacity:{scope:"module_process_root",observedAt,capacityBusy}`，只说明同模块、同进程、同规范化运行根目录的运行准入是否已满，不显示其他 owner、run、任务或精确占槽数。false 仅表示观察时未满，不保证下一次执行成功；不预留容量、不排队、不授权，也不要据此轮询或自动重试。
+
+可信宿主可通过已持有的 `RuntimeService` 调用 `service.capacity()`，取得 `CapacitySnapshot`：`occupiedRuns/executingRuns/cleanupRuns/runLimit/workersInUse/workerLimit` 及范围和观察时间。executingRuns（含已准入恢复的初始化窗口）与终态尚未收束的 cleanupRuns 合计为 occupiedRuns；Worker 占槽包含创建、执行和清理。该宿主方法不注册模型工具，不读取磁盘或调用父策略；宿主须自行限制谁可查看精确聚合，不得原样转发给普通 owner。计数不是普通宿主调用或后台 Job 的实际存活统计，零值不证明其已停止；Worker 上限不表示标准插件已可运行 Worker。销毁后的服务拒绝查询，快照不持久化；原准入上限与满载即拒绝规则不变。
+
+### 可信宿主扩展与离线预览（1.7.0）
+
+可信宿主可通过 RuntimeService 第四个构造参数提供 WorkerHostOptions：显式绑定已获父级准入的 runtime_dependency_read 工具后，上游完整结果改为有界预览及版本绑定引用，按需分页；默认仍全文注入，缺失/截断仍拒绝。可选 onModelWait 回调仅观察宿主实际模型重试事件，不改变策略；rc.1 不保证发出这些事件，无状态不是健康证明。标准插件不配置这些选项，Worker 门禁保持不变。
+
+包入口另导出 createBusinessPromptOverrides、previewBusinessPrompt、compareBusinessPrompts，仅离线检查 communication/delivery 业务段及默认值漂移，不应用到 Worker、不自动保存或授权；持久历史须显式使用 BusinessPromptHistory。完整宿主契约见[协议](<docs/protocol.md#可信宿主-worker-扩展与离线提示词预览源码新增>)。
 
 ## 计划示例
 
@@ -126,7 +197,9 @@ npm run test:install   # 临时目录安装验证
 
 ## 文档
 
+- [Superagent 原型完整对照与结案边界](<docs/SUPERAGENT-COMPARISON.md>)：固定参考版本的覆盖、采用与不采用理由；后续会话先查此记录，不重复提出同一批建议。
+
 - [声明式运行时设计](<docs/DECLARATIVE-RUNTIME.md>)、[协议](<docs/protocol.md>)、[验证范围](<docs/validation.md>)、[产品结构](<docs/PRODUCT.md>)
 - [运行状态与故障处置](<docs/OPERATIONS.md>)、[验收与对照试验](<docs/FLOW-TEST.md>)、[研发路线](<docs/DEVELOPMENT-PLAN.md>)
-- [1.6.0 发布说明](<docs/releases/1.6.0.md>)、[1.5.0 发布说明](<docs/releases/1.5.0.md>)、[1.4.1 发布说明](<docs/releases/1.4.1.md>)、[发布流程](<docs/RELEASING.md>)、[第三方说明](<THIRD_PARTY_NOTICES.md>)
+- [1.7.0 发布说明](<docs/releases/1.7.0.md>)、[1.6.0 发布说明](<docs/releases/1.6.0.md>)、[1.5.0 发布说明](<docs/releases/1.5.0.md>)、[1.4.1 发布说明](<docs/releases/1.4.1.md>)、[发布流程](<docs/RELEASING.md>)、[第三方说明](<THIRD_PARTY_NOTICES.md>)
 - 0.x 总线历史与复盘：[复盘](<docs/RETROSPECTIVE.md>)、[整合说明](<docs/INTEGRATION.md>)

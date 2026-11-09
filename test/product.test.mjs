@@ -61,11 +61,16 @@ test("product schema, descriptions and prompt stay on one runtime contract", asy
       "runtime_acknowledge",
       "runtime_cancel",
       "runtime_capabilities",
+      "runtime_decision",
+      "runtime_handoff",
+      "runtime_notification",
+      "runtime_query",
       "runtime_result",
       "runtime_resume",
       "runtime_review",
       "runtime_run",
       "runtime_status",
+      "runtime_task",
     ]);
     for (const tool of tools) assert.equal(typeof tool.execute, "function");
   } finally {
