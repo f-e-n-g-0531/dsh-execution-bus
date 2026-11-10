@@ -32,7 +32,7 @@ node dev/compare-capacity.mjs --before dist --after dist --sizes 4 --interrupted
 
 每个 attempt 保存组别、顺序、起止时间、总耗时和摘要；失败 samples=null、cleanup=unknown。配对统计只使用两侧成功的配对，同时披露失败及缺失百分比数量；零基线不计算百分比。报告包含均值、中位数和逐对值，不能选择最有利统计口径宣称收益。
 
-构建摘要覆盖当前 11 个已知本地运行时执行文件（旧版六文件必需，retry、agent、agent-report、agent-trace、worker-quota 五模块可缺省；摘要区分缺失与存在，仅 ENOENT 视为缺失），worker 导入前后复核；不绑定第三方依赖、Node 二进制或任意未来新增依赖，升级执行依赖时需更新清单。报告另绑定运行器、基准入口和统计依赖的摘要，父进程在每个 worker 前后复核，持续修改会使该配对失败；这不消除改后恢复的 TOCTOU，也不认证已加载代码。PID 仅用于一致性检查，不是独立认证。
+构建摘要覆盖基准脚本 RUNTIME_ARTIFACT_FILES 列出的 16 个本地运行时文件（前六项必需，其余十项允许旧构建缺省；摘要区分缺失与存在，仅 ENOENT 视为缺失），worker 导入前后复核；不绑定第三方依赖、Node 二进制或任意未来新增依赖，升级执行依赖时需更新清单。报告另绑定运行器、基准入口和统计依赖的摘要，父进程在每个 worker 前后复核，持续修改会使该配对失败；这不消除改后恢复的 TOCTOU，也不认证已加载代码。PID 仅用于一致性检查，不是独立认证。
 
 ## 边界
 

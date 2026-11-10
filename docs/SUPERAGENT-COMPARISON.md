@@ -1,5 +1,7 @@
 # Superagent 原型对照与结案记录
 
+> 固定的 2026-11-09 对照与验证记录。下文“本轮”“未发布”和包版本 1.6.0 均指当时工作树，不是当前发布状态；采用的离线默认正文历史已随 [1.7.0](<releases/1.7.0.md>) 提供。固定参考基线与结案规则继续有效。
+
 ## 固定范围与状态
 
 - 参考：[deepseek-ai/dsh-superagent-prototype](<https://github.com/deepseek-ai/dsh-superagent-prototype/tree/8c32a9dc5d72c033816c6a8110b37f40cf94fba4>)，提交 `8c32a9dc5d72c033816c6a8110b37f40cf94fba4`；2026-11-09 远端 HEAD 与本地 clean 快照一致。

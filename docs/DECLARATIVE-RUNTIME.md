@@ -32,17 +32,11 @@ Agent 输入为 `{prompt, access?:"read", max_steps?:1..32, output_format?:"text
 
 报告 evidence 仅自报，不打开文件核实、不产生授权或独立验收；`completed/partial/blocked` 不改变 DAG success 条件，正常结束且格式合格的报告仍可放行依赖。下游只代表顺序，不代表报告授权自动写入；Lead 核实后另行修改。完整限制见[结构化报告与追溯](<protocol.md#结构化报告与追溯>)。
 
-本轮最小增量：同 root 跨 run 共享最多 8 个 Worker（创建、执行、dispose 全程占槽，满载失败而不隐式排队）；只读工具按结构化错误决定重试，退避 100/200/400ms 并响应取消。计划可选 task_id/previous_run_id 关联同 owner、同 task 的已结束并清理完成的前驱，不复用结果或扩大权限。report 模式可选 acceptance_criteria，要求每项恰好一条自报观察结果；这不是独立验收，也不改变 DAG 成功条件。完整限制见[协议](<protocol.md>)。
+运行时还提供以下约束与关联能力：同 root 跨 run 共享最多 8 个 Worker（创建、执行、dispose 全程占槽，满载失败而不隐式排队）；只读工具按结构化错误决定重试，退避 100/200/400ms 并响应取消。计划可选 task_id/previous_run_id 关联同 owner、同 task 的已结束并清理完成的前驱，不复用结果或扩大权限。report 模式可选 acceptance_criteria，要求每项恰好一条自报观察结果；这不是独立验收，也不改变 DAG 成功条件。完整限制见[协议](<protocol.md>)。
 
 ## 工具
 
-| 工具 | 作用 |
-|---|---|
-| `runtime_run` | 提交计划；默认等待完成并返回步骤状态，仅不含 Agent 且调用未携带 `exec.toolSet` 的受控宿主计划可用 `async:true` 立即返回 `runId` |
-| `runtime_status` | 无 `runId` 按本会话分页：`limit` 1–100（默认 20）、`offset` 0–10000（默认 0）；带 `runId` 返回步骤状态（不含结果），不能同时传分页参数 |
-| `runtime_result` | 读取已保存的步骤结果（单步 >64KiB 只返回 truncated/bytes） |
-| `runtime_cancel` | 停止调度、传播取消 |
-| `runtime_resume` | 显式恢复 `interrupted` 运行；遇到未知副作用则整个 run 失败，不再启动新步骤 |
+提交与结果读取使用 `runtime_run/runtime_status/runtime_result`；取消和恢复使用 `runtime_cancel/runtime_resume`。能力查询、任务视图、决策处置、复核、交接与通知回执等完整工具清单及参数见[协议](<protocol.md#工具>)，入门示例见 [README](<../README.md#第一次使用>)。
 
 ## 语义与边界
 

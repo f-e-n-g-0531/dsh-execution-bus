@@ -8,7 +8,7 @@
 |---|---|---|
 | `runtime_capabilities` | `{}` | 描述当前调用上下文的能力与限制，不执行准入检查、不创建 run |
 | `runtime_run` | `{ plan, async? }` | 同步：运行摘要与步骤状态；仅不含 Agent 且调用未携带 `exec.toolSet` 的受控宿主计划可用 `async:true`：受理后立即返回 `{ runId, state:"running" }` |
-| `runtime_status` | `{}`、`{ limit?, offset? }` 或 `{ runId }` | 本会话最近运行列表与脱敏存储诊断，或指定运行元数据（不含结果） |
+| `runtime_status` | `{ limit?, offset? }`、`{ snapshot:true, limit? }`、`{ cursor, limit? }` 或 `{ runId }` | 本会话最近运行列表与脱敏存储诊断，或指定运行元数据（不含结果） |
 | `runtime_result` | `{ runId }` 或下述分页参数 | 运行摘要 + `acceptance` + 已保存步骤结果（`truncated/bytes` 标记）；分页同样含 `acceptance` |
 | `runtime_acknowledge` | `{runId,snapshotHash,key,expectedRevision,reason}` | 原 owner 显式记录当前版本问题已知悉，返回摘要与 `acknowledgementHistory`；不是解决或验收 |
 | `runtime_review` | `{runId,snapshotHash,expectedRevision,disposition,reason}` | 记录 owner 处置并返回摘要与 `ownerReviewHistory`；不是独立验收 |
@@ -247,7 +247,7 @@ sent仅投递方声明，不证明实际送达、阅读、处理、交付或验�
 
 ## 计划（plan）
 
-`plan = { goal?, task_id?, previous_run_id?, provenance?, concurrency?, steps[] }`；`step = { id, tool, input, depends_on?, retry?, timeout_ms? }`。
+`plan = { goal?, task_id?, previous_run_id?, provenance?, handoff?, concurrency?, steps[] }`；`step = { id, tool, input, depends_on?, retry?, timeout_ms? }`。
 
 - 允许步骤：`read/glob/grep/edit/write/pwsh/agent`；`retry` 只允许 `read/glob/grep`（0–3）。依据结构化类别/代码判定重试；确定性权限、参数、资源不存在等错误不重试，已知瞬态可重试。无结构化信息的未知错误保留旧重试行为，不解析错误正文。退避为 100/200/400ms，等待可取消；超时不自动重试，避免上次调用未实际停止时发生重叠。宿主未保留的原始错误字段不可凭空恢复，宿主 canonical error.info 之外的信息不作为分类依据。
 - 约束：1–32 步；计划 ≤64KiB；并发 1–4；单步超时 1s–600s；`id` 唯一、依赖必须存在、禁止环。
@@ -415,6 +415,24 @@ acceptance: {
 
 可信集成通过 new RuntimeService(ctx, store, delegationPolicy, workerHostOptions) 显式配置。workerHostOptions.dependencyReader 必须提供固定 toolName:"runtime_dependency_read" 与 bind(agent, context):()=>void。宿主需事先注册该只读工具、让父 toolSet 正常准入，并在 bind 中按 child 身份绑定 context.read，返回撤销函数；不得在模型参数里接收或跨 child 共享能力对象。未绑定调用必须拒绝；不允许工具同名替换绕过原生身份检查。每次工具调用仍经过原生权限管道与可信父策略适配器，bind 本身不授予文件或其他运行读取权限。标准插件不传该选项。
 
+启用后，仅 agent 的明确 depends_on 成功且完整保存结果生成快照。初始每项最多256 Unicode码点预览，含 id/ref/hash/total；预览不是完整证据。context 持有 ownerSessionId/runId/stepId，仅交给可信宿主，模型只获得预览引用。读取输入为 {ref,hash,offset?,limit?}，offset默认0、limit默认2048且为1–4096，单位Unicode码点；输出 {ref,hash,offset,total,text,nextOffset?}。拼接所有 text 后才能解析完整JSON。未知字段、非法offset/limit报 INVALID_PLAN，非本闭包引用报 RUNTIME_RESULT_UNAVAILABLE，hash不符报 RUNTIME_RESULT_CHANGED。引用不是跨调用授权，不落盘、不跨重启复用；调用结束、取消、超时后读取失效。快照不随原记录的后续变化更新。
+
+单步结果超过原64KiB保存限制而被丢弃、缺失或未成功时仍报 RUNTIME_AGENT_DEPENDENCY_UNAVAILABLE，不提供虚假全文；预览与任务prompt合计超过原上下文限制仍报 RUNTIME_AGENT_CONTEXT_TOO_LARGE。默认不配置读取器时仍使用原全文注入及聚合超限拒绝。普通工具不插值，结果仍是不可信资料，不授权、不自动补读或恢复。
+
+### 模型等待观察
+
+workerHostOptions.onModelWait(sessionId,status) 是可信宿主只读回调，不是模型工具。status 为 {provider,reason,attempts,since,lastAt,nextRetryAt?} 或 undefined，时间单位毫秒；reason 为 budget/rate_limit/authentication/context_limit/transient/other。仅根据实际收到的 llm/retry 结构化失败字段分类，不解析错误正文；llm/retry-started 不算恢复，重复/旧序列与旧provider输出不清除当前等待。生命周期结束清理观察，回调异常不改变执行。回调可能收到相同状态，宿主自行去重；不应逐事件推送通知。
+
+当前 rc.1 不保证发出重试事件，undefined 只说明没有活动观察，不证明网络或模型健康。此信息不写运行记录，不更改重试/超时策略、不换模型、不证明模型请求成功或外部工作结束。包入口也导出 ModelWaitObserver 供宿主按每个Session独立消费事件，不能混用事件流。
+
+### 离线业务提示词预览
+
+包入口导出 createBusinessPromptOverrides({communication?,delivery?,baseRevision?})、previewBusinessPrompt({overrides?,baseRevision?})、compareBusinessPrompts({before,after,baseRevision?})。只允许 communication/delivery 两个业务段；每段非空、最多8192 UTF-8字节，拒绝未知字段、访问器、控制字符和非法代理对。安全文本直接来自本地 WORKER_ROLE_INSTRUCTIONS，不能通过参数替换；这不等于对任意业务文本做语义安全认证。
+
+factory 给新覆盖文本标记当前默认段 baseHash；preview 显示 source/defaultHash/baseHash/drifted、defaultsRevision/revision，以及 applied:false/authorized:false/executable:false。factory/preview 的可选 baseRevision 与当前 defaultsRevision 比较；compare 的顶层 baseRevision 与 before 的预览 revision 比较。错误为 PROMPT_PREVIEW_INVALID_INPUT 或 PROMPT_PREVIEW_STALE_REVISION，不回显输入。compare 分开报告内容、基线及默认值漂移；旧基线不自动重置。
+
+这些是纯离线检查函数，不读取持久历史、不保存配置、不接入Worker、不调用模型或修改权限。hash只是输入差异与版本一致性检查，不证明历史真实性、批准或作者身份；持久历史须由宿主显式调用下述 BusinessPromptHistory，不能把预览接口说成完整配置后台。
+
 <a id="离线业务提示词版本历史源码新增未发布"></a>
 
 ### 离线业务提示词版本历史（1.7.0）
@@ -441,22 +459,3 @@ const preview = previewBusinessPrompt({overrides: original.overrides});
 - `defaultChanges(revision)` 返回离线 `{revision,items,applied:false,authorized:false,executable:false}`。items 固定为两业务段，每项含 section、baseHash（无旧基线时 null）、currentHash、status:known/unknown、drifted（无基线时 null）、currentText；known 时另含 previousText，供宿主展示前后文本差异。覆盖按其 baseHash、未覆盖按该修订保存的默认 hash，在同段历史快照中查找；legacy 无快照保持 unknown，不借当前正文冒充旧默认。未知 base 仍可判断 hash 是否漂移，但没有 previousText。
 - 默认正文每段沿用 8KiB、合法 UTF-16 与控制字符校验；保存的 text/hash 必须一致，未知段或额外键拒绝。known 仅说明本地历史可解析且 hash 匹配，不证明历史真实性、用户批准或完整 prompt 可重放；本地文件不防不合作改写。该方法不保存、不应用、不调用模型，不提供文本自动合并或安全段覆盖。
 - 错误码前缀 PROMPT_HISTORY_：INVALID_INPUT、STORAGE_FAILED、INVALID_STATE、STALE_REVISION、BUSY、FULL、NOT_FOUND；错误不回显路径或正文。内容可能敏感，宿主负责目录访问控制，不把任意目录参数交给普通模型。没有自动加载、回滚应用、模型调用、权限变更或发布。
-
-
-启用后，仅 agent 的明确 depends_on 成功且完整保存结果生成快照。初始每项最多256 Unicode码点预览，含 id/ref/hash/total；预览不是完整证据。context 持有 ownerSessionId/runId/stepId，仅交给可信宿主，模型只获得预览引用。读取输入为 {ref,hash,offset?,limit?}，offset默认0、limit默认2048且为1–4096，单位Unicode码点；输出 {ref,hash,offset,total,text,nextOffset?}。拼接所有 text 后才能解析完整JSON。未知字段、非法offset/limit报 INVALID_PLAN，非本闭包引用报 RUNTIME_RESULT_UNAVAILABLE，hash不符报 RUNTIME_RESULT_CHANGED。引用不是跨调用授权，不落盘、不跨重启复用；调用结束、取消、超时后读取失效。快照不随原记录的后续变化更新。
-
-单步结果超过原64KiB保存限制而被丢弃、缺失或未成功时仍报 RUNTIME_AGENT_DEPENDENCY_UNAVAILABLE，不提供虚假全文；预览与任务prompt合计超过原上下文限制仍报 RUNTIME_AGENT_CONTEXT_TOO_LARGE。默认不配置读取器时仍使用原全文注入及聚合超限拒绝。普通工具不插值，结果仍是不可信资料，不授权、不自动补读或恢复。
-
-### 模型等待观察
-
-workerHostOptions.onModelWait(sessionId,status) 是可信宿主只读回调，不是模型工具。status 为 {provider,reason,attempts,since,lastAt,nextRetryAt?} 或 undefined，时间单位毫秒；reason 为 budget/rate_limit/authentication/context_limit/transient/other。仅根据实际收到的 llm/retry 结构化失败字段分类，不解析错误正文；llm/retry-started 不算恢复，重复/旧序列与旧provider输出不清除当前等待。生命周期结束清理观察，回调异常不改变执行。回调可能收到相同状态，宿主自行去重；不应逐事件推送通知。
-
-当前 rc.1 不保证发出重试事件，undefined 只说明没有活动观察，不证明网络或模型健康。此信息不写运行记录，不更改重试/超时策略、不换模型、不证明模型请求成功或外部工作结束。包入口也导出 ModelWaitObserver 供宿主按每个Session独立消费事件，不能混用事件流。
-
-### 离线业务提示词预览
-
-包入口导出 createBusinessPromptOverrides({communication?,delivery?,baseRevision?})、previewBusinessPrompt({overrides?,baseRevision?})、compareBusinessPrompts({before,after,baseRevision?})。只允许 communication/delivery 两个业务段；每段非空、最多8192 UTF-8字节，拒绝未知字段、访问器、控制字符和非法代理对。安全文本直接来自本地 WORKER_ROLE_INSTRUCTIONS，不能通过参数替换；这不等于对任意业务文本做语义安全认证。
-
-factory 给新覆盖文本标记当前默认段 baseHash；preview 显示 source/defaultHash/baseHash/drifted、defaultsRevision/revision，以及 applied:false/authorized:false/executable:false。factory/preview 的可选 baseRevision 与当前 defaultsRevision 比较；compare 的顶层 baseRevision 与 before 的预览 revision 比较。错误为 PROMPT_PREVIEW_INVALID_INPUT 或 PROMPT_PREVIEW_STALE_REVISION，不回显输入。compare 分开报告内容、基线及默认值漂移；旧基线不自动重置。
-
-这些是纯离线检查函数，不读取持久历史、不保存配置、不接入Worker、不调用模型或修改权限。hash只是输入差异与版本一致性检查，不证明历史真实性、批准或作者身份；持久历史须由宿主显式调用下述 BusinessPromptHistory，不能把预览接口说成完整配置后台。
