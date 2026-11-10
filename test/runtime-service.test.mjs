@@ -1,6 +1,6 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import fs, { mkdtempSync, rmSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +10,7 @@ import { RuntimeExecutor } from "../dist/runtime/executor.js";
 import { RunStore } from "../dist/runtime/store.js";
 import { parsePlan } from "../dist/runtime/plan.js";
 import { createServiceContext } from "./fixtures/service-context.mjs";
+import { storageFailureSummary } from "./fixtures/storage-failure.mjs";
 
 function deferred() {
   let resolve;
@@ -48,7 +49,14 @@ class ObservedStore extends RunStore {
   fail = false;
   save(run) {
     if (this.fail) throw Error("RUNTIME_STORAGE_FAILED");
-    super.save(run);
+    try {
+      super.save(run);
+    } catch (error) {
+      try { console.error(storageFailureSummary(error)); } catch {
+        // Diagnostic output must never replace the original storage failure.
+      }
+      throw error;
+    }
     for (const watcher of [...this.watchers]) {
       if (watcher.predicate(run)) {
         this.watchers.splice(this.watchers.indexOf(watcher), 1);
@@ -62,6 +70,46 @@ class ObservedStore extends RunStore {
     return event.promise;
   }
 }
+for (const brokenLogger of [false, true]) {
+  test(`observed checkpoint failure preserves real save cause with logger failure=${brokenLogger}`, async () => {
+    const f = fixture();
+    const logs = [];
+    const cause = Object.assign(Error("private filesystem message"), { code: "EPERM", syscall: "rename", path: "private-path", dest: "private-destination" });
+    let savedError;
+    const originalSave = RunStore.prototype.save;
+    const run = new RuntimeExecutor(f.store, async () => ({})).createRun("owner", parsePlan(plan()));
+    const rename = mock.method(fs, "renameSync", () => { throw cause; });
+    syncBuiltinESMExports();
+    const save = mock.method(RunStore.prototype, "save", function (record) {
+      try { return originalSave.call(this, record); } catch (error) { savedError = error; throw error; }
+    });
+    const logger = mock.method(console, "error", (text) => {
+      logs.push(text);
+      if (brokenLogger) throw Error("private logger failure");
+    });
+    try {
+      assert.throws(() => f.store.save(run), (error) => {
+        assert.equal(error, savedError);
+        assert.equal(error.message, "RUNTIME_STORAGE_FAILED");
+        assert.equal(error.cause, cause);
+        return true;
+      });
+      assert.equal(logs.length, 1);
+      assert.deepEqual(JSON.parse(logs[0]), { operation: "checkpoint-save", chain: [
+        { code: "unknown", syscall: "unknown" }, { code: "EPERM", syscall: "rename" },
+      ] });
+      assert.doesNotMatch(logs[0], /private|path|destination|stack/);
+      assert.equal(f.store.diagnostics().writeFailures, 1);
+    } finally {
+      logger.mock.restore();
+      save.mock.restore();
+      rename.mock.restore();
+      syncBuiltinESMExports();
+      await f.close();
+    }
+  });
+}
+
 function fixture(invoke = async () => ({ ok: true })) {
   const root = mkdtempSync(path.join(os.tmpdir(), "xiaohe-service-"));
   const store = new ObservedStore(root);

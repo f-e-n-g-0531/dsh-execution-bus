@@ -1,6 +1,6 @@
 # 验证范围与使用限制
 
-本文说明证据边界，不是生产环境认证。本文固定的历史参考基线为 **v1.3.2**（提交 `8d1a5bf`），已于 2026-11-04 发布至 [npm](https://registry.npmjs.org/@feng0531/dsh-execution-bus/1.3.2) 和 [GitHub Release](https://github.com/f-e-n-g-0531/dsh-execution-bus/releases/tag/v1.3.2)，交付范围见[发布说明](<releases/1.3.2.md>)；v1.3.0 是历史研发起点，v1.3.2 生产运行时与 v1.3.1 一致；版本发布不代表下述真实环境验收已经完成。v1.4.0 依赖目标为 **DSH 0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node ≥22；当前包版本为 1.7.1，多 Agent 编排自 1.4.0 提供，公开 1.3.3 的原包兼容范围不因本次适配而改变，兼容范围见[宿主兼容性](<host-compatibility.md>)。历史 v1.2.0 的 Windows、Node.js 24.21.0、DSH rc.2 组件验证记录只属于当时版本，不能代替 rc.1 工作树候选的复核。后续研发与真实验收门禁见[研发计划](<DEVELOPMENT-PLAN.md>)。
+本文说明证据边界，不是生产环境认证。本文固定的历史参考基线为 **v1.3.2**（提交 `8d1a5bf`），已于 2026-11-04 发布至 [npm](https://registry.npmjs.org/@feng0531/dsh-execution-bus/1.3.2) 和 [GitHub Release](https://github.com/f-e-n-g-0531/dsh-execution-bus/releases/tag/v1.3.2)，交付范围见[发布说明](<releases/1.3.2.md>)；v1.3.0 是历史研发起点，v1.3.2 生产运行时与 v1.3.1 一致；版本发布不代表下述真实环境验收已经完成。v1.4.0 依赖目标为 **DSH 0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node ≥22；当前包版本为 1.7.2，多 Agent 编排自 1.4.0 提供，公开 1.3.3 的原包兼容范围不因本次适配而改变，兼容范围见[宿主兼容性](<host-compatibility.md>)。历史 v1.2.0 的 Windows、Node.js 24.21.0、DSH rc.2 组件验证记录只属于当时版本，不能代替 rc.1 工作树候选的复核。后续研发与真实验收门禁见[研发计划](<DEVELOPMENT-PLAN.md>)。
 
 公开版本验证只属于其原始候选；工作树或包内容变化后须重新绑定候选 SHA，不沿用公开包验证结论。环境与预算按[研发准备记录](<RESEARCH-READINESS.md>)确认，模板完整不代表已验收。
 

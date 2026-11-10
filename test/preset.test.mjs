@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse } from "yaml";
 import { load } from "js-yaml";
@@ -48,7 +50,25 @@ test("declaration derivation preserves nested config, disabled flags and host ex
 test(
   "real registry derived composition keeps write tools and host denials without exposing runtime to original agent",
   { timeout: 15000 },
-  async () => {
+  async (t) => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "xiaohe-preset-"));
+    const previous = process.env.XIAOHE_RUNTIME_DIR;
+    process.env.XIAOHE_RUNTIME_DIR = root;
+    const disposers = [];
+    t.after(async () => {
+      const failures = [];
+      try {
+        for (const dispose of disposers.reverse()) {
+          try { await dispose(); } catch (error) { failures.push(error); }
+        }
+        // Never remove a directory while a failed disposal may still own it.
+        if (!failures.length) rmSync(root, { recursive: true, force: true });
+      } finally {
+        if (previous === undefined) delete process.env.XIAOHE_RUNTIME_DIR;
+        else process.env.XIAOHE_RUNTIME_DIR = previous;
+      }
+      if (failures.length) throw new AggregateError(failures, "Preset fixture disposal failed");
+    });
     const ctx = new Context();
     new SystemPrompt(ctx, {});
     new AgentRegistry(ctx);
@@ -70,8 +90,10 @@ test(
       { id: "jobs", name: "@deepseek-ai/dsh-tool-jobs" },
     ];
     const original = await registry.register({ id: "ptc", plugins: base });
+    disposers.push(original);
     const document = await registry.readDocument("ptc");
     const registrarScope = createScope(ctx, {});
+    disposers.push(() => registrarScope.dispose());
     const fiber = registrarScope.ctx.plugin(Registrar);
     await fiber.await();
     const stop = () => registrarScope.dispose();
@@ -82,12 +104,15 @@ test(
     const agent = { id: "selected", session: { header: { cwd: process.cwd() } } };
     const normalAgent = { id: "normal" };
     const selected = createScope(ctx, agent);
+    disposers.push(() => selected.dispose());
     const normal = createScope(ctx, normalAgent);
+    disposers.push(() => normal.dispose());
     agent.ctx = selected.ctx;
     normalAgent.ctx = normal.ctx;
     await registry.mount(selected.ctx, PRESET_ID);
     await registry.mount(normal.ctx, "ptc");
     await stop();
+    let deny;
     try {
       assert.ok(ctx.tools.get("runtime_run", agent));
       assert.equal(ctx.tools.get("runtime_run", normalAgent), undefined);
@@ -95,7 +120,7 @@ test(
         assert.ok(ctx.tools.get(name, agent), name);
         assert.ok(ctx.tools.get(name, normalAgent), name);
       }
-      const deny = ctx.on("tools/pre-execute", async (exec, next) =>
+      deny = ctx.on("tools/pre-execute", async (exec, next) =>
         exec.name === "write" ? { kind: "deny", reason: "host-policy-still-enforced" } : next(),
       );
       const result = await executeToolFixture(ctx, {
@@ -107,12 +132,8 @@ test(
       });
       assert.equal(result.isError, true);
       assert.match(JSON.stringify(result), /host-policy-still-enforced/);
-      deny();
     } finally {
-      await selected.dispose();
-      await normal.dispose();
-      await stop();
-      await original();
+      deny?.();
     }
   },
 );

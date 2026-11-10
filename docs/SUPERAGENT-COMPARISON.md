@@ -10,6 +10,19 @@
 - 本轮采用：业务默认正文快照与离线前后比较。其余差异按下表明确结案，不保留无触发条件的“下次建议”。
 - 当前状态：本轮机制筛选与采用项实现已完成，组件回归及独立静态复核完成；首轮出现一次未复现的宿主集成失败，详见验证记录。不是参考项目零缺陷证明或真实环境认证。
 
+## 2026-11-10 明确要求的全仓重读
+
+用户明确要求再次全仓逐行阅读，本轮重新读取同一参考基线的全部 **216 个跟踪文件、37068 行**（111 个实现、65 个测试/夹具、40 个文档/提示词/配置/锁文件）。Lead 核实参考 checkout clean、远端 HEAD 未变；五组分工与 Lead 的逐文件台账对照 Git 清单，缺失与多列均为 0。分工全文阅读不表示每个文件均经 Lead 二次逐行审计；参考测试只读未执行，不构成运行或安全认证。原有未提交测试修复保持不变。
+
+新增维护方法候选：参考 [docs.spec.ts:58–66](<https://github.com/deepseek-ai/dsh-superagent-prototype/blob/8c32a9dc5d72c033816c6a8110b37f40cf94fba4/tests/docs.spec.ts#L58-L66>) 将目录与架构的模块/测试表双向比对；当前 [文档测试](<../test/docs.test.mjs>) 检查链接、示例、版本及安全声明，尚无同类全模块职责索引约束。仅在维护导航有实际成本时考虑在现有产品文档增加简短职责/写入者/测试映射；本轮不新增目录文档或实施门禁，不强制所有 class 注释或编号链接顺序。未确认新的必要运行时功能，既有采用与不采用处置保持有效。
+
+本轮另核实两个**仅参考原型的静态问题**：
+
+- [registry.ts:25–34](<https://github.com/deepseek-ai/dsh-superagent-prototype/blob/8c32a9dc5d72c033816c6a8110b37f40cf94fba4/src/sources/registry.ts#L25-L34>) 的旧清理器可重复无条件删除同名 kind/health 映射；先注销、重注册后再调用旧清理器，会破坏新注册。内层 HealthEntry.release 幂等不保护外层。未运行复现，也不声称宿主正常生命周期会重复调用；经验是清理须幂等并绑定注册身份，不移植此注册实现。
+- [settings.ts:202–212](<https://github.com/deepseek-ai/dsh-superagent-prototype/blob/8c32a9dc5d72c033816c6a8110b37f40cf94fba4/src/app/settings.ts#L202-L212>) 的多次 pause/resume 产生同名同正文通知，[sessions.ts:179–185](<https://github.com/deepseek-ai/dsh-superagent-prototype/blob/8c32a9dc5d72c033816c6a8110b37f40cf94fba4/src/app/sessions.ts#L179-L185>) 以 name+payload hash 为交付ID，[delivery.ts:65–84](<https://github.com/deepseek-ai/dsh-superagent-prototype/blob/8c32a9dc5d72c033816c6a8110b37f40cf94fba4/src/app/delivery.ts#L65-L84>) 全历史去重，首次成功后的独立变化通知可被压掉。设置已保存不等于变化消息都投递；经验是事件身份和传输重试身份分开，不全局缓存相同正文。未执行真实投递，不是萧何已证实缺陷。
+
+锁文件还存在部分 peer 绑定范围不符，以及根 Node 声明涵盖的 24.0–24.10 与构建依赖 tsdown 要求 >=24.11.0 不一致；均仅静态元数据警示，不宣称安装失败、依赖安全或跨平台验收。未修改参考源码、安装依赖或启动服务；未以这些差异重开来源平台、持久 Effects、独立编辑器、常驻 Worker 等既有不采用项。
+
 ## 统一处置
 
 | 机制 | 萧何对应证据 | 处置与理由 |
