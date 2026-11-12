@@ -4,7 +4,7 @@
 
 模型说明“做哪些步骤、先后有什么依赖”，萧何负责执行与保存结果；主助手（Lead）负责判断结果、继续修改和验收。适合把已经明确的重复操作交给运行时，而不是让模型每次重新编写调度代码。
 
-DSH 插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.7.2** · [版本变化](<docs/releases/1.7.2.md>)
+DSH 插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.7.3** · [版本变化](<docs/releases/1.7.3.md>)
 
 > **使用前先确认：**本版面向 **DSH 0.2.2-rc.1**。标准插件支持普通工具 DAG（按依赖连接的步骤图）；**独立只读 Worker 不可直接使用**，含 agent 的计划会因缺少可信父策略适配器而拒绝。非商业用途按[许可证](<LICENSE>)使用，商业用途须另行取得书面授权。
 
@@ -41,7 +41,7 @@ DSH 插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.7.2** · [版本�
 在目标 DSH 配置使用的包环境中执行：
 
 ```text
-npm install --ignore-scripts @feng0531/dsh-execution-bus@1.7.2
+npm install --ignore-scripts @feng0531/dsh-execution-bus@1.7.3
 ```
 
 将包加入该配置的 `dsh.profile.bundles`，或通过宿主插件管理器加载 bundle。加载后选择 **萧何 / Xiao He**，预设 ID 为 `xiao-he-runtime`。安装 npm 包本身不等于已加载 bundle；发布新版本也不会自动升级或重启你的 DSH。

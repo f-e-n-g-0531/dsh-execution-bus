@@ -49,7 +49,7 @@ test("install smoke cannot recover or prune the operator's home or explicit run 
       "import { apply } from " +
       JSON.stringify(pathToFileURL(path.resolve("dist/plugin.js")).href) +
       ";\n" +
-      "const disposers=[];apply({effect(fn){disposers.push(fn())},tools:{register(){}}});for(const dispose of disposers)await dispose();\n";
+      `const disposers=[],tools=[];apply({effect(fn){disposers.push(fn())},tools:{register(tool){tools.push(tool)}}});try{await tools.find(t=>t.name==="runtime_status").execute({},{});}catch(e){if(e.message!=="OWNING_SESSION_REQUIRED")throw e;}for(const dispose of disposers)await dispose();`;
     const script = path.join(temp, "verify.mjs");
     writeFileSync(script, source);
     for (const override of [undefined, explicitRoot]) {

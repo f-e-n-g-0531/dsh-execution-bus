@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, unlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -54,6 +54,8 @@ test(
     const root = mkdtempSync(path.join(os.tmpdir(), "xiaohe-preset-"));
     const previous = process.env.XIAOHE_RUNTIME_DIR;
     process.env.XIAOHE_RUNTIME_DIR = root;
+    const lock = path.join(root, ".runtime-owner.lock");
+    writeFileSync(lock, "crashed-owner-fixture");
     const disposers = [];
     t.after(async () => {
       const failures = [];
@@ -111,6 +113,8 @@ test(
     normalAgent.ctx = normal.ctx;
     await registry.mount(selected.ctx, PRESET_ID);
     await registry.mount(normal.ctx, "ptc");
+    assert.equal(readFileSync(lock, "utf8"), "crashed-owner-fixture");
+    unlinkSync(lock); // Only this isolated fixture lock; never an operator root.
     await stop();
     let deny;
     try {
