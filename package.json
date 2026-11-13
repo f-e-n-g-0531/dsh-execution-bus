@@ -1,6 +1,6 @@
 {
   "name": "@feng0531/dsh-execution-bus",
-  "version": "1.7.4",
+  "version": "1.7.5",
   "type": "module",
   "private": false,
   "license": "SEE LICENSE IN LICENSE",
@@ -108,7 +108,8 @@
     "@deepseek-ai/dsh-working-directory": "0.2.2-rc.3",
     "@deepseek-ai/dsh-scope": "0.2.2-rc.3",
     "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.3",
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.3"
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.3",
+    "semver": "7.8.6"
   },
   "dependencies": {
     "js-yaml": "4.3.2"

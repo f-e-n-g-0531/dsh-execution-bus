@@ -6,6 +6,7 @@ import { runInstallSmoke } from "./install-smoke.mjs";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { npm, report } from "./npm.mjs";
+import { satisfies } from "semver";
 assert.ok(
   process.argv.length <= 3,
   "Usage: npm run test:install -- [local.tgz]",
@@ -41,6 +42,27 @@ try {
     path.join(temp, "package.json"),
     JSON.stringify({ private: true, type: "module" }),
   );
+  // A real host install supplies one coherent SDK set. Resolving these wide
+  // peer ranges freely lets npm mix alpha/rc packages from different releases.
+  const hostTarget = "0.2.2-rc.3";
+  const hostPins = {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/cordis-plugin-include": "1.1.0",
+  };
+  const specs = Object.keys(expected.peerDependencies).map((name) =>
+    name + "@" + (hostPins[name] ?? hostTarget),
+  );
+  npm(
+    [
+      "install",
+      "--ignore-scripts",
+      "--save-exact",
+      "--no-audit",
+      "--no-fund",
+      ...specs,
+    ],
+    temp,
+  );
   npm(
     [
       "install",
@@ -59,17 +81,27 @@ try {
   assert.equal(actual.name, expected.name);
   assert.equal(actual.version, expected.version);
   assert.deepEqual(actual.peerDependencies, expected.peerDependencies);
-  for (const [name, version] of Object.entries(expected.peerDependencies)) {
-    if (!name.startsWith("@deepseek-ai/dsh-")) continue;
+  for (const [name, range] of Object.entries(expected.peerDependencies)) {
     const peer = JSON.parse(
       await readFile(
         path.join(temp, "node_modules", name, "package.json"),
         "utf8",
       ),
     );
-    assert.equal(peer.version, version, "Installed host peer differs: " + name);
+    assert.ok(
+      satisfies(peer.version, range),
+      "Installed host peer outside declared range: " + name + "@" + peer.version,
+    );
+    if (!name.startsWith("@deepseek-ai/dsh-")) continue;
+    assert.equal(
+      peer.version,
+      hostTarget,
+      "Installed host peer differs from the pinned SDK set: " + name,
+    );
   }
-  console.log("Production host peers verified: DSH 0.2.2-rc.3");
+  console.log(
+    "Production host peers verified as one coherent DSH " + hostTarget + " set",
+  );
   // A fresh child process rooted outside this checkout prevents resolving source devDependencies.
   const source = `import assert from 'node:assert/strict';import {readFileSync} from 'node:fs';import * as plugin from './node_modules/@feng0531/dsh-execution-bus/dist/plugin.js';
 const preset=await import('./node_modules/@feng0531/dsh-execution-bus/dist/preset.js');assert.equal(preset.PRESET_ID,'xiao-he-runtime');assert.equal(preset.derivePreset('[]').plugins.at(-1).name,'@feng0531/dsh-execution-bus/mode');const mode=await import('@feng0531/dsh-execution-bus/mode');const legacy=await import('@feng0531/dsh-execution-bus/test-mode');assert.equal(mode,legacy);assert.equal(mode.apply,legacy.apply);
