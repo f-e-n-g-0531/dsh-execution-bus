@@ -21,9 +21,9 @@ import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import type { TurnEndReason } from "@deepseek-ai/dsh-session";
 import type { ToolExecution, ToolRunContext } from "@deepseek-ai/dsh-tools";
-import { NativeToolExecutor } from "@deepseek-ai/dsh-tool-executor-native";
 import { setSandboxMode } from "@deepseek-ai/dsh-sandbox-policy";
 import { setApprovalPolicy } from "@deepseek-ai/dsh-user-approval";
+import { hostUsesLegacyAgentFactory } from "./host-compat.js";
 import type {} from "@deepseek-ai/dsh-agent-preset-registry";
 import type {} from "@deepseek-ai/dsh-working-directory";
 import { ERRORS } from "../error-codes.js";
@@ -206,6 +206,10 @@ export async function executeAgent(
   // private scope internals or replay the full parent chain as a substitute.
   if (typeof delegationPolicy?.checkParentPolicy !== "function")
     throw Error(ERRORS.RUNTIME_AGENT_POLICY_UNSUPPORTED);
+  // Optional on pre-0.2.2 hosts; load only after the trusted Worker gate.
+  const { NativeToolExecutor } = await import(
+    "@deepseek-ai/dsh-tool-executor-native"
+  );
   const route = parent.model.current();
   if (!route) throw Error(ERRORS.RUNTIME_AGENT_MODEL_REQUIRED);
   const reader = context ? hostOptions?.dependencyReader : undefined;
@@ -256,9 +260,8 @@ export async function executeAgent(
   const onAbort = () => child?.cancel({ kind: "parent" });
   combined.addEventListener("abort", onAbort, { once: true });
   try {
-    handle = await ctx.agents.create({
+    const createOptions: Record<string, unknown> = {
       sessionId: SessionId("runtime-agent-" + randomUUID()),
-      parentAgent: parent,
       meta: {
         cwd: ctx.workingDirectory.get(parent.session),
         origin: "subagent",
@@ -272,7 +275,7 @@ export async function executeAgent(
           : { maxTokens: parent.options.maxTokens }),
       },
       signal: combined,
-      setup(childCtx, agent) {
+      setup(childCtx: Context, agent: Agent) {
         child = agent;
         if (reader && context) releaseReader = reader.bind(agent, context);
         ctx.agentPresets.composeFrom(childCtx, parent.ctx);
@@ -303,7 +306,7 @@ export async function executeAgent(
         const parentDenied = new WeakSet<object>();
         childCtx.on(
           "tools/pre-execute",
-          async (call, next) => {
+          async (call: ToolExecution, next: () => Promise<any>) => {
             if (call.agent !== agent) return next();
             parentChecked.add(call);
             if (combined.aborted) {
@@ -334,7 +337,7 @@ export async function executeAgent(
           },
           { global: true },
         );
-        childCtx.tools.guard((call) => {
+        childCtx.tools.guard((call: ToolExecution) => {
           // A child-scoped allow that skips next() never reaches the parent hook.
           // Missing proof of that hook is therefore a denial, not authorization.
           if (!parentChecked.has(call) || parentDenied.has(call))
@@ -355,23 +358,26 @@ export async function executeAgent(
             return ERRORS.RUNTIME_AGENT_TOOL_DENIED;
           return undefined;
         });
-        childCtx.on("agent/pre-step", async (payload, next) => {
-          if (payload.agent !== agent) return next();
-          if (combined.aborted) {
-            agent.cancel({ kind: "parent" });
-            return { kind: "reject" };
-          }
-          if (++steps > input.max_steps) {
-            limited = true;
-            agent.cancel({
-              kind: "hook",
-              reason: ERRORS.RUNTIME_AGENT_STEP_LIMIT,
-            });
-            return { kind: "reject" };
-          }
-          return next();
-        });
-        childCtx.on("session/event", (session, event) => {
+        childCtx.on(
+          "agent/pre-step",
+          async (payload: any, next: () => Promise<any>) => {
+            if (payload.agent !== agent) return next();
+            if (combined.aborted) {
+              agent.cancel({ kind: "parent" });
+              return { kind: "reject" };
+            }
+            if (++steps > input.max_steps) {
+              limited = true;
+              agent.cancel({
+                kind: "hook",
+                reason: ERRORS.RUNTIME_AGENT_STEP_LIMIT,
+              });
+              return { kind: "reject" };
+            }
+            return next();
+          },
+        );
+        childCtx.on("session/event", (session: any, event: any) => {
           if (session !== agent.session) return;
           modelWait.observe(event);
           notifyWait(agent.id);
@@ -390,7 +396,9 @@ export async function executeAgent(
           }
         });
       },
-    });
+    };
+    if (hostUsesLegacyAgentFactory()) createOptions.parentAgent = parent;
+    handle = await ctx.agents.create(createOptions as never);
     child = handle.agent;
     onCreated?.(child.id, structuredClone(trace));
     if (combined.aborted) throw Error(ERRORS.RUNTIME_AGENT_ABORTED);

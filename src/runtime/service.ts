@@ -1,7 +1,12 @@
 import { randomUUID, createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import path from "node:path";
-import { createHandoffSnapshot, parseHandoffInput, parseHandoffSnapshot, verifyHandoffSelections } from "./handoff.js";
+import {
+  createHandoffSnapshot,
+  parseHandoffInput,
+  parseHandoffSnapshot,
+  verifyHandoffSelections,
+} from "./handoff.js";
 import { runAction } from "./action.js";
 import { HistoryPages } from "./history.js";
 import { parseQuery, queryRuns } from "./query.js";
@@ -12,7 +17,7 @@ import { deliverNotification } from "./notification-delivery.js";
 import type { NotificationSender } from "./notification-delivery.js";
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
-import { ToolExecutionPipeline } from "@deepseek-ai/dsh-tools/pipeline";
+import { executeHostTool } from "./host-compat.js";
 import { ERRORS } from "../error-codes.js";
 import { runProgress, runGuidance } from "../presentation.js";
 import type { RunProgress, RunGuidance } from "../presentation.js";
@@ -145,7 +150,10 @@ function summary(run: RunRecord): RunSummary {
     guidance: runGuidance(run),
     recovery: runRecovery(run, settlement.get(run.runId)),
     attention: runAttention(run, settlement.get(run.runId)),
-    decisionLedger: decisionLedger(run, runAttention(run, settlement.get(run.runId))),
+    decisionLedger: decisionLedger(
+      run,
+      runAttention(run, settlement.get(run.runId)),
+    ),
     waiting: runWaiting(run, settlement.get(run.runId)),
     ownerReview: ownerReview(run),
     action: runAction(run, settlement.get(run.runId)),
@@ -390,7 +398,9 @@ export class RuntimeService {
     // Reject overflow before filtering: a rare old action must never silently
     // disappear behind a recent-window limit. Existing storage scan semantics apply.
     const records = new Map(
-      this.store.list(1001, owner, 0, undefined, true).map((run) => [run.runId, run]),
+      this.store
+        .list(1001, owner, 0, undefined, true)
+        .map((run) => [run.runId, run]),
     );
     for (const run of [
       ...this.manager.failures.values(),
@@ -399,16 +409,22 @@ export class RuntimeService {
       if (run.ownerSessionId === owner) records.set(run.runId, run);
     }
     if (records.size > 1000) throw Error(ERRORS.RUNTIME_INVALID_STATE);
-    const result = queryRuns([...records.values()], input, (id) => settlement.get(id));
+    const result = queryRuns([...records.values()], input, (id) =>
+      settlement.get(id),
+    );
     return {
       kind: "owner_metadata_query" as const,
       runs: result.runs.map((run) => ({
         runId: run.runId,
         state: run.state,
         ...(run.goal === undefined ? {} : { goal: run.goal }),
-        ...(run.plan.provenance === undefined ? {} : { provenance: structuredClone(run.plan.provenance) }),
+        ...(run.plan.provenance === undefined
+          ? {}
+          : { provenance: structuredClone(run.plan.provenance) }),
         ...(run.plan.taskId === undefined ? {} : { taskId: run.plan.taskId }),
-        ...(run.plan.previousRunId === undefined ? {} : { previousRunId: run.plan.previousRunId }),
+        ...(run.plan.previousRunId === undefined
+          ? {}
+          : { previousRunId: run.plan.previousRunId }),
         updatedAt: run.updatedAt,
         stepCount: run.steps.length,
         action: runAction(run, settlement.get(run.runId)),
@@ -425,7 +441,8 @@ export class RuntimeService {
       scannedCount: records.size,
       scanLimit: 1000,
       diagnostics: this.store.diagnostics(),
-      message: "仅当前owner可读取的保留运行元数据，先筛选后分页；最多1000条候选，超限拒绝而非截取近期记录。groups为其他条件筛选后、view筛选前的互斥运行数；matchedCount为view筛选后运行数，均非事项数。每次查询实时重算，offset翻页不冻结成员；损坏/不可读记录见diagnostics，空结果不证明没有待办。不是全量历史、授权或验收，不搜索原始结果/输入，不自动执行、恢复或投递。",
+      message:
+        "仅当前owner可读取的保留运行元数据，先筛选后分页；最多1000条候选，超限拒绝而非截取近期记录。groups为其他条件筛选后、view筛选前的互斥运行数；matchedCount为view筛选后运行数，均非事项数。每次查询实时重算，offset翻页不冻结成员；损坏/不可读记录见diagnostics，空结果不证明没有待办。不是全量历史、授权或验收，不搜索原始结果/输入，不自动执行、恢复或投递。",
     };
   }
 
@@ -475,7 +492,10 @@ export class RuntimeService {
             progress: runProgress(run),
             guidance: runGuidance(run),
             attention: runAttention(run, settlement.get(run.runId)),
-            decisionLedger: decisionLedger(run, runAttention(run, settlement.get(run.runId))),
+            decisionLedger: decisionLedger(
+              run,
+              runAttention(run, settlement.get(run.runId)),
+            ),
             waiting: runWaiting(run, settlement.get(run.runId)),
             ownerReview: ownerReview(run),
             action: runAction(run, settlement.get(run.runId)),
@@ -545,7 +565,8 @@ export class RuntimeService {
             count +
             run.attention.items.filter(
               (item) =>
-                (!item.acknowledged || item.kind === "inspect_external_state") &&
+                (!item.acknowledged ||
+                  item.kind === "inspect_external_state") &&
                 !(item.kind === "decision_required" && item.disposition),
             ).length,
           0,
@@ -622,7 +643,8 @@ export class RuntimeService {
             n +
             run.attention.items.filter(
               (item) =>
-                (!item.acknowledged || item.kind === "inspect_external_state") &&
+                (!item.acknowledged ||
+                  item.kind === "inspect_external_state") &&
                 !(item.kind === "decision_required" && item.disposition),
             ).length,
           0,
@@ -814,18 +836,40 @@ export class RuntimeService {
   decision(raw: unknown, exec: ToolRunContext) {
     this.ensureOpen();
     const sessionId = this.sessionId(exec);
-    const input = plain(raw, new Set([
-      "runId", "snapshotHash", "key", "expectedRevision", "disposition", "reason", "answer_ref", "successor_run_id",
-    ]));
+    const input = plain(
+      raw,
+      new Set([
+        "runId",
+        "snapshotHash",
+        "key",
+        "expectedRevision",
+        "disposition",
+        "reason",
+        "answer_ref",
+        "successor_run_id",
+      ]),
+    );
     const run = this.owned(input.runId, sessionId);
     if (exec.signal?.aborted) throw Error(ERRORS.RUNTIME_CANCELLED);
-    if (this.manager.active.has(run.runId) || this.manager.failures.has(run.runId) ||
-      run.state === "running" || run.state === "interrupted") throw Error(ERRORS.RUNTIME_INVALID_STATE);
+    if (
+      this.manager.active.has(run.runId) ||
+      this.manager.failures.has(run.runId) ||
+      run.state === "running" ||
+      run.state === "interrupted"
+    )
+      throw Error(ERRORS.RUNTIME_INVALID_STATE);
     const declaration = {
-      snapshotHash: input.snapshotHash, key: input.key, expectedRevision: input.expectedRevision,
-      disposition: input.disposition, reason: input.reason,
-      ...(input.answer_ref === undefined ? {} : { answerRef: input.answer_ref }),
-      ...(input.successor_run_id === undefined ? {} : { successorRunId: input.successor_run_id }),
+      snapshotHash: input.snapshotHash,
+      key: input.key,
+      expectedRevision: input.expectedRevision,
+      disposition: input.disposition,
+      reason: input.reason,
+      ...(input.answer_ref === undefined
+        ? {}
+        : { answerRef: input.answer_ref }),
+      ...(input.successor_run_id === undefined
+        ? {}
+        : { successorRunId: input.successor_run_id }),
     } as DecisionInput;
     if (!validDecisionInput(declaration)) throw Error(ERRORS.INVALID_PLAN);
     const saved = this.store.recordDecision(run.runId, sessionId, declaration);
@@ -931,7 +975,9 @@ export class RuntimeService {
       ownerReviewHistory: run.ownerReviews ?? [],
       acknowledgementHistory: run.acknowledgements ?? [],
       decisionHistory: run.decisionDispositions ?? [],
-      ...(run.plan.handoff === undefined ? {} : { handoff: structuredClone(run.plan.handoff) }),
+      ...(run.plan.handoff === undefined
+        ? {}
+        : { handoff: structuredClone(run.plan.handoff) }),
       planComparison: this.comparePredecessor(run),
       results: structuredClone(run.results),
       finished: run.state !== "running" && run.state !== "interrupted",
@@ -976,7 +1022,8 @@ export class RuntimeService {
     const run = this.owned(input.runId, this.sessionId(exec));
     if (run.state !== "interrupted" || this.manager.active.has(run.runId))
       throw Error(ERRORS.RUNTIME_INVALID_STATE);
-    if (run.plan.handoff !== undefined) this.validateHandoff(run.plan, this.sessionId(exec));
+    if (run.plan.handoff !== undefined)
+      this.validateHandoff(run.plan, this.sessionId(exec));
     validateExecution(run.plan);
     if (
       run.plan.steps.some((step) => step.tool === "agent") &&
@@ -1015,7 +1062,8 @@ export class RuntimeService {
     const promise = Promise.resolve()
       .then(() => {
         // Recheck source versions after the scheduling boundary, before any dispatch.
-        if (run.plan.handoff !== undefined) this.validateHandoff(run.plan, run.ownerSessionId);
+        if (run.plan.handoff !== undefined)
+          this.validateHandoff(run.plan, run.ownerSessionId);
         if (exec.signal?.aborted && !detached) controller.abort();
         this.store.save(run);
         if (run.state === "cancelled") return run;
@@ -1142,17 +1190,25 @@ export class RuntimeService {
   private handoffSource(runId: string, owner: string): RunRecord {
     this.owned(runId, owner);
     const source = this.store.load(runId);
-    if (!source || source.ownerSessionId !== owner) throw Error(ERRORS.RUNTIME_NOT_FOUND);
-    if (!["succeeded", "failed", "cancelled"].includes(source.state) ||
-        this.manager.active.has(runId) || this.manager.failures.has(runId) ||
-        settlement.get(runId) !== true || !source.plan.taskId)
+    if (!source || source.ownerSessionId !== owner)
+      throw Error(ERRORS.RUNTIME_NOT_FOUND);
+    if (
+      !["succeeded", "failed", "cancelled"].includes(source.state) ||
+      this.manager.active.has(runId) ||
+      this.manager.failures.has(runId) ||
+      settlement.get(runId) !== true ||
+      !source.plan.taskId
+    )
       throw Error(ERRORS.RUNTIME_INVALID_STATE);
     return source;
   }
 
   private validateHandoff(plan: Plan, owner: string): void {
     const handoff = parseHandoffSnapshot(plan.handoff);
-    if (plan.taskId !== handoff.taskId || plan.previousRunId !== handoff.sourceRunId)
+    if (
+      plan.taskId !== handoff.taskId ||
+      plan.previousRunId !== handoff.sourceRunId
+    )
       throw Error(ERRORS.INVALID_PLAN);
     const source = this.handoffSource(handoff.sourceRunId, owner);
     if (source.plan.taskId !== handoff.taskId) throw Error(ERRORS.INVALID_PLAN);
@@ -1196,8 +1252,7 @@ export class RuntimeService {
           release();
         }
       }
-      const pipeline = new ToolExecutionPipeline(this.ctx);
-      const prepared = await pipeline.prepare({
+      const result = await executeHostTool(this.ctx, {
         name: tool,
         callId: (String(exec.callId) +
           ":runtime:" +
@@ -1209,11 +1264,6 @@ export class RuntimeService {
         arguments: input,
         signal,
       });
-      const outcome =
-        prepared.kind === "dispatch"
-          ? await pipeline.dispatch(prepared.exec)
-          : prepared;
-      const result = await pipeline.complete(prepared.exec, outcome);
       if (result.isError) {
         // Canonical host error codes only; never inspect content/message or tool values.
         // rc.1 may omit raw status/errno, which cannot safely be reconstructed.

@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { ModelWaitObserver } from "./model-wait.js";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
-import { NativeToolExecutor } from "@deepseek-ai/dsh-tool-executor-native";
 import { setSandboxMode } from "@deepseek-ai/dsh-sandbox-policy";
 import { setApprovalPolicy } from "@deepseek-ai/dsh-user-approval";
+import { hostUsesLegacyAgentFactory } from "./host-compat.js";
 import { ERRORS } from "../error-codes.js";
 import { parseWorkerReport, parseAcceptanceCriteria, workerCriteriaInstructions, WORKER_REPORT_INSTRUCTIONS, } from "./agent-report.js";
 import { WORKER_PROMPT_VERSION, WORKER_ROLE_INSTRUCTIONS, promptHash, modelRoute, } from "./agent-trace.js";
@@ -107,6 +107,8 @@ export async function executeAgent(ctx, exec, raw, signal, onCreated, onTrace, d
     // private scope internals or replay the full parent chain as a substitute.
     if (typeof delegationPolicy?.checkParentPolicy !== "function")
         throw Error(ERRORS.RUNTIME_AGENT_POLICY_UNSUPPORTED);
+    // Optional on pre-0.2.2 hosts; load only after the trusted Worker gate.
+    const { NativeToolExecutor } = await import("@deepseek-ai/dsh-tool-executor-native");
     const route = parent.model.current();
     if (!route)
         throw Error(ERRORS.RUNTIME_AGENT_MODEL_REQUIRED);
@@ -157,9 +159,8 @@ export async function executeAgent(ctx, exec, raw, signal, onCreated, onTrace, d
     const onAbort = () => child?.cancel({ kind: "parent" });
     combined.addEventListener("abort", onAbort, { once: true });
     try {
-        handle = await ctx.agents.create({
+        const createOptions = {
             sessionId: SessionId("runtime-agent-" + randomUUID()),
-            parentAgent: parent,
             meta: {
                 cwd: ctx.workingDirectory.get(parent.session),
                 origin: "subagent",
@@ -284,7 +285,10 @@ export async function executeAgent(ctx, exec, raw, signal, onCreated, onTrace, d
                     }
                 });
             },
-        });
+        };
+        if (hostUsesLegacyAgentFactory())
+            createOptions.parentAgent = parent;
+        handle = await ctx.agents.create(createOptions);
         child = handle.agent;
         onCreated?.(child.id, structuredClone(trace));
         if (combined.aborted)

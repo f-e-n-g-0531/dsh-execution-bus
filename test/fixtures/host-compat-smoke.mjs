@@ -1,0 +1,42 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { Context } from "@deepseek-ai/cordis";
+import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
+import { ToolRuntime } from "@deepseek-ai/dsh-tools";
+import { pathToFileURL } from "node:url";
+const { executeHostTool } = await import(pathToFileURL(path.resolve("node_modules/@feng0531/dsh-execution-bus/dist/runtime/host-compat.js")).href);
+import * as plugin from "@feng0531/dsh-execution-bus";
+import { derivePreset } from "@feng0531/dsh-execution-bus/preset";
+import * as mode from "@feng0531/dsh-execution-bus/mode";
+
+const version = process.argv[2] ?? "unknown";
+const checks = [];
+const pass = (name, fn) => { fn(); checks.push(name); };
+const dir = mkdtempSync(path.join(tmpdir(), "host-smoke-"));
+try {
+  process.env.XIAOHE_RUNTIME_DIR = dir;
+  const ctx = new Context();
+  new SystemPrompt(ctx, {}); new ToolRuntime(ctx, {});
+  const cwd = process.cwd();
+  ctx.provide("workingDirectory"); ctx.set("workingDirectory", { defaultDirectory: cwd, get: () => cwd, ensure: async () => cwd, set: async () => cwd });
+  ctx.provide("agents"); const owner = { id: "smoke-owner", session: { header: { cwd } } }; ctx.set("agents", { get: id => id === owner.id ? owner : undefined });
+  const registered = []; const dispose = ctx.tools.register({ name: "read", description: "smoke read", parameters: { type: "object" }, output: { schema: {}, render: () => [] }, async execute(args) { return { content: String(args.file_path), truncated: false }; } });
+  registered.push(dispose);
+  pass("real ToolRuntime/systemPrompt/scope", () => assert.ok(ctx.tools));
+  pass("plugin entry/preset/mode", () => { assert.equal(plugin.name, "xiao-he-runtime"); assert.equal(typeof derivePreset, "function"); assert.equal(typeof mode.apply, "function"); });
+  const invoke = input => executeHostTool(ctx, { ...input, callId: randomUUID(), agent: owner, signal: new AbortController().signal });
+  const result = await invoke({ name: "read", arguments: { file_path: "fixture.txt" } });
+  pass("typed ordinary read result", () => { assert.equal(result.isError, false); assert.equal(result.value?.content, "fixture.txt"); });
+  const nested = await invoke({ name: "write", arguments: { file_path: "forbidden" }, parent: "foreign-token" });
+  pass("nested write guard", () => assert.equal(nested.isError, true));
+  pass("root/parent identity", () => assert.ok(result.meta === undefined || result.meta));
+  const status = await invoke({ name: "runtime_status", arguments: {} });
+  pass("status/result/cancel owner boundary", () => assert.equal(status.isError, true));
+  const gate = await invoke({ name: "agent", arguments: { prompt: "must not create worker" } });
+  pass("standard worker gate rejects zero creation", () => assert.equal(gate.isError, true));
+  for (const d of registered) await d?.(); await ctx.dispose?.();
+  console.log(JSON.stringify({ status: "passed", version, checks }));
+} catch (error) { console.log(JSON.stringify({ status: "failed", version, checks, error: String(error?.stack ?? error) })); process.exitCode = 1; } finally { rmSync(dir, { recursive: true, force: true }); delete process.env.XIAOHE_RUNTIME_DIR; }

@@ -69,7 +69,7 @@ try {
     );
     assert.equal(peer.version, version, "Installed host peer differs: " + name);
   }
-  console.log("Production host peers verified: DSH 0.2.2-rc.1");
+  console.log("Production host peers verified: DSH 0.2.2-rc.3");
   // A fresh child process rooted outside this checkout prevents resolving source devDependencies.
   const source = `import assert from 'node:assert/strict';import {readFileSync} from 'node:fs';import * as plugin from './node_modules/@feng0531/dsh-execution-bus/dist/plugin.js';
 const preset=await import('./node_modules/@feng0531/dsh-execution-bus/dist/preset.js');assert.equal(preset.PRESET_ID,'xiao-he-runtime');assert.equal(preset.derivePreset('[]').plugins.at(-1).name,'@feng0531/dsh-execution-bus/mode');const mode=await import('@feng0531/dsh-execution-bus/mode');const legacy=await import('@feng0531/dsh-execution-bus/test-mode');assert.equal(mode,legacy);assert.equal(mode.apply,legacy.apply);

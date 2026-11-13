@@ -214,7 +214,7 @@ async function fixture(mode = "ptc", scopedPresentation = false) {
 }
 
 test(
-  "rc.1: native host honors preset-scoped PTC without changing native control agents",
+  "rc.3: native host honors preset-scoped PTC without changing native control agents",
   { timeout: 20000 },
   async () => {
     const f = await fixture("ptc", true);

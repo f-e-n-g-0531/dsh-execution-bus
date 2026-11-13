@@ -65,7 +65,7 @@ test("registered model surface stays within budget and matches schemas and instr
       WORKER_ROLE_INSTRUCTIONS.length + WORKER_REPORT_INSTRUCTIONS.length <=
         9000,
     );
-    assert.match(product.RUNTIME_INSTRUCTIONS, /rc.1.*可信父策略适配器/);
+    assert.match(product.RUNTIME_INSTRUCTIONS, /rc\.3.*可信父策略适配器/);
     assert.match(
       product.RUNTIME_INSTRUCTIONS,
       /accepted不证明独立验收或人工批准/,

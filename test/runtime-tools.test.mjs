@@ -93,7 +93,7 @@ async function fixture() {
   return { scope, call, calls, dir, ctx, peer, agent };
 }
 
-test("rc.1 real pipeline preserves conditional tool admission and nested identity", async () => {
+test("rc.3 real pipeline preserves conditional tool admission and nested identity", async () => {
   const f = await fixture();
   const controller = new AbortController();
   const observed = { pre: [], execute: [] };

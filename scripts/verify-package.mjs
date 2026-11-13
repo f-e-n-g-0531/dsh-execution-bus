@@ -39,6 +39,8 @@ export function verifyReport(r, p) {
     "dist/runtime/agent-report.d.ts",
     "dist/runtime/agent-trace.js",
     "dist/runtime/agent-trace.d.ts",
+    "dist/runtime/host-compat.js",
+    "dist/runtime/host-compat.d.ts",
     "dist/runtime/dependency-context.js",
     "dist/runtime/dependency-context.d.ts",
     "dist/runtime/model-wait.js",
@@ -139,21 +141,26 @@ export function verifyReport(r, p) {
     if (target.includes("*")) continue;
     assert.ok(paths.has(target.slice(2)));
   }
-  assert.deepEqual(p.peerDependencies, {
-    "@deepseek-ai/cordis": "~4.1.0",
-    "@deepseek-ai/cordis-plugin-include": "~1.1.0",
-    "@deepseek-ai/dsh-agent-preset-registry": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-sandbox-policy": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-user-approval": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-working-directory": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-scope": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
-  });
+  assert.deepEqual(
+    Object.keys(p.peerDependencies).sort(),
+    [
+      "@deepseek-ai/cordis",
+      "@deepseek-ai/cordis-plugin-include",
+      "@deepseek-ai/dsh-agent-preset-registry",
+      "@deepseek-ai/dsh-agent",
+      "@deepseek-ai/dsh-llm",
+      "@deepseek-ai/dsh-session",
+      "@deepseek-ai/dsh-sandbox-policy",
+      "@deepseek-ai/dsh-user-approval",
+      "@deepseek-ai/dsh-working-directory",
+      "@deepseek-ai/dsh-tool-executor-native",
+      "@deepseek-ai/dsh-scope",
+      "@deepseek-ai/dsh-system-prompt",
+      "@deepseek-ai/dsh-tools",
+    ].sort(),
+  );
+  for (const [name, range] of Object.entries(p.peerDependencies))
+    assert.equal(typeof range, "string", "invalid peer range: " + name);
   return paths.size;
 }
 if (process.argv[1]?.endsWith("verify-package.mjs")) {

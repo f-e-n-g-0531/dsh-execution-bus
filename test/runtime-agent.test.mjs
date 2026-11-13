@@ -713,6 +713,14 @@ test("real host loop creates independent read-only worker and disposes it", asyn
       f.exec.signal,
       (value) => {
         id = value;
+        const worker = f.ctx.agents.get(id);
+        assert.ok(worker, "rc.3 worker is live before the checkpoint");
+        assert.equal(worker.session.header.parentSession, f.parent.agent.id);
+        assert.equal(worker.session.header.origin, "subagent");
+        assert.equal(
+          worker.session.header.delegationDepth,
+          (f.parent.agent.session.header.delegationDepth ?? 0) + 1,
+        );
         assert.equal(f.requests.length, 0);
       },
     );
@@ -740,6 +748,56 @@ test("real host loop creates independent read-only worker and disposes it", asyn
     await f.close();
   }
 });
+
+test(
+  "rc.3 caller scope disposal drains its worker without disposing the parent",
+  { timeout: 10000 },
+  async () => {
+    let entered;
+    const barrier = new Promise((resolve) => {
+      entered = resolve;
+    });
+    const f = await fixture(async (_request, _n, signal) => {
+      entered();
+      await new Promise((resolve) => {
+        if (signal.aborted) resolve();
+        else signal.addEventListener("abort", resolve, { once: true });
+      });
+      return text("late output");
+    });
+    const owner = f.ctx.plugin(function workerOwner() {});
+    const controller = new AbortController();
+    let id, running;
+    try {
+      await owner.await();
+      running = executeAgent(
+        owner.ctx,
+        f.exec,
+        { prompt: "owned worker" },
+        controller.signal,
+        (value) => {
+          id = value;
+        },
+      );
+      const rejected = assert.rejects(
+        running,
+        /RUNTIME_AGENT_(TURN_FAILED|EXECUTION_FAILED)/,
+      );
+      await barrier;
+      assert.ok(f.ctx.agents.get(id));
+      await owner.dispose();
+      await rejected;
+      assert.equal(f.ctx.agents.get(id), undefined);
+      assert.equal(f.ctx.agents.get(f.parent.agent.id), f.parent.agent);
+      assert.equal(f.requests.length, 1);
+    } finally {
+      controller.abort();
+      await running?.catch(() => {});
+      await owner.dispose();
+      await f.close();
+    }
+  },
+);
 
 test("real host bounds model steps rather than tool calls", async () => {
   const f = await fixture(() => call("read"));

@@ -44,6 +44,8 @@ test("package whitelist rejects missing exports and sensitive additions", () => 
     "dist/runtime/agent-report.d.ts",
     "dist/runtime/agent-trace.js",
     "dist/runtime/agent-trace.d.ts",
+    "dist/runtime/host-compat.js",
+    "dist/runtime/host-compat.d.ts",
     "dist/runtime/dependency-context.js",
     "dist/runtime/dependency-context.d.ts",
     "dist/runtime/model-wait.js",
@@ -127,16 +129,7 @@ test("package whitelist rejects missing exports and sensitive additions", () => 
       ),
     /Missing packed file/,
   );
-  for (const name of Object.keys(pkg.peerDependencies).filter((name) =>
-    name.startsWith("@deepseek-ai/dsh-"),
-  )) {
-    assert.throws(() =>
-      verifyReport(report, {
-        ...pkg,
-        peerDependencies: { ...pkg.peerDependencies, [name]: "0.2.1-rc.2" },
-      }),
-    );
-  }
+  assert.doesNotThrow(() => verifyReport(report, pkg));
   assert.throws(() =>
     verifyReport({ ...report, files: report.files.slice(1) }, pkg),
   );
@@ -148,8 +141,8 @@ test("package whitelist rejects missing exports and sensitive additions", () => 
   );
   assert.throws(() => verifyReport({ ...report, bundled: ["secret"] }, pkg));
 });
-test("all host peers and locked DSH components target 0.2.2-rc.1 without mixed release candidates", () => {
-  const target = "0.2.2-rc.1";
+test("all host peers and locked DSH components target 0.2.2-rc.3 without mixed release candidates", () => {
+  const target = "0.2.2-rc.3";
   assert.deepEqual(lock.packages[""].peerDependencies, pkg.peerDependencies);
   assert.deepEqual(lock.packages[""].devDependencies, pkg.devDependencies);
   for (const [name, version] of Object.entries({

@@ -4,7 +4,7 @@
 
 > 1.0 已移除旧 `execution_bus` 工具、总线预设与 `./core` 导出；当前入口为 `runtime_*` 工具与 `xiao-he-runtime` 预设。
 
-> **当前安全兼容边界：**标准 DSH 0.2.2-rc.1 没有“仅补查父级缺失策略且去重公共层”的公开接口。本插件入口未接入可信 `DelegationPolicyAdapter`，含 `agent` 的 run/resume 在执行前以 `RUNTIME_AGENT_POLICY_UNSUPPORTED` 拒绝；普通工具 DAG 不受影响。下述 Worker 执行能力仅适用于显式注入该适配器的受控宿主集成，测试适配器不是 rc.1 通用实现。不能通过删父策略、回放完整父链或修改已安装宿主绕过此门禁。
+> **当前安全兼容边界：**DSH V0.2 已核实版本没有“仅补查父级缺失策略且去重公共层”的公开接口。本插件入口未接入可信 `DelegationPolicyAdapter`，含 `agent` 的 run/resume 在执行前以 `RUNTIME_AGENT_POLICY_UNSUPPORTED` 拒绝；普通工具 DAG 不受影响。下述 Worker 执行能力仅适用于显式注入该适配器的受控宿主集成，测试适配器不是已验证 V0.2 版本的通用实现。不能通过删父策略、回放完整父链或修改已安装宿主绕过此门禁。
 
 ## 它是什么
 
