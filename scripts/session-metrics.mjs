@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Local, read-only session metrics; no network/telemetry. Never emit inputs,
  * commands, business paths or result bodies. IDs are pseudonymous, not anonymous.
- * node scripts/session-metrics.mjs [--sessions <dir>] [--since <ISO>] [--preset <name>] [--json]
+ * node scripts/session-metrics.mjs [--sessions <dir>] [--since <ISO>] [--preset <creation-name>] [--project <cwd>] [--origin root|child|unknown] [--json]
  */
 import { readdirSync, readFileSync, lstatSync } from "node:fs";
 import os from "node:os";
@@ -12,13 +12,54 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
-const RUNTIME_TOOLS = [
+export const RUNTIME_TOOLS = [
+  "runtime_capabilities",
+  "runtime_acknowledge",
+  "runtime_review",
+  "runtime_decision",
+  "runtime_handoff",
+  "runtime_notification",
+  "runtime_query",
+  "runtime_task",
   "runtime_run",
   "runtime_status",
   "runtime_result",
   "runtime_cancel",
   "runtime_resume",
 ];
+// Read-only observation APIs only; notification and review may mutate ledgers.
+const OBSERVATION_TOOLS = [
+  "runtime_capabilities", "runtime_status", "runtime_result", "runtime_query", "runtime_task",
+];
+const ORIGINS = ["root", "child", "unknown"];
+// SDK SessionHeader: origin?: 'subagent'; parentSession may describe an ordinary
+// historical fork. Never promote absent origin/depth to proof of a root task.
+function classifyOrigin(header) {
+  const depth = header.delegationDepth;
+  if (header.origin === "subagent" &&
+      (depth === undefined || (Number.isSafeInteger(depth) && depth > 0)))
+    return { classification: "child", evidence: "header.origin=subagent" };
+  if (header.origin === undefined && depth === 0)
+    return { classification: "root", evidence: "header.delegationDepth=0" };
+  return { classification: "unknown", evidence: "insufficient-or-conflicting-header" };
+}
+function requestKinds(calls) {
+  return {
+    executionRequests: calls.runtime_run,
+    observationRequests: OBSERVATION_TOOLS.reduce((n, name) => n + calls[name], 0),
+    controlRequests: RUNTIME_TOOLS.filter((name) =>
+      name !== "runtime_run" && !OBSERVATION_TOOLS.includes(name)
+    ).reduce((n, name) => n + calls[name], 0),
+  };
+}
+function usagePath(kinds, nativeCalls) {
+  const parts = [];
+  if (kinds.executionRequests) parts.push("execution");
+  if (kinds.observationRequests) parts.push("observation");
+  if (kinds.controlRequests) parts.push("control");
+  if (nativeCalls) parts.push("nativeDelegation");
+  return parts.join("+") || "noRuntimeOrDelegationObserved";
+}
 const RUN_STATES = [
   "running",
   "succeeded",
@@ -34,8 +75,32 @@ const STEP_STATES = [
   "cancelled",
   "unknown",
 ];
-const PRESETS = ["execution-bus-test", "xiao-he-runtime"];
+const PRESETS = ["execution-bus-test", "xiao-he-runtime", "ptc", "native"];
 const RAW_PRESET = Symbol("preset filter only");
+const RAW_PROJECT = Symbol("project filter only");
+const NATIVE_DELEGATION = ["subagent", "subagent_codex", "subagent_fork"];
+// Compare local creation cwd exactly, not by prefix; never serialize it.
+const projectKey = (v) =>
+  typeof v !== "string" || !v
+    ? null
+    : /^[a-z]:[\\/]|^\\\\/i.test(v)
+      ? path.win32.resolve(v).toLowerCase()
+      : path.resolve(v);
+const sampleQuality = (row) =>
+  row.quality.callsSeenResultsUnseen > 0 ||
+  row.quality.delegationCallsSeenResultsUnseen > 0 ||
+  row.quality.delegationCallsWithoutIds > 0 ||
+  row.quality.callsWithoutIds > 0 ||
+  row.quality.unpairedResults > 0 ||
+  row.runtime.unsupportedCalls > 0 ||
+  Object.entries(row.quality.diagnostics).some(
+    ([key, value]) => !["logs", "duplicateEvents"].includes(key) && value > 0,
+  )
+    ? "partial"
+    : "withoutDetectedGaps";
+const addDiagnostics = (target, source) => {
+  for (const key of Object.keys(diagnostics())) target[key] += source[key] ?? 0;
+};
 const BUS_ERRORS =
   /\b(MUTATING_REUSE_DENIED|INVALID_OBJECT|INVALID_ID|INVALID_JSON|INVALID_JSON_ARRAY|INVALID_JSON_OBJECT|INVALID_JSON_KEY|INVALID_JSON_PROPERTY|INVALID_REQUEST|INVALID_CONTROL|INVALID_ADMISSION_POLICY|INVALID_OPTIONS|INVALID_HANDLER_OPTIONS|INVALID_RESOURCES|INVALID_TEST_INPUT|INVALID_READ_INPUT|INVALID_EDIT_INPUT|INVALID_WRITE_INPUT|INVALID_GLOB_INPUT|INVALID_GREP_INPUT|INVALID_PWSH_INPUT|INVALID_STATE_QUERY|QUEUE_WAIT_TIMEOUT|HANDLER_FAILED)\b/;
 // Known non-metric events are ignored, not reported as unsupported.
@@ -68,6 +133,7 @@ export function diagnostics() {
     unsupportedEvents: 0,
     unsupportedResults: 0,
     duplicateEvents: 0,
+    malformedPresetSelections: 0,
   };
 }
 
@@ -76,18 +142,25 @@ export function parseArgs(argv = process.argv.slice(2)) {
     sessions: undefined,
     since: undefined,
     preset: undefined,
+    project: undefined,
+    origin: undefined,
     json: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     if (flag === "--json") out.json = true;
-    else if (["--sessions", "--since", "--preset"].includes(flag)) {
+    else if (
+      ["--sessions", "--since", "--preset", "--project", "--origin"].includes(flag)
+    ) {
       const value = argv[++i];
       if (!value || value.startsWith("--"))
         throw Error("missing value for " + flag);
       if (flag === "--since") {
         out.since = Date.parse(value);
         if (!Number.isFinite(out.since)) throw Error("invalid --since date");
+      } else if (flag === "--origin") {
+        if (!ORIGINS.includes(value)) throw Error("invalid --origin");
+        out.origin = value;
       } else out[flag.slice(2)] = value;
     } else throw Error("unsupported argument");
   }
@@ -274,7 +347,36 @@ export function metricsFromEvents(events, stats = diagnostics()) {
     stats.missingHeaders++;
     return null;
   }
+  const initialDiagnostics = { ...stats };
   const calls = countMap(RUNTIME_TOOLS);
+  const segments = [];
+  function newSegment(rawPreset, source) {
+    const segment = {
+      index: segments.length,
+      preset: safePreset(rawPreset),
+      source,
+      turns: 0,
+      steps: 0,
+      toolCallRequests: 0,
+      runtimeCalls: countMap(RUNTIME_TOOLS),
+      nativeDelegationCalls: countMap(NATIVE_DELEGATION),
+      dagRequests: 0,
+      dagAgentStepRequests: 0,
+      dagToolStepRequests: 0,
+      dagUnknownStepRequests: 0,
+    };
+    segments.push(segment);
+    return segment;
+  }
+  let segment = newSegment(header.agentPreset, "creation");
+  const runtimePending = new Set();
+  const delegationPending = new Set();
+  let delegationCallsWithoutIds = 0,
+    delegationMissingIdStarts = 0;
+  let unpairedResults = 0,
+    callsWithoutIds = 0,
+    missingIdStarts = 0;
+  const resultCounts = countMap(RUNTIME_TOOLS);
   const runs = new Map();
   const bus = [];
   const pending = new Map();
@@ -331,6 +433,40 @@ export function metricsFromEvents(events, stats = diagnostics()) {
     const id = data.subCallId ?? data.callId;
     if (id !== undefined && seenCalls.has(id)) return;
     if (id !== undefined) seenCalls.add(id);
+    const owner = segment;
+    owner.toolCallRequests++;
+    if (NATIVE_DELEGATION.includes(data.name)) {
+      owner.nativeDelegationCalls[data.name]++;
+      if (id !== undefined) delegationPending.add(id);
+      else {
+        delegationCallsWithoutIds++;
+        delegationMissingIdStarts++;
+      }
+    }
+    if (RUNTIME_TOOLS.includes(data.name)) {
+      owner.runtimeCalls[data.name]++;
+      if (id !== undefined) runtimePending.add(id);
+      else {
+        callsWithoutIds++;
+        missingIdStarts++;
+      }
+    }
+    if (data.name === "runtime_run") {
+      owner.dagRequests++;
+      const args = parsedValue(data.arguments);
+      const steps = args?.plan?.steps;
+      if (Array.isArray(steps))
+        for (const step of steps) {
+          if (step?.tool === "agent") owner.dagAgentStepRequests++;
+          else if (
+            ["read", "glob", "grep", "edit", "write", "pwsh"].includes(
+              step?.tool,
+            )
+          )
+            owner.dagToolStepRequests++;
+          else owner.dagUnknownStepRequests++;
+        }
+    }
     if (data.name === "execution_bus") {
       if (id !== undefined) busIndexes.set(id, bus.length);
       // Count the request now, but defer result-derived state/reuse/error until
@@ -356,16 +492,47 @@ export function metricsFromEvents(events, stats = diagnostics()) {
       const index = id === undefined ? bus.length - 1 : busIndexes.get(id);
       if (index !== undefined) bus[index] = legacyBus(data);
     }
+    if (NATIVE_DELEGATION.includes(name)) {
+      if (id !== undefined) delegationPending.delete(id);
+      else delegationMissingIdStarts--; // Never pair separate id-less observations.
+    }
     if (!RUNTIME_TOOLS.includes(name)) return;
+    if (id !== undefined) runtimePending.delete(id);
+    else missingIdStarts--; // Only settle this record, never pair an earlier id-less start.
+    resultCounts[name]++;
     if (data.isError) {
       runtimeErrors++;
       return;
     }
-    if (!observe(parsedValue(data.content), time)) stats.unsupportedResults++;
+    const value = parsedValue(data.content);
+    // These APIs return non-run envelopes. Recognition is not success/acceptance.
+    const auxiliary =
+      name === "runtime_capabilities"
+        ? object(value) &&
+          value.ordinaryDag === "supported" &&
+          ["conditional", "unavailable"].includes(value.worker)
+        : name === "runtime_handoff"
+          ? object(value) && value.kind === "untrusted_run_handoff"
+          : name === "runtime_notification"
+            ? object(value) &&
+              typeof value.runId === "string" &&
+              object(value.current)
+            : false;
+    if (!auxiliary && !observe(value, time)) stats.unsupportedResults++;
   }
   for (const event of events) {
     const data = event.data;
     const time = numericTime(event.time);
+    if (event.type === "agent-preset/selected") {
+      if (typeof data?.agentPreset === "string")
+        segment = newSegment(data.agentPreset, "selection");
+      else {
+        stats.malformedPresetSelections++;
+        segment = newSegment(null, "unknown-selection");
+      }
+    }
+    if (event.type === "turn/start") segment.turns++;
+    if (event.type === "step/start") segment.steps++;
     if (event.type === "tool/ptc-dispatch") dispatch(data, time);
     else if (
       (event.type === "tool/call" ||
@@ -373,20 +540,23 @@ export function metricsFromEvents(events, stats = diagnostics()) {
       object(data)
     ) {
       // Direct calls settle in tool/result; PTC calls settle in ptc-dispatch.
-      if (
-        typeof data.name === "string" &&
-        (data.name.startsWith("runtime_") ||
-          ["execution_bus", "pwsh", "job_output"].includes(data.name))
-      ) {
+      if (typeof data.name === "string") {
         const id = data.subCallId ?? data.callId;
         if (event.type === "tool/call" && id !== undefined)
           pending.set(id, data);
         countCall(data);
       }
+      if (
+        event.type === "tool/call" &&
+        typeof data.name === "string" &&
+        data.callId !== undefined
+      )
+        pending.set(data.callId, data);
     } else if (event.type === "tool/result" && object(data)) {
       const message = data.message;
       const callId = message?.callId ?? message?.toolCallId;
       const call = pending.get(callId);
+      if (!call && !settledCalls.has(callId)) unpairedResults++;
       if (call) {
         pending.delete(callId);
         dispatch(
@@ -423,15 +593,21 @@ export function metricsFromEvents(events, stats = diagnostics()) {
     (max, event) => Math.max(max, numericTime(event.time)),
     createdAt,
   );
+  for (const item of segments) {
+    item.usageObserved = item.turns > 0 || item.steps > 0 || item.toolCallRequests > 0;
+    item.requestKinds = requestKinds(item.runtimeCalls);
+    item.usagePath = usagePath(item.requestKinds,
+      Object.values(item.nativeDelegationCalls).reduce((a, b) => a + b, 0));
+  }
   const row = {
     id: pseudonym(header.id ?? "unknown"),
     preset: safePreset(header.agentPreset),
-    origin: safeEnum(header.origin ?? "parent", [
-      "parent",
-      "subagent",
-      "fork",
-      "child",
-    ]),
+    creationPreset: safePreset(header.agentPreset),
+    finalPreset: segment.preset,
+    presetSegments: segments,
+    origin: header.origin === "subagent" ? "subagent" : "unknown",
+    originClass: classifyOrigin(header).classification,
+    originEvidence: classifyOrigin(header).evidence,
     createdAt: createdAt || null,
     minutes: createdAt
       ? Math.round(Math.max(0, end - createdAt) / 6000) / 10
@@ -444,7 +620,10 @@ export function metricsFromEvents(events, stats = diagnostics()) {
     jobReads,
     bus,
     runtime: {
+      requestKinds: requestKinds(calls),
       calls,
+      resultsSeen: resultCounts,
+      callsSeenResultsUnseen: runtimePending.size + missingIdStarts,
       errors: runtimeErrors,
       unsupportedCalls: unsupportedRuntimeCalls,
       observedRuns: runs.size,
@@ -456,7 +635,24 @@ export function metricsFromEvents(events, stats = diagnostics()) {
       observedRetryAttempts,
     },
   };
+  row.quality = {
+    diagnostics: Object.fromEntries(
+      Object.keys(diagnostics()).map((key) => [
+        key,
+        stats[key] - initialDiagnostics[key],
+      ]),
+    ),
+    callsSeenResultsUnseen: row.runtime.callsSeenResultsUnseen,
+    callsWithoutIds,
+    delegationCallsSeenResultsUnseen:
+      delegationPending.size + delegationMissingIdStarts,
+    delegationCallsWithoutIds,
+    unpairedResults,
+    status: "observations-only",
+  };
+  row.quality.classification = sampleQuality(row);
   Object.defineProperty(row, RAW_PRESET, { value: header.agentPreset });
+  Object.defineProperty(row, RAW_PROJECT, { value: projectKey(header.cwd) });
   return row;
 }
 
@@ -466,6 +662,7 @@ export function metricsFor(
   decode = requireZstd(),
 ) {
   stats.logs++;
+  const initial = { ...stats, logs: stats.logs - 1 };
   const before =
     stats.corruptFrames + stats.malformedLines + stats.missingHeaders;
   let row = null;
@@ -483,6 +680,11 @@ export function metricsFor(
     !row
   )
     stats.badLogs++;
+  if (row)
+    row.quality.diagnostics = Object.fromEntries(
+      Object.keys(diagnostics()).map((key) => [key, stats[key] - initial[key]]),
+    );
+  if (row) row.quality.classification = sampleQuality(row);
   return row;
 }
 
@@ -511,10 +713,96 @@ export function walk(dir, out = [], stats = diagnostics()) {
   return out;
 }
 
+// Every rate carries its own unit/denominator. Session paths combine only active
+// xiao-he segments in that session; child/unknown groups never enter root counts.
+function adoptionFor(rows) {
+  const selectedSegments = rows.flatMap((row) => row.presetSegments.filter(
+    (s) => s.preset === "xiao-he-runtime"));
+  const activeSegments = selectedSegments.filter((s) => s.usageObserved);
+  const activeRows = rows.filter((row) => row.presetSegments.some(
+    (s) => s.preset === "xiao-he-runtime" && s.usageObserved));
+  function paths(items, denominatorUnit) {
+    const counts = {};
+    for (const item of items) {
+      const calls = countMap(RUNTIME_TOOLS);
+      let native = 0;
+      for (const s of item) {
+        for (const name of RUNTIME_TOOLS) calls[name] += s.runtimeCalls[name];
+        native += Object.values(s.nativeDelegationCalls).reduce((a, b) => a + b, 0);
+      }
+      const key = usagePath(requestKinds(calls), native);
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    return { denominator: items.length, denominatorUnit, counts,
+      fractions: Object.fromEntries(Object.entries(counts).map(([key, numerator]) =>
+        [key, { numerator, denominator: items.length,
+          rate: items.length ? numerator / items.length : null }])) };
+  }
+  const sumKind = (key) => activeSegments.reduce((n, s) => n + s.requestKinds[key], 0);
+  return {
+    selectedSessions: rows.length,
+    createdWithXiaoHeSessions: rows.filter((r) => r.creationPreset === "xiao-he-runtime").length,
+    sessionsWithXiaoHeSegments: rows.filter((r) => r.presetSegments.some(
+      (s) => s.preset === "xiao-he-runtime")).length,
+    actualXiaoHeSessions: activeRows.length,
+    xiaoHeSegments: selectedSegments.length,
+    actualXiaoHeSegments: activeSegments.length,
+    xiaoHeSegmentsWithoutObservedActivity: selectedSegments.length - activeSegments.length,
+    executionRequests: sumKind("executionRequests"),
+    observationRequests: sumKind("observationRequests"),
+    controlRequests: sumKind("controlRequests"),
+    nativeDelegationRequests: activeSegments.reduce((n, s) => n +
+      Object.values(s.nativeDelegationCalls).reduce((a, b) => a + b, 0), 0),
+    sessionPaths: paths(activeRows.map((r) => r.presetSegments.filter(
+      (s) => s.preset === "xiao-he-runtime" && s.usageObserved)), "actual-xiao-he-sessions"),
+    segmentPaths: paths(activeSegments.map((s) => [s]), "actual-xiao-he-segments"),
+  };
+}
 export function summarize(rows) {
   const sum = (fn) => rows.reduce((n, row) => n + fn(row), 0);
   return {
     sessions: rows.length,
+    originSessions: Object.fromEntries(ORIGINS.map((origin) =>
+      [origin, rows.filter((r) => r.originClass === origin).length])),
+    xiaoHeAdoption: {
+      basis: "Observed turn/start, step/start or tool request in xiao-he-runtime segments; not task suitability or success. Paths are mutually exclusive combinations; no calls does not imply inapplicability. No cross-session root-task inference.",
+      byOrigin: Object.fromEntries(ORIGINS.map((origin) =>
+        [origin, adoptionFor(rows.filter((r) => r.originClass === origin))])),
+    },
+    runtimeRequestKinds: requestKinds(Object.fromEntries(RUNTIME_TOOLS.map((name) =>
+      [name, sum((r) => r.runtime.calls[name])]))),
+    sampleQuality: {
+      observed: rows.length,
+      partial: rows.filter((r) => sampleQuality(r) === "partial").length,
+      withoutDetectedGaps: rows.filter(
+        (r) => sampleQuality(r) === "withoutDetectedGaps",
+      ).length,
+    },
+    callsSeenResultsUnseen: sum((r) => r.runtime.callsSeenResultsUnseen),
+    nativeDelegationCalls: Object.fromEntries(
+      NATIVE_DELEGATION.map((name) => [
+        name,
+        sum((r) =>
+          r.presetSegments.reduce(
+            (n, segment) => n + segment.nativeDelegationCalls[name],
+            0,
+          ),
+        ),
+      ]),
+    ),
+    dagRequests: sum((r) => r.runtime.calls.runtime_run),
+    dagAgentStepRequests: sum((r) =>
+      r.presetSegments.reduce(
+        (n, segment) => n + segment.dagAgentStepRequests,
+        0,
+      ),
+    ),
+    dagToolStepRequests: sum((r) =>
+      r.presetSegments.reduce(
+        (n, segment) => n + segment.dagToolStepRequests,
+        0,
+      ),
+    ),
     modeSessions: rows.filter((r) => r.preset === "execution-bus-test").length,
     runtimeModeSessions: rows.filter((r) => r.preset === "xiao-he-runtime")
       .length,
@@ -563,20 +851,51 @@ export function main(argv = process.argv.slice(2)) {
       process.env.DSH_HOME ?? path.join(os.homedir(), ".dsh"),
       "sessions",
     );
-  const rows = walk(root, [], stats)
-    .map((file) => metricsFor(file, stats, decode))
-    .filter(Boolean)
-    .filter(
-      (row) => opt.since === undefined || (row.createdAt ?? 0) >= opt.since,
-    )
-    .filter((row) => opt.preset === undefined || row[RAW_PRESET] === opt.preset)
-    .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  const unknown = diagnostics();
+  const selected = diagnostics(),
+    excluded = diagnostics();
+  const files = walk(root, [], stats);
+  addDiagnostics(unknown, stats);
+  const rows = [];
+  for (const file of files) {
+    const local = diagnostics();
+    const row = metricsFor(file, local, decode);
+    addDiagnostics(stats, local);
+    if (!row) {
+      addDiagnostics(unknown, local);
+      continue;
+    }
+    // A readable log may still lack the metadata needed to decide a filter.
+    if (
+      (opt.project !== undefined && row[RAW_PROJECT] === null) ||
+      (opt.since !== undefined && row.createdAt === null) ||
+      (opt.preset !== undefined && row[RAW_PRESET] == null)
+    ) {
+      addDiagnostics(unknown, local);
+      continue;
+    }
+    const included =
+      (opt.since === undefined || (row.createdAt ?? 0) >= opt.since) &&
+      (opt.preset === undefined || row[RAW_PRESET] === opt.preset) &&
+      (opt.origin === undefined || row.originClass === opt.origin) &&
+      (opt.project === undefined ||
+        row[RAW_PROJECT] === projectKey(opt.project));
+    addDiagnostics(included ? selected : excluded, local);
+    if (included) rows.push(row);
+  }
+  rows.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
   const report = {
     summary: summarize(rows),
     diagnostics: stats,
+    sampleDiagnostics: { selected, excluded, unknown },
+    sampleCounts: {
+      selected: rows.length,
+      excluded: excluded.logs,
+      unknown: unknown.logs,
+    },
     sessions: rows,
     scope:
-      "Local session observations only. Diagnostics cover all scanned logs before filters. Runs/steps are deduplicated per session. Retry attempts require observed step.attempts; cancel/resume are requests, not proof of cancellation/recovery. Missing results are not inferred; no exactly-once, savings, or network telemetry claims.",
+      "Local session observations only. diagnostics covers all scanned logs; sampleDiagnostics separates selected/excluded/unknown attribution. Origin filter uses explicit SDK header evidence; absent origin/depth is unknown, not root. Xiao-he adoption denominators use observed activity within its preset segments, separately by origin; empty selected segments are not actual use. No-call paths do not establish task suitability. runtime_run requests, read-only observation requests and ledger/control requests are separate, not successful executions. Preset filter uses creation preset; segments attribute requests to the preset when called. Project filter compares creation cwd exactly, never emitting it. Runs/steps are deduplicated per session. Retry attempts require observed step.attempts; cancel/resume are requests, not proof of cancellation/recovery. Missing results are not inferred; no exactly-once, savings, or network telemetry claims.",
   };
   if (opt.json) console.log(JSON.stringify(report, null, 2));
   else {
@@ -612,6 +931,27 @@ export function main(argv = process.argv.slice(2)) {
       s.observedRuntimeRetryAttempts,
     );
     console.log("diagnostics:", JSON.stringify(stats));
+    console.log(
+      "sample diagnostics:",
+      JSON.stringify(report.sampleDiagnostics),
+    );
+    console.log(
+      "calls seen/results unseen:",
+      s.callsSeenResultsUnseen,
+      "| native delegation:",
+      JSON.stringify(s.nativeDelegationCalls),
+      "| DAG requests:",
+      s.dagRequests,
+    );
+    console.log(
+      "sample quality:",
+      JSON.stringify(s.sampleQuality),
+      "| filter sample counts:",
+      JSON.stringify(report.sampleCounts),
+    );
+    console.log("origins:", JSON.stringify(s.originSessions));
+    console.log("runtime request kinds:", JSON.stringify(s.runtimeRequestKinds));
+    console.log("xiao-he adoption by origin:", JSON.stringify(s.xiaoHeAdoption));
     console.log(report.scope);
   }
   return report;

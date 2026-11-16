@@ -2,7 +2,7 @@
 
 ## 产品边界
 
-萧何是 DSH 内的可选**PTC 多 Agent 编排与声明式运行时**插件：Lead 用 PTC 提交 DAG，运行时执行 `read/glob/grep/edit/write/pwsh` 或 `agent` 步骤，负责并行、只读工具重试、超时、落盘、取消与恢复；Lead 负责修改与验收。当前 mode 原地改造，仍从 PTC 派生并沿用 `xiao-he-runtime`，不新增 team 模式。多 Agent 能力随 1.4.0 发布。它不是模型、不是通用工作流引擎、不接管全部工具；权限、沙箱与审批仍由宿主管理。
+萧何是 DSH 内的可选**PTC 多 Agent 编排与声明式运行时**插件：Lead 用 PTC 提交 DAG，运行时执行 `read/glob/grep/edit/write/pwsh` 或 `agent` 步骤，负责并行、只读工具重试、超时、落盘、取消与恢复；Lead 负责修改与验收。当前 mode 原地改造，仍从 PTC 派生并沿用 `xiao-he-runtime`，不新增 team 模式。受控多 Agent 扩展契约随 1.4.0 发布，不表示标准插件 Worker 可用。它不是模型、不是通用工作流引擎、不接管全部工具；权限、沙箱与审批仍由宿主管理。
 
 1.0 移除了 0.x 的执行总线（`execution_bus`、`./core` 导出与总线预设），旧版本保留在 npm/git 历史，不再维护。
 
@@ -16,7 +16,7 @@
 | Agent 内 /mode | 预设末尾插件行 | 追加运行时工具与模式说明 |
 | `./test-mode` | 兼容别名 | 与 /mode 同一模块 |
 
-普通任务继续用原工具；运行时只处理“能写成稳定 DAG”的协调工作，简单一次性操作不包装。普通工具的 `depends_on` 只约束顺序，不插值结果；Agent 则追加直接依赖结果为不可信 JSON（缺失/截断或追加 prompt >64KiB 拒绝）；同一记录 root 的单进程 service 共享 8 个 active run，run/resume 均需准入。
+标准 rc.3 支持普通工具 DAG，独立分工可用宿主原生委派；原生委派不是运行时 `agent` 步骤，也不证明 Worker 门禁已打通。普通任务继续用原工具；运行时只处理“能写成稳定 DAG”的协调工作，简单一次性操作不包装。普通工具的 `depends_on` 只约束顺序，不插值结果；Agent 则追加直接依赖结果为不可信 JSON（缺失/截断或追加 prompt >64KiB 拒绝）；同一记录 root 的单进程 service 共享 8 个 active run，run/resume 均需准入。
 
 Worker 通过公开 `agents.create` + `agentPresets.composeFrom` 创建独立上下文并继承模型路由，强制使用 `NativeToolExecutor`（不是 PTC），宿主沙箱 read-only、approval never，guard 仅允许 `read/glob/grep` 并与父 admission identity 取交集。禁止 `run_code`、命令、写入与递归委派；不靠提示词限制权限。Agent 输入为 `{prompt, access?:"read", max_steps?:1..32, output_format?:"text"|"report"}`（默认 12 步；省略输出格式保留旧 text），不支持 write 或写入范围授权；非空 `write_scopes` 拒绝，空数组仅作兼容归一化。
 

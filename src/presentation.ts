@@ -758,7 +758,7 @@ export const RUNTIME_OUTPUT_SCHEMAS: Record<string, JsonSchemaNode> = {
         properties: {
           scope: { type: "string", const: "module_process_root" },
           observedAt: integer,
-          capacityBusy: { type: "boolean" },
+          capacityBusy: { oneOf: [{ type: "boolean" }, { type: "null" }] },
         },
         required: ["scope", "observedAt", "capacityBusy"],
         additionalProperties: false,
@@ -1391,7 +1391,9 @@ export function runtimePresentationMeta(_args: unknown, value: unknown) {
           ? object(result.capacity)?.capacityBusy
             ? "共享运行准入：繁忙（瞬时观察，不排队）\n"
             : "共享运行准入：未观察到满载（不保证可用）\n"
-          : "") +
+          : object(result.capacity)?.capacityBusy === null
+            ? "共享运行准入：未知（未初始化存储，不检查或获取锁）\n"
+            : "") +
         result.message,
     };
   if (result?.kind === "untrusted_run_handoff") return {

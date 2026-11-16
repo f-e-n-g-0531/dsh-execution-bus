@@ -78,6 +78,12 @@ async function main() {
   await go;
   if (mode === "resume") {
     const before = service.result({ runId: recoveryId }, owner);
+    if (before.state !== "interrupted") {
+      const record = store.load(recoveryId);
+      let ownerProbe;
+      try { process.kill(record.ownerPid, 0); ownerProbe = "alive"; } catch (error) { ownerProbe = error.code; }
+      throw Error("RECOVERY_PRECONDITION " + JSON.stringify({ state: before.state, ownerPid: record.ownerPid, currentPid: process.pid, ownerProbe, diagnostics: store.diagnostics?.() }));
+    }
     const resumed = await service.resume({ runId: recoveryId }, owner);
     const result = service.result({ runId: recoveryId }, owner);
     await service.dispose();

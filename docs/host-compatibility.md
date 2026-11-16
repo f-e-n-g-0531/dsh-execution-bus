@@ -1,6 +1,6 @@
 # 宿主兼容性
 
-当前工作树包版本 **1.7.3** 含未发布兼容改动，重点适配 **DSH 0.2.2-rc.3**；兼容声明仅限已经验证的 DSH V0.2 版本。其余列入兼容范围的 V0.2 版本仍待矩阵验证，未验证版本与未来版本均不承诺；不保证整个 V0.2 系列兼容。公开 1.7.3 原包仍面向 rc.1，不追认新兼容。legacy/modern API 适配实现正在验证；新兼容须以本地候选隔离验证，不修改日常 DSH。以下 v1.4.0 / rc.1 记录仅为历史证据，不替代当前候选验证。
+当前源码包版本 **1.8.0** 包含 V0.2 兼容实现，重点适配 **DSH 0.2.2-rc.3**；兼容声明仅限已经验证的 DSH V0.2 版本。其余列入兼容范围的 V0.2 版本仍待矩阵验证，未验证版本与未来版本均不承诺；不保证整个 V0.2 系列兼容。公开 1.7.3 原包仍面向 rc.1，不追认新兼容。legacy/modern API 适配已落地，但当前候选的逐版本结果仍须独立核对；新兼容须以本地候选隔离验证，不修改日常 DSH。以下 v1.4.0 / rc.1 记录仅为历史证据，不替代当前候选验证。
 
 v1.4.0 目标宿主：DSH **0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node ≥22；锁定依赖实际解析为 Cordis 4.1.0、include 1.1.0。DSH peer 与测试依赖精确锁定 0.2.2-rc.1，不推导兼容其他版本。旧公开 1.3.3 的宿主目标仍为 0.2.1-rc.5，不追认新宿主支持。
 
@@ -8,7 +8,7 @@ v1.4.0 目标宿主：DSH **0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node
 
 ## 可信适配核实（2026-11-06）
 
-本轮重新检查当前安装的 rc.1 SDK：ToolsService 的 executable 只检查 admission/可执行身份，checkGuards 执行 global 与作用域全链；ToolExecutionPipeline.prepare 执行完整 pre-execute、审批及 guard，没有 supplemental-only 或公共层去重参数。parentAgent 表示生命周期归属，不等于继承父局部工具策略。因此不提供无条件 allow 适配器，不修改宿主，不通过回放父完整 pipeline 重复检查或弹出审批。标准入口继续支持普通工具 DAG、拒绝 Worker；这是尚未打通的核心限制，不宣称多 Agent 已可日常使用。未来需宿主提供可信的缺失父策略检查能力后再接入并验收。
+2026-11-06 当轮重新检查当时安装的 rc.1 SDK：ToolsService 的 executable 只检查 admission/可执行身份，checkGuards 执行 global 与作用域全链；ToolExecutionPipeline.prepare 执行完整 pre-execute、审批及 guard，没有 supplemental-only 或公共层去重参数。parentAgent 表示生命周期归属，不等于继承父局部工具策略。因此不提供无条件 allow 适配器，不修改宿主，不通过回放父完整 pipeline 重复检查或弹出审批。标准入口继续支持普通工具 DAG、拒绝 Worker；这是尚未打通的核心限制，不宣称多 Agent 已可日常使用。未来需宿主提供可信的缺失父策略检查能力后再接入并验收。
 
 ## rc.3 可信适配核实（2026-11-14）
 
@@ -20,19 +20,17 @@ v1.4.0 目标宿主：DSH **0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node
 
 ## 兼容目标与验证矩阵
 
-兼容目标是尽量支持 DSH V0.2，不是对全系列或未来版本的保证。逐版本结果由主线程在矩阵验证后补充；只有明确列为已验证的版本才能声称支持。当前确认的 rc.3 API 重点及兼容实现边界见上节；legacy/modern 分流实现仍在验证。普通 DAG 是兼容范围，标准 Worker 在所有版本均保持 fail-closed。
+兼容目标是尽量支持 DSH V0.2，不是对全系列或未来版本的保证。逐版本结果由主线程在矩阵验证后补充；只有明确列为已验证的版本才能声称支持。当前确认的 rc.3 API 重点及兼容实现边界见上节；legacy/modern 分流实现已落地，不等于矩阵验证通过。普通 DAG 是兼容范围，标准 Worker 在所有版本均保持 fail-closed。
 
 | DSH 版本 | API 类型 | 普通 DAG | 标准 Worker | 验证状态 |
 |---|---|---|---|---|
-| 0.2.0-rc1 | legacy（单调用 execute） | 待验证 | fail-closed | 待矩阵验证 |
-| 0.2.0-rc2 | legacy（单调用 execute） | 待验证 | fail-closed | 待矩阵验证 |
-| 0.2.1-alpha1..alpha5 | legacy（单调用 execute） | 待验证 | fail-closed | 待矩阵验证 |
-| 0.2.1-rc1..rc5 | legacy（单调用 execute） | 待验证 | fail-closed | 待矩阵验证 |
-| 0.2.2-alpha2、0.2.2-alpha3 | modern（公开 pipeline） | 待验证 | fail-closed | 待矩阵验证 |
-| 0.2.2-rc1、0.2.2-rc2 | modern（公开 pipeline） | 待验证 | fail-closed | 待矩阵验证 |
-| 0.2.2-rc3 | modern（公开 pipeline） | 待验证 | fail-closed | API 已核实；兼容矩阵待验证 |
-
-## 依赖的宿主契约
+| 0.2.0-rc.1 | legacy（单调用 execute） | 待验证 | fail-closed | 待矩阵验证 |
+| 0.2.0-rc.2 | legacy（单调用 execute） | 待验证 | fail-closed | 待矩阵验证 |
+| 0.2.1-alpha.1..alpha.5 | legacy（单调用 execute） | 待验证 | fail-closed | 待矩阵验证 |
+| 0.2.1-rc.1..rc.5 | legacy（单调用 execute） | 待验证 | fail-closed | 待矩阵验证 |
+| 0.2.2-alpha.2、0.2.2-alpha.3 | modern（公开 pipeline） | 待验证 | fail-closed | 待矩阵验证 |
+| 0.2.2-rc.1、0.2.2-rc.2 | modern（公开 pipeline） | 待验证 | fail-closed | 待矩阵验证 |
+| 0.2.2-rc.3 | modern（公开 pipeline） | 本地组件及隔离安装通过 | fail-closed 零创建断言通过 | 1.8.0 锁定 SDK 回归；非桌面/模型/OS 沙箱验收，非全版本矩阵 |
 
 ## 依赖的宿主契约
 
@@ -50,7 +48,7 @@ v1.4.0 目标宿主：DSH **0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node
 
 ## 依赖安全告警
 
-2026-11-05 的 npm audit 对当前完整锁定依赖树返回 **36 个受影响包节点（33 high、3 moderate、0 critical）**，告警根包实际解析为 undici 8.11.2、zod 4.4.3；传播节点数不是36个独立漏洞，也不是生产安装树或生产可达性评估。项目未打包第三方依赖，但生产安装会通过宿主 peer 解析相关依赖。宿主升级和功能兼容不表示告警已修复；本轮不使用 force、legacy-peer-deps 或 overrides 绕过精确依赖要求。涉及不可信网络/输入的部署需结合上游修复及实际依赖路径独立评估，重新审计以当时数据库为准。
+2026-11-05 的 npm audit 对当时完整锁定依赖树返回 **36 个受影响包节点（33 high、3 moderate、0 critical）**，告警根包实际解析为 undici 8.11.2、zod 4.4.3；传播节点数不是36个独立漏洞，也不是生产安装树或生产可达性评估。项目未打包第三方依赖，但生产安装会通过宿主 peer 解析相关依赖。宿主升级和功能兼容不表示告警已修复；本轮不使用 force、legacy-peer-deps 或 overrides 绕过精确依赖要求。涉及不可信网络/输入的部署需结合上游修复及实际依赖路径独立评估，重新审计以当时数据库为准。
 
 ## 已知边界
 

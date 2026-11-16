@@ -206,6 +206,50 @@ function validateExecution(plan: Plan) {
   }
 }
 
+/** Pure capability description: never opens storage, acquires a lock or checks policy. */
+export function describeCapabilities(
+  raw: unknown,
+  exec: ToolRunContext,
+  delegationPolicy?: DelegationPolicyAdapter,
+  capacityBusy: boolean | null = null,
+) {
+  if (!exec.agent || !String(exec.agent.id ?? ""))
+    throw Error(ERRORS.OWNING_SESSION_REQUIRED);
+  plain(raw, new Set());
+  const adapter = typeof delegationPolicy?.checkParentPolicy === "function";
+  const parentAdmission = exec.toolSet !== undefined;
+  return {
+    ordinaryDag: "supported" as const,
+    worker:
+      adapter && parentAdmission
+        ? ("conditional" as const)
+        : ("unavailable" as const),
+    workerReason: !adapter
+      ? ("trusted_adapter_missing" as const)
+      : !parentAdmission
+        ? ("parent_admission_missing" as const)
+        : ("execution_checks_required" as const),
+    ordinaryAsync: !parentAdmission,
+    workerAsync: false as const,
+    workerTools: ["read", "glob", "grep"],
+    limits: {
+      maxSteps: RUNTIME_LIMITS.steps,
+      maxConcurrency: RUNTIME_LIMITS.concurrencyMax,
+      maxActiveRuns: MAX_ACTIVE_RUNS,
+      maxWorkers: 8,
+    },
+    // Coarse shared run admission only: do not expose other owners or counts.
+    capacity: {
+      scope: "module_process_root" as const,
+      observedAt: Date.now(),
+      capacityBusy: capacityBusy,
+    },
+    authorization: "checked_at_execution" as const,
+    message:
+      "能力说明不代表授权、工具/模型可用或容量预留；查询本身不初始化存储、不检查或获取根锁；未初始化时 capacityBusy 为 null（未知），不能推断根锁是否存在。布尔值仅为同模块/进程/运行根目录的运行准入繁忙瞬时观察，false 不保证有空槽或执行成功，不涵盖普通宿主调用/后台 Job 的实际存活。每次执行仍须通过宿主准入。Worker 需要可信父策略适配器及有效父 toolSet；普通异步调用仅适用于无 toolSet 的受控宿主集成。",
+  };
+}
+
 /** Scope facade over a process-wide, root-keyed execution owner. */
 export class RuntimeService {
   private readonly history = new HistoryPages();
@@ -300,44 +344,15 @@ export class RuntimeService {
     };
   }
 
-  /** Descriptive only: no policy checks, tool dispatch, capacity reservation or run creation. */
+  /** Descriptive only; an initialized service can observe its process-local capacity. */
   capabilities(raw: unknown, exec: ToolRunContext) {
     this.ensureOpen();
-    this.sessionId(exec);
-    plain(raw, new Set());
-    const adapter =
-      typeof this.delegationPolicy?.checkParentPolicy === "function";
-    const parentAdmission = exec.toolSet !== undefined;
-    return {
-      ordinaryDag: "supported" as const,
-      worker:
-        adapter && parentAdmission
-          ? ("conditional" as const)
-          : ("unavailable" as const),
-      workerReason: !adapter
-        ? ("trusted_adapter_missing" as const)
-        : !parentAdmission
-          ? ("parent_admission_missing" as const)
-          : ("execution_checks_required" as const),
-      ordinaryAsync: !parentAdmission,
-      workerAsync: false as const,
-      workerTools: ["read", "glob", "grep"],
-      limits: {
-        maxSteps: RUNTIME_LIMITS.steps,
-        maxConcurrency: RUNTIME_LIMITS.concurrencyMax,
-        maxActiveRuns: MAX_ACTIVE_RUNS,
-        maxWorkers: 8,
-      },
-      // Coarse shared run admission only: do not expose other owners or counts.
-      capacity: {
-        scope: "module_process_root" as const,
-        observedAt: Date.now(),
-        capacityBusy: this.manager.active.size >= MAX_ACTIVE_RUNS,
-      },
-      authorization: "checked_at_execution" as const,
-      message:
-        "能力说明不代表授权、工具/模型可用或容量预留；capacityBusy 仅为同模块/进程/运行根目录的运行准入繁忙瞬时观察，false 不保证有空槽或执行成功，不涵盖普通宿主调用/后台 Job 的实际存活。每次执行仍须通过宿主准入。Worker 需要可信父策略适配器及有效父 toolSet；普通异步调用仅适用于无 toolSet 的受控宿主集成。",
-    };
+    return describeCapabilities(
+      raw,
+      exec,
+      this.delegationPolicy,
+      this.manager.active.size >= MAX_ACTIVE_RUNS,
+    );
   }
 
   async run(

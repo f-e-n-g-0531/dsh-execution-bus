@@ -54,7 +54,7 @@ export function derivePreset(content) {
         id: PRESET_ID,
         name: PRODUCT.name,
         order: 20,
-        description: "PTC 多 Agent 编排（runtime_*）：Lead 拆分任务，独立只读 Worker 按 DAG 并行，传递结果、限制步数、落盘和取消清理；Lead 负责修改与验收。沿用当前预设，授权和沙箱由宿主管理，不保证 exactly-once。",
+        description: "PTC 声明式工具 DAG（runtime_*）：标准 rc.3 支持普通工具计划，独立分析可用原生委派；运行时 Worker 仅适用于显式接入可信父策略适配器的受控宿主。Lead 负责修改与验收，授权和沙箱由宿主管理，不保证 exactly-once。",
         plugins: [
             ...rows,
             {

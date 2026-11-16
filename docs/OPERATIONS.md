@@ -13,6 +13,8 @@
 
 先用 `runtime_capabilities({})` 了解当前调用上下文。`ordinaryDag:"supported"` 不是授权；Worker 仅在可信适配器和父 `toolSet` 同时存在时为 `conditional`，否则为 `unavailable`。这不保留资源、不探测真实模型，也不代表标准插件适配器已修复。普通异步仅在无 `toolSet` 时允许，`workerAsync` 始终为 false；不要移除准入集合绕过门禁。
 
+能力查询不初始化运行存储、不检查或获取根锁，因此根锁存在时仍可返回静态说明，但它不报告锁是否存在。尚未初始化服务时 `capacity.capacityBusy:null` 表示未观察／未知，不能按 false 解读；已初始化时才返回布尔瞬时观察，false 也不保证可执行。`capacity.scope` 和 `observedAt` 只限定观察口径与返回时间，不是锁或存储健康证明。
+
 单 run 摘要的 `recovery` 可协助判读，仍需结合步骤错误与实际外部状态：
 
 | 字段/建议 | 安全判读 |
@@ -82,6 +84,7 @@ for (const worker of saved.acceptance.workers) {
 | RUNTIME_CANCELLED | 用 runtime_result 检查 unknown；必要时通过宿主工具确认停止 | cancelled 就是已回滚 |
 | RUNTIME_INTERRUPTED | 对纯只读在途步骤可 runtime_resume；已保存成功步骤不重放。未知副作用会使整个恢复计划失败 | 所有中断运行都可安全恢复 |
 | RUNTIME_BACKGROUND_UNSUPPORTED | 读取结果中的 kind/jobId，按下节使用原生 Job 工具 | Job 回执等于命令完成 |
+| RUNTIME_ROOT_LOCKED | 核实记录根目录是否仍有活跃宿主及其归属；不自动删锁、解锁或重放，仅经人工确认的离线处置 | 静态能力可查就表示锁已释放或存储可写 |
 | RUNTIME_BUSY | 等待现有运行结束或显式取消不再需要的运行；run/resume 共用 8 个配额 | 新建作用域会扩大配额 |
 | RUNTIME_STORAGE_FAILED | 停止后续写入，检查记录目录可写性、磁盘空间和实际副作用；修复后重新核对 | 内存中的失败摘要可在重启后恢复 |
 

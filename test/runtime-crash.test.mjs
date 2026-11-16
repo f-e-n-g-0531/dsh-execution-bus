@@ -33,6 +33,8 @@ function launch(root, cwd, scenario, mode, runId = "") {
   const waiters = new Set();
   let ended = false;
   let failure;
+  let killed;
+  const closed = new Promise((resolve) => child.once("close", (code, signal) => resolve({ code, signal })));
   const exit = new Promise((resolve) => {
     child.once("exit", (code, signal) => {
       ended = true;
@@ -96,9 +98,30 @@ function launch(root, cwd, scenario, mode, runId = "") {
         ),
       );
     },
-    async kill() {
-      if (!ended) child.kill("SIGKILL");
-      return bounded(exit, "child kill/exit");
+    async assertDead() {
+      // PID liveness is the production recovery precondition. Never treat errors
+      // other than ESRCH as death or reconcile a lock while that PID is alive.
+      const deadline = Date.now() + 4000;
+      do {
+        try { process.kill(child.pid, 0); } catch (error) {
+          if (error.code === "ESRCH") return;
+          throw error;
+        }
+        // A reused or not-yet-unobservable PID cannot authorize recovery.
+        // Wait for the exact safe condition, never infer death from elapsed time.
+        await new Promise(resolve => setTimeout(resolve, 20));
+      } while (Date.now() < deadline);
+      throw Error("Crash fixture owner PID is still observable: " + child.pid);
+    },
+    kill() {
+      // Bind cleanup to this child lifecycle, not to a PID that may later be reused.
+      return killed ??= (async () => {
+        if (!ended) assert.equal(child.kill("SIGKILL"), true, "kill must be requested");
+        const result = await bounded(exit, "child kill/exit");
+        if (result.error) throw Error(result.error);
+        await bounded(closed, "child close");
+        return result;
+      })();
     },
   };
 }
@@ -164,6 +187,7 @@ test(
       );
       // Exit acknowledgement is essential: recovery must not race a live PID.
       await first.kill();
+      await first.assertDead();
       assert.equal(
         store.load(started.runId).state,
         "running",
@@ -175,7 +199,9 @@ test(
       assert.ok(readFileSync(path.join(f.root, ".runtime-owner.lock"), "utf8"));
       rmSync(path.join(f.root, ".runtime-owner.lock"));
       const second = f.spawn("completed-write", "resume", started.runId);
-      await second.message("ready");
+      const recoveryReady = await second.message("ready");
+      assert.notEqual(recoveryReady.pid, first.child.pid, "recovery must not reuse owner PID");
+      await first.assertDead();
       await second.go();
       const recovered = await second.message("result");
       const exited = await bounded(second.exit, "recovery exit");
@@ -235,12 +261,15 @@ test(
         ["uncertain"],
       );
       await first.kill();
+      await first.assertDead();
 
       // Explicit test-operator reconciliation after confirmed exit and effects inspection.
       assert.ok(readFileSync(path.join(f.root, ".runtime-owner.lock"), "utf8"));
       rmSync(path.join(f.root, ".runtime-owner.lock"));
       const second = f.spawn("inflight-write", "resume", started.runId);
-      await second.message("ready");
+      const recoveryReady = await second.message("ready");
+      assert.notEqual(recoveryReady.pid, first.child.pid, "recovery must not reuse owner PID");
+      await first.assertDead();
       await second.go();
       const recovered = await second.message("result");
       assert.equal(

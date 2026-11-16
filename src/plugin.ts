@@ -27,7 +27,7 @@ import {
   RUNTIME_STATUS_DESCRIPTION,
   RUNTIME_STATUS_PARAMETERS,
 } from "./product.js";
-import { RuntimeService } from "./runtime/service.js";
+import { RuntimeService, describeCapabilities } from "./runtime/service.js";
 import {
   RUNTIME_OUTPUT_SCHEMAS,
   runtimePresentationMeta,
@@ -83,7 +83,23 @@ export function apply(ctx: Context) {
   let closed = false;
   const runtime = () => {
     if (closed) throw Error("CLOSED");
-    return (instance ??= new RuntimeService(ctx));
+    try {
+      return (instance ??= new RuntimeService(ctx));
+    } catch (error) {
+      if (error instanceof Error && error.message === "RUNTIME_ROOT_LOCKED") {
+        throw Object.assign(
+          new Error(
+            "RUNTIME_ROOT_LOCKED: 存储所有权冲突；先由操作者核对原宿主及后台 Job 是否仍在运行。不要自动删除锁、重试计划或重放未知副作用；能力说明仍可用，容量未知。",
+          ),
+          {
+            code: "RUNTIME_ROOT_LOCKED",
+            action: "operator_reconciliation_required",
+            retryable: false,
+          },
+        );
+      }
+      throw error;
+    }
   };
   ctx.effect(() => () => {
     closed = true;
@@ -148,7 +164,10 @@ export function apply(ctx: Context) {
     "runtime_capabilities",
     RUNTIME_CAPABILITIES_DESCRIPTION,
     RUNTIME_CAPABILITIES_PARAMETERS,
-    (raw, exec) => runtime().capabilities(raw, exec),
+    (raw, exec) => {
+      if (closed) throw Error("CLOSED");
+      return instance ? instance.capabilities(raw, exec) : describeCapabilities(raw, exec);
+    },
   );
   register(
     "runtime_acknowledge",

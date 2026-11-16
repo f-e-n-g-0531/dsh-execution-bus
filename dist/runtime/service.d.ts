@@ -63,6 +63,28 @@ export interface RunSummary {
         error?: string;
     }>;
 }
+/** Pure capability description: never opens storage, acquires a lock or checks policy. */
+export declare function describeCapabilities(raw: unknown, exec: ToolRunContext, delegationPolicy?: DelegationPolicyAdapter, capacityBusy?: boolean | null): {
+    ordinaryDag: "supported";
+    worker: "unavailable" | "conditional";
+    workerReason: "trusted_adapter_missing" | "parent_admission_missing" | "execution_checks_required";
+    ordinaryAsync: boolean;
+    workerAsync: false;
+    workerTools: string[];
+    limits: {
+        maxSteps: 32;
+        maxConcurrency: 4;
+        maxActiveRuns: number;
+        maxWorkers: number;
+    };
+    capacity: {
+        scope: "module_process_root";
+        observedAt: number;
+        capacityBusy: boolean | null;
+    };
+    authorization: "checked_at_execution";
+    message: string;
+};
 /** Scope facade over a process-wide, root-keyed execution owner. */
 export declare class RuntimeService {
     private readonly ctx;
@@ -82,7 +104,7 @@ export declare class RuntimeService {
      * Cleanup means a terminal run whose owned execution has not settled; it is not
      * proof that ordinary host calls or background Jobs have exited. */
     capacity(): CapacitySnapshot;
-    /** Descriptive only: no policy checks, tool dispatch, capacity reservation or run creation. */
+    /** Descriptive only; an initialized service can observe its process-local capacity. */
     capabilities(raw: unknown, exec: ToolRunContext): {
         ordinaryDag: "supported";
         worker: "unavailable" | "conditional";
@@ -99,7 +121,7 @@ export declare class RuntimeService {
         capacity: {
             scope: "module_process_root";
             observedAt: number;
-            capacityBusy: boolean;
+            capacityBusy: boolean | null;
         };
         authorization: "checked_at_execution";
         message: string;

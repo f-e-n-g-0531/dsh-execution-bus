@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import * as zlib from "node:zlib";
 import {
+  RUNTIME_TOOLS,
   decompress,
   diagnostics,
   main,
@@ -645,3 +646,485 @@ compressedTest(
     assert.deepEqual(readFileSync(path.join(nested, "a.jsonl.zstd")), before);
   },
 );
+
+// Shapes checked in installed dsh-session/types, dsh-tool-executor-ptc/types,
+// and dsh-agent-preset-registry/session declarations.
+const directCall = (name, callId, args = {}) => ({
+  type: "tool/call",
+  data: { turn: 1, step: 1, name, callId, arguments: JSON.stringify(args) },
+});
+const directResult = (toolCallId, value, isError = false) => ({
+  type: "tool/result",
+  data: {
+    turn: 1,
+    step: 1,
+    message: { role: "tool", toolCallId, content: blocks(value), isError },
+  },
+});
+const selection = (agentPreset) => ({
+  type: "agent-preset/selected",
+  data: { agentPreset },
+});
+
+test("allowlist matches all current registered runtime interfaces", () => {
+  const plugin = readFileSync(
+    new URL("../src/plugin.ts", import.meta.url),
+    "utf8",
+  );
+  const names = [...plugin.matchAll(/register\(\s*"(runtime_[a-z_]+)"/g)].map(
+    (m) => m[1],
+  );
+  assert.equal(names.length, 13);
+  assert.deepEqual([...RUNTIME_TOOLS].sort(), names.sort());
+});
+
+test("runtime envelopes recognized without manufacturing run success", () => {
+  const stats = diagnostics();
+  const response = (name) =>
+    name === "runtime_capabilities"
+      ? { ordinaryDag: "supported", worker: "unavailable" }
+      : name === "runtime_handoff"
+        ? { kind: "untrusted_run_handoff", summary: "PRIVATE" }
+        : name === "runtime_notification"
+          ? { runId: "PRIVATE", current: { shouldNotify: true } }
+          : ["runtime_query", "runtime_task", "runtime_status"].includes(name)
+            ? { runs: [] }
+            : run("running", []);
+  const row = metricsFromEvents(
+    [
+      header(),
+      ...RUNTIME_TOOLS.flatMap((name, i) => [
+        directCall(name, String(i)),
+        directResult(String(i), response(name)),
+      ]),
+    ],
+    stats,
+  );
+  for (const name of RUNTIME_TOOLS) {
+    assert.equal(row.runtime.calls[name], 1);
+    assert.equal(row.runtime.resultsSeen[name], 1);
+  }
+  assert.equal(stats.unsupportedResults, 0);
+  assert.equal(row.runtime.callsSeenResultsUnseen, 0);
+  assert.equal(row.runtime.states.succeeded, 0);
+  assert.equal(JSON.stringify(row).includes("PRIVATE"), false);
+});
+
+test("segments attribute starts not late results; native delegation separate from DAG", () => {
+  const row = metricsFromEvents([
+    header("execution-bus-test"),
+    directCall("runtime_run", "dag", {
+      plan: {
+        steps: [{ tool: "agent" }, { tool: "read" }, { tool: "future" }],
+      },
+    }),
+    selection("xiao-he-runtime"),
+    { type: "turn/start" },
+    { type: "step/start" },
+    directResult("dag", run("succeeded", [])),
+    directCall("subagent", "native"),
+    directResult("native", { name: "PRIVATE" }),
+    {
+      type: "tool/ptc-dispatch-start",
+      data: {
+        rootCallId: "root",
+        parentCallId: "root",
+        subCallId: "fork",
+        name: "subagent_fork",
+        arguments: {},
+      },
+    },
+    dispatch("subagent_fork", {}, { subCallId: "fork" }),
+    dispatch("subagent_codex", {}),
+    selection("PRIVATE-PRESET"),
+    dispatch("runtime_capabilities", {
+      ordinaryDag: "supported",
+      worker: "unavailable",
+    }),
+  ]);
+  assert.equal(row.preset, "execution-bus-test");
+  assert.equal(row.creationPreset, row.preset);
+  assert.equal(row.finalPreset, "other");
+  assert.equal(row.presetSegments.length, 3);
+  const [a, b, c] = row.presetSegments;
+  assert.equal(a.runtimeCalls.runtime_run, 1);
+  assert.equal(b.runtimeCalls.runtime_run, 0);
+  assert.equal(a.dagAgentStepRequests, 1);
+  assert.equal(a.dagToolStepRequests, 1);
+  assert.equal(a.dagUnknownStepRequests, 1);
+  assert.equal(b.turns, 1);
+  assert.equal(b.steps, 1);
+  assert.deepEqual(b.nativeDelegationCalls, {
+    subagent: 1,
+    subagent_codex: 1,
+    subagent_fork: 1,
+  });
+  assert.equal(c.runtimeCalls.runtime_capabilities, 1);
+  assert.equal(summarize([row]).dagRequests, 1);
+  assert.equal(JSON.stringify(row).includes("PRIVATE"), false);
+});
+
+test("malformed preset selection marks unknown attribution", () => {
+  const stats = diagnostics();
+  const row = metricsFromEvents(
+    [
+      header(),
+      { type: "agent-preset/selected", data: { preset: "WRONG" } },
+      directCall("runtime_cancel", "pending"),
+    ],
+    stats,
+  );
+  assert.equal(stats.malformedPresetSelections, 1);
+  assert.equal(row.finalPreset, null);
+  assert.equal(row.presetSegments[1].source, "unknown-selection");
+  assert.equal(row.presetSegments[1].runtimeCalls.runtime_cancel, 1);
+});
+
+test("missing results explicit; errors and unrecognized results are not missing", () => {
+  const row = metricsFromEvents([
+    header(),
+    directCall("runtime_cancel", "missing"),
+    directCall("runtime_cancel", "missing"),
+    {
+      type: "tool/ptc-dispatch-start",
+      data: { subCallId: "missing-ptc", name: "runtime_run", arguments: {} },
+    },
+    directCall("runtime_resume", "error"),
+    directResult("error", {}, true),
+    directCall("runtime_status", "bad"),
+    directResult("bad", "not json"),
+    directCall("read", "ordinary"),
+    directResult("ordinary", { text: "PRIVATE" }),
+    directResult("orphan", {}),
+    { type: "tool/call", data: { name: "runtime_task", arguments: "{}" } },
+  ]);
+  assert.equal(row.runtime.callsSeenResultsUnseen, 3);
+  assert.equal(row.quality.callsSeenResultsUnseen, 3);
+  assert.equal(row.quality.callsWithoutIds, 1);
+  assert.equal(row.quality.unpairedResults, 1);
+  assert.equal(row.runtime.errors, 1);
+  assert.equal(row.quality.diagnostics.unsupportedResults, 1);
+  assert.equal(row.runtime.states.cancelled, 0);
+  assert.equal(row.runtime.states.succeeded, 0);
+});
+
+compressedTest(
+  "diagnostics partition selected excluded unknown without leaking filters",
+  (t) => {
+    const dir = fixture(t);
+    const writeLog = (name, text) =>
+      writeFileSync(
+        path.join(dir, name + ".jsonl.zstd"),
+        zlib.zstdCompressSync(text),
+      );
+    writeLog(
+      "selected",
+      encode([
+        { ...header(), cwd: "G:/PRIVATE/project" },
+        directCall("runtime_run", "pending"),
+      ]) + "bad\n",
+    );
+    writeLog(
+      "excluded",
+      encode([{ ...header(), cwd: "G:/PRIVATE/project-other" }]) + "bad\nbad\n",
+    );
+    writeLog("missing-cwd", encode([{ ...header(), cwd: undefined }]));
+    writeLog("missing-header", encode([dispatch("runtime_cancel", {})]));
+    const result = capture([
+      "--sessions",
+      dir,
+      "--project",
+      "g:/private/PROJECT/",
+      "--json",
+    ]);
+    assert.equal(result.report.summary.sessions, 1);
+    assert.equal(result.report.sampleDiagnostics.selected.logs, 1);
+    assert.equal(result.report.sampleDiagnostics.selected.malformedLines, 1);
+    assert.equal(result.report.sampleDiagnostics.excluded.logs, 1);
+    assert.equal(result.report.sampleDiagnostics.excluded.malformedLines, 2);
+    assert.equal(result.report.sampleDiagnostics.unknown.logs, 2);
+    assert.equal(result.report.sampleDiagnostics.unknown.missingHeaders, 1);
+    assert.equal(
+      result.report.sessions[0].quality.diagnostics.malformedLines,
+      1,
+    );
+    for (const key of Object.keys(diagnostics()))
+      assert.equal(
+        result.report.diagnostics[key],
+        ["selected", "excluded", "unknown"].reduce(
+          (n, part) => n + result.report.sampleDiagnostics[part][key],
+          0,
+        ),
+      );
+    assert.equal(result.output.includes("PRIVATE"), false);
+    assert.equal(result.output.includes(dir), false);
+  },
+);
+
+test("project argument requires a value", () => {
+  assert.throws(() => parseArgs(["--project"]));
+  assert.throws(() => parseArgs(["--project", "--json"]));
+  assert.equal(parseArgs(["--project", "local"]).project, "local");
+});
+
+test("public ptc/native labels remain distinguishable while custom labels stay private", () => {
+  const row = metricsFromEvents([
+    header("ptc"),
+    selection("native"),
+    selection("PRIVATE-custom"),
+  ]);
+  assert.equal(row.creationPreset, "ptc");
+  assert.deepEqual(
+    row.presetSegments.map((s) => s.preset),
+    ["ptc", "native", "other"],
+  );
+  assert.equal(JSON.stringify(row).includes("PRIVATE-custom"), false);
+});
+
+compressedTest(
+  "creation preset and date filters do not use switched preset or excluded diagnostics",
+  (t) => {
+    const dir = fixture(t);
+    for (const [name, events] of [
+      [
+        "old",
+        [{ ...header("ptc"), createdAt: 1000 }, selection("xiao-he-runtime")],
+      ],
+      [
+        "new",
+        [{ ...header("xiao-he-runtime"), createdAt: 3000 }, selection("ptc")],
+      ],
+    ])
+      writeFileSync(
+        path.join(dir, name + ".jsonl.zstd"),
+        zlib.zstdCompressSync(encode(events) + "bad\n"),
+      );
+    const r = capture([
+      "--sessions",
+      dir,
+      "--preset",
+      "xiao-he-runtime",
+      "--since",
+      "1970-01-01T00:00:02Z",
+      "--json",
+    ]).report;
+    assert.equal(r.summary.sessions, 1);
+    assert.equal(r.sessions[0].finalPreset, "ptc");
+    assert.equal(r.sampleDiagnostics.selected.malformedLines, 1);
+    assert.equal(r.sampleDiagnostics.excluded.malformedLines, 1);
+  },
+);
+
+test("id-less result records never settle earlier unidentifiable starts", () => {
+  const row = metricsFromEvents([
+    header(),
+    { type: "tool/call", data: { name: "runtime_status", arguments: "{}" } },
+    dispatch("runtime_status", { runs: [] }),
+  ]);
+  assert.equal(row.runtime.calls.runtime_status, 2);
+  assert.equal(row.runtime.resultsSeen.runtime_status, 1);
+  assert.equal(row.runtime.callsSeenResultsUnseen, 1);
+  assert.equal(row.quality.callsWithoutIds, 2);
+});
+
+compressedTest(
+  "quality denominators distinguish gaps without claiming completeness",
+  (t) => {
+    const dir = fixture(t);
+    const samples = [
+      encode([header("ptc", "a")]),
+      encode([header("ptc", "b"), directCall("runtime_run", "pending")]),
+      encode([header("ptc", "c"), { type: "future/event" }]),
+      encode([header("ptc", "d")]) + "broken\n",
+      encode([{ type: "turn/start" }]),
+    ];
+    samples.forEach((text, i) =>
+      writeFileSync(
+        path.join(dir, i + ".jsonl.zstd"),
+        zlib.zstdCompressSync(text),
+      ),
+    );
+    const report = capture(["--sessions", dir, "--json"]).report;
+    assert.deepEqual(report.summary.sampleQuality, {
+      observed: 4,
+      partial: 3,
+      withoutDetectedGaps: 1,
+    });
+    assert.deepEqual(report.sampleCounts, {
+      selected: 4,
+      excluded: 0,
+      unknown: 1,
+    });
+    assert.equal(
+      report.sessions.filter((r) => r.quality.classification === "partial")
+        .length,
+      3,
+    );
+    assert.ok(
+      report.sessions.every((r) => r.quality.status === "observations-only"),
+    );
+  },
+);
+
+test("origin uses SDK evidence, not absent origin or parent/fork guesses", () => {
+  const cases = [
+    [{}, "unknown"],
+    [{ parentSession: "PRIVATE" }, "unknown"],
+    [{ origin: "parent" }, "unknown"],
+    [{ origin: "root" }, "unknown"],
+    [{ origin: "child" }, "unknown"],
+    [{ delegationDepth: 0 }, "root"],
+    [{ delegationDepth: 1 }, "unknown"],
+    [{ origin: "subagent" }, "child"],
+    [{ origin: "subagent", delegationDepth: 1 }, "child"],
+    [{ origin: "subagent", delegationDepth: 0 }, "unknown"],
+    [{ origin: "subagent", delegationDepth: -1 }, "unknown"],
+    [{ origin: "subagent", delegationDepth: "1" }, "unknown"],
+  ];
+  for (const [meta, expected] of cases) {
+    const row = metricsFromEvents([{ ...header(), ...meta }]);
+    assert.equal(row.originClass, expected);
+    assert.notEqual(row.origin, "parent");
+    assert.equal(JSON.stringify(row).includes("PRIVATE"), false);
+  }
+});
+
+test("adoption denominators separate creation, actual segments and root/child/unknown", () => {
+  const make = (meta, events, preset = "xiao-he-runtime") =>
+    metricsFromEvents([{ ...header(preset), ...meta }, ...events]);
+  const rows = [
+    make({ delegationDepth: 0 }, [selection("native"), directCall("runtime_run", "outside")]),
+    make({ delegationDepth: 0 }, [selection("xiao-he-runtime"),
+      directCall("runtime_capabilities", "observe"), directCall("subagent", "child"),
+      selection("native"), directCall("runtime_run", "outside")], "native"),
+    make({ delegationDepth: 0 }, [{ type: "turn/start" }]),
+    make({ delegationDepth: 0 }, [directCall("runtime_run", "execute"),
+      directCall("runtime_status", "status"), directCall("runtime_cancel", "control")]),
+    make({ origin: "subagent", delegationDepth: 1 }, [directCall("runtime_run", "execute-child")]),
+    make({}, [directCall("runtime_query", "query-unknown")]),
+    make({ delegationDepth: 0 }, [directCall("read", "ordinary")]),
+    make({ delegationDepth: 0 }, [directCall("subagent_fork", "native-only")]),
+  ];
+  const summary = summarize(rows);
+  assert.deepEqual(summary.originSessions, { root: 6, child: 1, unknown: 1 });
+  const root = summary.xiaoHeAdoption.byOrigin.root;
+  assert.equal(root.selectedSessions, 6);
+  assert.equal(root.createdWithXiaoHeSessions, 5);
+  assert.equal(root.sessionsWithXiaoHeSegments, 6);
+  assert.equal(root.actualXiaoHeSessions, 5);
+  assert.equal(root.xiaoHeSegments, 6);
+  assert.equal(root.actualXiaoHeSegments, 5);
+  assert.equal(root.xiaoHeSegmentsWithoutObservedActivity, 1);
+  assert.equal(root.executionRequests, 1); // outside xiao-he never counts
+  assert.equal(root.observationRequests, 2);
+  assert.equal(root.controlRequests, 1);
+  assert.equal(root.nativeDelegationRequests, 2);
+  assert.equal(root.sessionPaths.denominator, 5);
+  assert.deepEqual(root.sessionPaths.counts, {
+    "observation+nativeDelegation": 1,
+    noRuntimeOrDelegationObserved: 2,
+    "execution+observation+control": 1,
+    nativeDelegation: 1,
+  });
+  assert.deepEqual(root.sessionPaths.fractions.noRuntimeOrDelegationObserved,
+    { numerator: 2, denominator: 5, rate: 0.4 });
+  assert.equal(summary.xiaoHeAdoption.byOrigin.child.executionRequests, 1);
+  assert.equal(summary.xiaoHeAdoption.byOrigin.unknown.observationRequests, 1);
+  const empty = summarize([]).xiaoHeAdoption.byOrigin.root;
+  assert.equal(empty.sessionPaths.denominator, 0);
+  assert.deepEqual(empty.sessionPaths.fractions, {});
+  assert.deepEqual(summary.runtimeRequestKinds,
+    { executionRequests: 4, observationRequests: 3, controlRequests: 1 });
+  // Compatibility fields remain whole-session and creation-based.
+  assert.equal(summary.runtimeModeSessions, 7);
+  assert.equal(summary.runtimeRequests, 4);
+  assert.equal(JSON.stringify(summary).includes("inapplicability"), true);
+});
+
+test("repeated active xiao-he segments have separate segment and session denominators", () => {
+  const row = metricsFromEvents([header(), directCall("runtime_run", "one"),
+    selection("native"), selection("xiao-he-runtime"), directCall("subagent", "two")]);
+  const group = summarize([row]).xiaoHeAdoption.byOrigin.unknown;
+  assert.equal(group.sessionPaths.denominator, 1);
+  assert.equal(group.segmentPaths.denominator, 2);
+  assert.deepEqual(group.sessionPaths.counts, { "execution+nativeDelegation": 1 });
+  assert.deepEqual(group.segmentPaths.counts, { execution: 1, nativeDelegation: 1 });
+});
+
+test("runtime execution and observation categories never treat ledger mutations as queries", () => {
+  const row = metricsFromEvents([header(), ...RUNTIME_TOOLS.map((name) => directCall(name, name))]);
+  assert.deepEqual(row.runtime.requestKinds,
+    { executionRequests: 1, observationRequests: 5, controlRequests: 7 });
+  assert.deepEqual(row.presetSegments[0].requestKinds, row.runtime.requestKinds);
+});
+
+compressedTest("origin filter selects explicit classes without private metadata output", (t) => {
+  const dir = fixture(t);
+  const metas = [{ delegationDepth: 0 }, { origin: "subagent" }, { parentSession: "PRIVATE" }];
+  for (const [i, meta] of metas.entries()) writeFileSync(path.join(dir, i + ".jsonl.zstd"),
+    zlib.zstdCompressSync(encode([{ ...header(), ...meta }])));
+  for (const origin of ["root", "child", "unknown"]) {
+    const result = capture(["--sessions", dir, "--origin", origin, "--json"]);
+    assert.equal(result.report.summary.sessions, 1);
+    assert.equal(result.report.sessions[0].originClass, origin);
+    assert.equal(result.report.sampleCounts.excluded, 2);
+    assert.equal(result.output.includes("PRIVATE"), false);
+    assert.equal(result.output.includes(dir), false);
+  }
+});
+
+test("origin argument accepts only documented evidence classes", () => {
+  for (const origin of ["root", "child", "unknown"])
+    assert.equal(parseArgs(["--origin", origin]).origin, origin);
+  for (const args of [["--origin"], ["--origin", "--json"], ["--origin", "parent"],
+    ["--origin", "subagent"]]) assert.throws(() => parseArgs(args));
+});
+
+for (const name of ["subagent", "subagent_codex", "subagent_fork"]) {
+  test(name + " result gaps independently downgrade sample quality", () => {
+    const missing = metricsFromEvents([header(), directCall(name, "pending")]);
+    assert.equal(missing.quality.classification, "partial");
+    assert.equal(missing.quality.delegationCallsSeenResultsUnseen, 1);
+    assert.equal(missing.runtime.callsSeenResultsUnseen, 0);
+    const missingPtc = metricsFromEvents([
+      header(),
+      {
+        type: "tool/ptc-dispatch-start",
+        data: { name, subCallId: "ptc", arguments: {} },
+      },
+    ]);
+    assert.equal(missingPtc.quality.classification, "partial");
+    assert.equal(missingPtc.quality.delegationCallsSeenResultsUnseen, 1);
+    const noId = metricsFromEvents([
+      header(),
+      { type: "tool/call", data: { name, arguments: "{}" } },
+      dispatch(name, {}),
+    ]);
+    assert.equal(noId.quality.classification, "partial");
+    assert.equal(noId.quality.delegationCallsWithoutIds, 2);
+    assert.equal(noId.quality.delegationCallsSeenResultsUnseen, 1);
+    const settledOnly = metricsFromEvents([header(), dispatch(name, {})]);
+    assert.equal(settledOnly.quality.classification, "partial");
+    assert.equal(settledOnly.quality.delegationCallsWithoutIds, 1);
+    assert.equal(settledOnly.quality.delegationCallsSeenResultsUnseen, 0);
+    const settled = metricsFromEvents([
+      header(),
+      directCall(name, "ok"),
+      directResult("ok", { name: "PRIVATE" }),
+    ]);
+    assert.equal(settled.quality.classification, "withoutDetectedGaps");
+    assert.equal(settled.quality.delegationCallsSeenResultsUnseen, 0);
+    assert.equal(settled.quality.delegationCallsWithoutIds, 0);
+    const ptc = metricsFromEvents([
+      header(),
+      {
+        type: "tool/ptc-dispatch-start",
+        data: { name, subCallId: "ptc", arguments: {} },
+      },
+      dispatch(name, {}, { subCallId: "ptc" }),
+    ]);
+    assert.equal(ptc.quality.classification, "withoutDetectedGaps");
+    assert.equal(ptc.quality.delegationCallsSeenResultsUnseen, 0);
+    assert.equal(JSON.stringify(settled).includes("PRIVATE"), false);
+  });
+}

@@ -499,6 +499,9 @@ test("capacity schema and presentation expose only the coarse busy observation",
     const legacyText = runtimePresentationMeta({}, legacy).text;
     assert.match(legacyText, /普通 DAG/);
     assert.doesNotMatch(legacyText, /共享运行准入/);
+    const unknownValue = { ...value, capacity: { ...value.capacity, capacityBusy: null } };
+    assert.deepEqual(validateJsonSchemaValue(schema, unknownValue), []);
+    assert.match(runtimePresentationMeta({}, unknownValue).text, /共享运行准入：未知/);
     const idleText = runtimePresentationMeta({}, value).text;
     const busyValue = {
       ...value,

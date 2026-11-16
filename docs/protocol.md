@@ -124,7 +124,7 @@ if (question) {
 
 ### 共享容量观察（1.7.0）
 
-能力返回新增 `capacity:{scope:"module_process_root",observedAt,capacityBusy:boolean}`。观察范围为当前模块实例、进程及规范化运行根目录，不是全宿主或跨进程统计；`observedAt` 为毫秒时间戳。capacityBusy 只表示共享活动运行数已达运行上限（含终态但尚未收束的占槽），不检查 Worker 是否满载或可用、宿主工具是否仍存活。普通 owner 只得到此粗化布尔值，不返回其他 owner、运行/任务标识、目录或精确占槽数。false 不保证未来有空槽、授权通过或调用成功；查询不做预留、排队或自动重试，勿轮询正在同步等待的运行。
+能力返回新增 `capacity:{scope:"module_process_root",observedAt,capacityBusy:boolean|null}`。查询本身不初始化存储、不检查或获取根锁；插件尚未初始化运行服务时返回 `capacityBusy:null`（未知），不能推断是否存在锁。服务已初始化后的观察范围为当前模块实例、进程及规范化运行根目录，不是全宿主或跨进程统计；`observedAt` 为毫秒时间戳。capacityBusy 只表示共享活动运行数已达运行上限（含终态但尚未收束的占槽），不检查 Worker 是否满载或可用、宿主工具是否仍存活。普通 owner 只得到此粗化布尔值，不返回其他 owner、运行/任务标识、目录或精确占槽数。false 不保证未来有空槽、授权通过或调用成功；查询不做预留、排队或自动重试，勿轮询正在同步等待的运行。
 
 包入口额外导出 `CapacitySnapshot` 类型；可信宿主可调用已持有服务的 `service.capacity()`：
 
