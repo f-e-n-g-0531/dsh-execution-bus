@@ -1,9 +1,9 @@
 {
   "name": "@feng0531/dsh-execution-bus",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "type": "module",
   "private": false,
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"

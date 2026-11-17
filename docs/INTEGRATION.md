@@ -53,7 +53,7 @@
 
 ## 许可与实现归属
 
-dsh-llm-rate-limit、dsh-nightshift、dsh-input-traffic 的 LICENSE 已阅读，均为 MIT，分别保留各自权利；本轮只参考行为原则并重新实现，无第三方源码片段合入，无新增运行依赖。项目自身非商业源码公开许可不改变上游独立许可。未来复制实质代码需另行保留上游版权和完整许可。
+dsh-llm-rate-limit、dsh-nightshift、dsh-input-traffic 的 LICENSE 已阅读，均为 MIT，分别保留各自权利；本轮只参考行为原则并重新实现，无第三方源码片段合入，无新增运行依赖。项目自身 MIT 许可不改变上游独立许可。未来复制实质代码需另行保留上游版权和完整许可。
 
 ## 验证及边界
 
