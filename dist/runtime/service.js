@@ -14,7 +14,7 @@ import { runProgress, runGuidance } from "../presentation.js";
 import { RuntimeExecutor } from "./executor.js";
 import { parsePlan, RUNTIME_LIMITS } from "./plan.js";
 import { runAcceptance, runRecovery } from "./insights.js";
-import { runAttention } from "./attention.js";
+import { legacyAcknowledgedNotificationKey, runAttention } from "./attention.js";
 import { runWaiting } from "./waiting.js";
 import { ownerReview } from "./review.js";
 import { decisionLedger, validDecisionInput } from "./decision.js";
@@ -38,7 +38,25 @@ function observeSettlement(runId, done) {
 const STATUS_KEYS = new Set(["runId", "limit", "offset", "snapshot", "cursor"]);
 // Shared only inside this module/process. A new Agent scope is not a process restart.
 const managers = new Map();
-function summary(run) {
+/** Reuse only within one synchronous response, never across record reads. */
+function observeRun(run, acceptance) {
+    const settled = settlement.get(run.runId);
+    const recovery = runRecovery(run, settled);
+    const waiting = runWaiting(run, settled);
+    const review = ownerReview(run);
+    const attention = runAttention(run, settled, { recovery, acceptance, review });
+    return {
+        settled,
+        recovery,
+        attention,
+        decisionLedger: decisionLedger(run, attention),
+        waiting,
+        ownerReview: review,
+        action: runAction(run, settled, { recovery, waiting, attention }),
+    };
+}
+function summary(run, acceptance) {
+    const { settled, ...observation } = observeRun(run, acceptance);
     return {
         runId: run.runId,
         state: run.state,
@@ -55,17 +73,10 @@ function summary(run) {
         updatedAt: run.updatedAt,
         ...(run.finishedAt === undefined ? {} : { finishedAt: run.finishedAt }),
         durationMs: Math.max(0, (run.finishedAt ?? Date.now()) - run.createdAt),
-        ...(settlement.has(run.runId)
-            ? { executionSettled: settlement.get(run.runId) }
-            : {}),
+        ...(settled === undefined ? {} : { executionSettled: settled }),
         progress: runProgress(run),
         guidance: runGuidance(run),
-        recovery: runRecovery(run, settlement.get(run.runId)),
-        attention: runAttention(run, settlement.get(run.runId)),
-        decisionLedger: decisionLedger(run, runAttention(run, settlement.get(run.runId))),
-        waiting: runWaiting(run, settlement.get(run.runId)),
-        ownerReview: ownerReview(run),
-        action: runAction(run, settlement.get(run.runId)),
+        ...observation,
         steps: run.steps.map((step) => ({
             id: step.id,
             tool: step.tool,
@@ -318,7 +329,7 @@ export class RuntimeService {
                     : { previousRunId: run.plan.previousRunId }),
                 updatedAt: run.updatedAt,
                 stepCount: run.steps.length,
-                action: runAction(run, settlement.get(run.runId)),
+                action: result.actions.get(run.runId),
             })),
             view: input.view,
             offset: input.offset,
@@ -359,30 +370,29 @@ export class RuntimeService {
                 runs: [...records.values()]
                     .sort((a, b) => b.updatedAt - a.updatedAt || a.runId.localeCompare(b.runId))
                     .slice(offset, offset + limit)
-                    .map((run) => ({
-                    runId: run.runId,
-                    state: run.state,
-                    ...(run.goal === undefined ? {} : { goal: run.goal }),
-                    ...(run.plan.provenance === undefined
-                        ? {}
-                        : { provenance: structuredClone(run.plan.provenance) }),
-                    ...(run.plan.taskId === undefined
-                        ? {}
-                        : { taskId: run.plan.taskId }),
-                    ...(run.plan.previousRunId === undefined
-                        ? {}
-                        : { previousRunId: run.plan.previousRunId }),
-                    ...(run.error === undefined ? {} : { error: run.error }),
-                    updatedAt: run.updatedAt,
-                    stepCount: run.steps.length,
-                    progress: runProgress(run),
-                    guidance: runGuidance(run),
-                    attention: runAttention(run, settlement.get(run.runId)),
-                    decisionLedger: decisionLedger(run, runAttention(run, settlement.get(run.runId))),
-                    waiting: runWaiting(run, settlement.get(run.runId)),
-                    ownerReview: ownerReview(run),
-                    action: runAction(run, settlement.get(run.runId)),
-                })),
+                    .map((run) => {
+                    const { settled: _settled, recovery: _recovery, ...observation } = observeRun(run);
+                    return {
+                        runId: run.runId,
+                        state: run.state,
+                        ...(run.goal === undefined ? {} : { goal: run.goal }),
+                        ...(run.plan.provenance === undefined
+                            ? {}
+                            : { provenance: structuredClone(run.plan.provenance) }),
+                        ...(run.plan.taskId === undefined
+                            ? {}
+                            : { taskId: run.plan.taskId }),
+                        ...(run.plan.previousRunId === undefined
+                            ? {}
+                            : { previousRunId: run.plan.previousRunId }),
+                        ...(run.error === undefined ? {} : { error: run.error }),
+                        updatedAt: run.updatedAt,
+                        stepCount: run.steps.length,
+                        progress: runProgress(run),
+                        guidance: runGuidance(run),
+                        ...observation,
+                    };
+                }),
                 diagnostics: this.store.diagnostics(),
             };
         }
@@ -558,18 +568,23 @@ export class RuntimeService {
         const attention = runAttention(run, settlement.get(run.runId));
         // Delivery versions also bind the problem snapshot: a later occurrence of the
         // same action must not be suppressed by a prior sent/withdrawn receipt.
+        const versionKey = (key) => createHash("sha256")
+            .update(JSON.stringify([key, attention.snapshotHash]))
+            .digest("hex");
+        const canonicalKey = versionKey(attention.notification.key);
+        const legacyKey = legacyAcknowledgedNotificationKey(run.runId, attention);
+        const legacyReceiptKey = legacyKey === undefined ? undefined : versionKey(legacyKey);
+        const { shouldNotify } = attention.notification;
+        // Reconcile before CAS; retain a matching stored legacy key and token.
+        let receipt = operation === "get"
+            ? this.notifications.get(owner, run.runId)
+            : this.notifications.sync(owner, run.runId, canonicalKey, shouldNotify, legacyReceiptKey);
         const current = {
-            key: createHash("sha256")
-                .update(JSON.stringify([attention.notification.key, attention.snapshotHash]))
-                .digest("hex"),
-            shouldNotify: attention.notification.shouldNotify,
+            key: shouldNotify && legacyReceiptKey !== undefined && receipt?.key === legacyReceiptKey
+                ? legacyReceiptKey : canonicalKey,
+            shouldNotify,
         };
-        let receipt;
-        if (operation === "get")
-            receipt = this.notifications.get(owner, run.runId);
-        else {
-            // Reconcile immediately before a claim/callback: an obsolete payload cannot settle a newer version.
-            receipt = this.notifications.sync(owner, run.runId, current.key, current.shouldNotify);
+        if (operation !== "get") {
             if (operation === "claim") {
                 if (!current.shouldNotify || input.key !== current.key)
                     throw Error(ERRORS.RUNTIME_RESULT_CHANGED);
@@ -721,9 +736,10 @@ export class RuntimeService {
             if (!limit)
                 throw Error(ERRORS.INVALID_PLAN);
             const end = Math.min(chars.length, offset + limit);
+            const acceptance = runAcceptance(run);
             return {
-                ...summary(run),
-                acceptance: runAcceptance(run),
+                ...summary(run, acceptance),
+                acceptance,
                 ownerReviewHistory: run.ownerReviews ?? [],
                 acknowledgementHistory: run.acknowledgements ?? [],
                 decisionHistory: run.decisionDispositions ?? [],
@@ -745,9 +761,10 @@ export class RuntimeService {
             input.limit !== undefined ||
             input.hash !== undefined)
             throw Error(ERRORS.INVALID_PLAN);
+        const acceptance = runAcceptance(run);
         return {
-            ...summary(run),
-            acceptance: runAcceptance(run),
+            ...summary(run, acceptance),
+            acceptance,
             ownerReviewHistory: run.ownerReviews ?? [],
             acknowledgementHistory: run.acknowledgements ?? [],
             decisionHistory: run.decisionDispositions ?? [],

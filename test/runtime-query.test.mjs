@@ -197,7 +197,11 @@ test("action grouping reuses acknowledgements, decision dispositions and unknown
     dependsOn: [], retry: 0, timeoutMs: 1000 });
   acknowledge(unknown, "inspect_external_state"); disposeDecision(unknown);
   assert.equal(runAction(failed, true).kind, "settled");
-  assert.equal(runAction(disposed, true).kind, "settled");
+  assert.equal(runAction(disposed, true).kind, "review_results");
+  assert.deepEqual(ids(query([failed, disposed, unknown], { view: "review" })), [disposed.runId]);
+  const accepted = structuredClone(disposed); accept(accepted);
+  assert.equal(runAction(accepted, true).kind, "settled");
+  assert.deepEqual(ids(query([accepted], { view: "review" })), []);
   assert.equal(runAction(unknown, false).kind, "inspect_external_state");
   assert.deepEqual(ids(query([failed, disposed, unknown], { view: "needs_action" })), [unknown.runId]);
   assert.deepEqual(ids(query([failed, disposed, unknown], { action: "inspect_external_state" }, () => false)), [unknown.runId]);
@@ -227,7 +231,7 @@ test("updatedAt descending/runId ascending is stable across input permutations a
   assert.equal(first.hasMore, true); assert.equal(second.hasMore, false);
   const beyond = query(runs, { offset: 1000 });
   assert.deepEqual(beyond.runs, []); assert.equal(beyond.matchedCount, 4); assert.equal(beyond.hasMore, false);
-  assert.deepEqual(query([], {}), { runs: [], matchedCount: 0, groups: { needsAction: 0, review: 0 }, hasMore: false });
+  assert.deepEqual(query([], {}), { runs: [], actions: new Map(), matchedCount: 0, groups: { needsAction: 0, review: 0 }, hasMore: false });
 });
 
 test("queries do not mutate records, input arrays or parsed input; returned page arrays are independent", () => {
@@ -239,6 +243,7 @@ test("queries do not mutate records, input arrays or parsed input; returned page
   const second = queryRuns(runs, input, () => true);
   assert.deepEqual(first, second);
   assert.equal(first.runs[0], runs[1]);
+  assert.deepEqual(first.actions.get(runs[1].runId), runAction(runs[1], true));
   first.runs.pop(); first.groups.needsAction = 999;
   assert.equal(second.runs.length, 1);
   assert.equal(second.groups.needsAction, 1);

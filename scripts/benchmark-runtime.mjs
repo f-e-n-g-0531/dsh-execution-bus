@@ -109,13 +109,22 @@ export function parseArgs(argv) {
   return validateOptions(out);
 }
 
-// Known local execution closure; optional modules preserve pre-Agent build comparisons.
-export const RUNTIME_ARTIFACT_FILES = Object.freeze([
+// Checked against the current local value-import closure in benchmark-runtime.test.mjs.
+// Only the historical minimum is required here; an older build may not import
+// newer modules. ENOENT marks their absence, but Node still requires any actual imports.
+const REQUIRED_RUNTIME_ARTIFACT_FILES = [
   "runtime/executor.js", "runtime/store.js", "runtime/plan.js", "runtime/service.js",
-  "error-codes.js", "presentation.js", "runtime/retry.js", "runtime/agent.js",
-  "runtime/agent-report.js", "runtime/agent-trace.js", "runtime/worker-quota.js",
-  "runtime/attention.js", "runtime/insights.js", "runtime/waiting.js", "runtime/review.js",
-  "runtime/plan-diff.js",
+  "error-codes.js", "presentation.js",
+];
+export const RUNTIME_ARTIFACT_FILES = Object.freeze([
+  ...REQUIRED_RUNTIME_ARTIFACT_FILES,
+  "runtime/acknowledgement.js", "runtime/action.js", "runtime/agent-report.js",
+  "runtime/agent-trace.js", "runtime/agent.js", "runtime/attention.js",
+  "runtime/decision.js", "runtime/dependency-context.js", "runtime/handoff.js",
+  "runtime/history.js", "runtime/host-compat.js", "runtime/insights.js",
+  "runtime/model-wait.js", "runtime/notification-delivery.js", "runtime/notifications.js",
+  "runtime/plan-diff.js", "runtime/query.js", "runtime/retry.js", "runtime/review.js",
+  "runtime/root-lock.js", "runtime/waiting.js", "runtime/worker-quota.js",
 ]);
 export function runtimeArtifactDigest(dist, read = readFileSync) {
   const root = dist instanceof URL ? dist : pathToFileURL(path.resolve(dist) + path.sep);
@@ -124,7 +133,7 @@ export function runtimeArtifactDigest(dist, read = readFileSync) {
     hash.update(name + "\0");
     let bytes;
     try { bytes = read(new URL(name, root)); } catch (error) {
-      if (index < 6 || error?.code !== "ENOENT") throw error;
+      if (index < REQUIRED_RUNTIME_ARTIFACT_FILES.length || error?.code !== "ENOENT") throw error;
       hash.update("missing\0");
       continue;
     }

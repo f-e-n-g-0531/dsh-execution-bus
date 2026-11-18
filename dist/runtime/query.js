@@ -76,6 +76,7 @@ export function queryRuns(runs, input, settled) {
     const q = input.q?.toLowerCase();
     const groups = { needsAction: 0, review: 0 };
     const matches = [];
+    const actions = new Map();
     for (const run of runs) {
         if (input.taskId !== undefined && run.plan.taskId !== input.taskId)
             continue;
@@ -102,11 +103,13 @@ export function queryRuns(runs, input, settled) {
         if (input.view === "needs_action" && !needsAction)
             continue;
         matches.push(run);
+        actions.set(run.runId, action);
     }
     matches.sort((a, b) => b.updatedAt - a.updatedAt ||
         (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
     return {
         runs: matches.slice(input.offset, input.offset + input.limit),
+        actions,
         matchedCount: matches.length,
         groups,
         hasMore: input.offset + input.limit < matches.length,

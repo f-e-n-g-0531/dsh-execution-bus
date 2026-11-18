@@ -1,4 +1,6 @@
 import { test } from "node:test";
+import { createHash } from "node:crypto";
+import { NotificationStore } from "../dist/runtime/notifications.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -35,6 +37,7 @@ async function fixture(fn) {
       exec,
     );
     await fn({
+      root,
       service,
       store,
       ctx,
@@ -103,6 +106,80 @@ for (const outcome of ["unknown", "not_sent", "throw", "invalid"]) {
         assert.equal(f.calls(), 1);
       }),
   );
+}
+
+const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+
+function unknownProblem(f) {
+  const run = f.store.load(f.runId);
+  run.steps[0].state = "unknown";
+  f.store.save(run);
+  return f.service.status({ runId: f.runId }, f.exec).attention;
+}
+
+function acknowledgeUnknown(f, attention) {
+  return f.service.acknowledge({
+    runId: f.runId,
+    snapshotHash: attention.snapshotHash,
+    expectedRevision: attention.revision,
+    key: attention.items[0].key,
+    reason: "Received, external state still unknown",
+  }, f.exec).attention;
+}
+
+for (const outcome of ["sent", "unknown"]) {
+  test("acknowledgement keeps the same external-state delivery identity: " + outcome, () =>
+    fixture(async (f) => {
+      const attention = unknownProblem(f);
+      let sends = 0;
+      const sender = async () => { sends++; return outcome; };
+      const first = await f.service.deliverNotification(f.runId, f.exec, sender);
+      assert.equal(first.receipt.status, outcome === "sent" ? "sent" : "delivering");
+      assert.equal(first.current.key, digest([digest({ runId: f.runId, items: attention.items }), attention.snapshotHash]));
+      const acknowledged = acknowledgeUnknown(f, attention);
+      assert.deepEqual(acknowledged.notification, attention.notification);
+      assert.equal(acknowledged.items[0].acknowledged, true);
+      assert.deepEqual(await f.service.deliverNotification(f.runId, f.exec, sender), first);
+      assert.equal(sends, 1);
+      assert.equal(f.calls(), 1);
+    }));
+
+  test("an already-acknowledged receipt written by the old version is not rearmed: " + outcome, () =>
+    fixture(async (f) => {
+      const acknowledged = acknowledgeUnknown(f, unknownProblem(f));
+      const get = () => f.service.notification({ runId: f.runId }, f.exec);
+      const canonical = get().current.key;
+      const legacy = digest([digest({ runId: f.runId, items: acknowledged.items }), acknowledged.snapshotHash]);
+      assert.notEqual(legacy, canonical);
+      const legacyStore = new NotificationStore(path.join(f.root, "notifications"));
+      const pending = legacyStore.sync("owner", f.runId, legacy, true);
+      const attempt = legacyStore.claim("owner", f.runId, legacy, pending.revision);
+      const receipt = outcome === "sent"
+        ? legacyStore.settle("owner", f.runId, legacy, attempt.revision, attempt.attemptToken, "sent")
+        : attempt;
+      const settle = { runId: f.runId, operation: "settle", expectedRevision: attempt.revision,
+        attemptToken: attempt.attemptToken, outcome: "sent" };
+      assert.equal(get().current.key, legacy);
+      assert.deepEqual(get().receipt, receipt);
+      let sends = 0;
+      const sender = async () => { sends++; return "sent"; };
+      const skipped = await f.service.deliverNotification(f.runId, f.exec, sender);
+      assert.equal(skipped.current.key, legacy);
+      assert.deepEqual(skipped.receipt, receipt);
+      assert.equal(sends, 0);
+      assert.throws(() => f.service.notification({ ...settle, key: canonical }, f.exec), /RUNTIME_RESULT_CHANGED/);
+      if (outcome === "unknown") {
+        assert.throws(() => f.service.notification({ ...settle, key: legacy, expectedRevision: pending.revision }, f.exec), /RUNTIME_RESULT_CHANGED/);
+        assert.equal(f.service.notification({ ...settle, key: legacy }, f.exec).receipt.status, "sent");
+      }
+      const changed = f.store.load(f.runId);
+      changed.steps[0].error = "new-problem";
+      f.store.save(changed);
+      const next = f.service.notification({ runId: f.runId, operation: "sync" }, f.exec);
+      assert.equal(next.receipt.status, "pending");
+      assert.notEqual(next.receipt.key, legacy);
+      assert.notEqual(next.receipt.key, canonical);
+    }));
 }
 
 test("host concurrent delivery claims do not double send", () =>

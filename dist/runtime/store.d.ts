@@ -79,6 +79,7 @@ export declare class RunStore {
     recordDecision(runId: string, ownerSessionId: string, input: DecisionInput): RunRecord;
     load(runId: string): RunRecord | undefined;
     private readRecord;
+    private readFailure;
     private scan;
     list(limit?: number, ownerSessionId?: string, offset?: number, taskId?: string, strict?: boolean): RunRecord[];
     remove(runId: string): void;

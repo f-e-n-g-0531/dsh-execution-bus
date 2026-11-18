@@ -15,7 +15,7 @@ import type { BigIntStats } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ERRORS } from "../error-codes.js";
-import { parsePlan, RUNTIME_LIMITS } from "./plan.js";
+import { IDEMPOTENT_TOOLS, parseStoredPlan, RUNTIME_LIMITS } from "./plan.js";
 import type { Plan } from "./plan.js";
 import { validWorkerTrace } from "./agent-trace.js";
 import {
@@ -103,6 +103,9 @@ interface RunMetadata {
   updatedAt: number;
   signature: string;
   taskId?: string;
+}
+interface ReadObservation {
+  failed: boolean;
 }
 interface CachedMetadata {
   metadata: Readonly<RunMetadata>;
@@ -346,7 +349,7 @@ function validRun(value: unknown, runId: string): value is RunRecord {
   }
   let parsed: Plan;
   try {
-    parsed = parsePlan({
+    parsed = parseStoredPlan({
       ...(plan.goal === undefined ? {} : { goal: plan.goal }),
       ...(plan.provenance === undefined ? {} : { provenance: plan.provenance }),
       ...(plan.handoff === undefined ? {} : { handoff: plan.handoff }),
@@ -427,9 +430,15 @@ function validRun(value: unknown, runId: string): value is RunRecord {
         return false;
     }
     if (step.attempts === 0 && step.startedAt !== undefined) return false;
+    // Older recovery checkpoints could clear startedAt on a previously
+    // attempted read. An offline cancellation must preserve the recorded
+    // attempt count without inventing a timestamp that was never saved.
+    const cancelledLegacyRead =
+      step.state === "cancelled" && IDEMPOTENT_TOOLS.has(spec.tool);
     if (
       step.attempts > 0 &&
       step.state !== "pending" &&
+      !cancelledLegacyRead &&
       step.startedAt === undefined
     )
       return false;
@@ -839,6 +848,7 @@ export class RunStore {
   private readRecord(
     runId: string,
     hint = false,
+    observation?: ReadObservation,
   ): { run?: RunRecord; metadata: RunMetadata } | undefined {
     // Reject malformed run IDs before any filesystem accounting: a caller
     // error is not a storage read failure and must not inflate diagnostics.
@@ -914,7 +924,7 @@ export class RunStore {
     } catch (error) {
       if (key) forgetMetadata(key);
       if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-        this.count("readFailures");
+        this.readFailure(observation);
       return undefined;
     } finally {
       if (fd !== undefined) {
@@ -922,24 +932,29 @@ export class RunStore {
           closeSync(fd);
         } catch {
           if (key) forgetMetadata(key);
-          this.count("readFailures");
+          this.readFailure(observation);
         }
       }
     }
   }
 
-  private scan(hint = false): RunMetadata[] {
+  private readFailure(observation?: ReadObservation): void {
+    if (observation) observation.failed = true;
+    this.count("readFailures");
+  }
+
+  private scan(hint = false, observation?: ReadObservation): RunMetadata[] {
     let names: string[];
     try {
       names = readdirSync(this.root);
     } catch {
-      this.count("readFailures");
+      this.readFailure(observation);
       return [];
     }
     const runs: RunMetadata[] = [];
     for (const name of names) {
       if (!name.endsWith(".json") || !RUN_ID.test(name.slice(0, -5))) continue;
-      const entry = this.readRecord(name.slice(0, -5), hint);
+      const entry = this.readRecord(name.slice(0, -5), hint, observation);
       if (entry) runs.push(entry.metadata);
     }
     return runs.sort(compareMetadata);
@@ -958,19 +973,21 @@ export class RunStore {
     // A changed selected page is retried, not silently shortened or refilled out
     // of order. Under persistent churn return no page rather than wrong offsets.
     for (let attempt = 0; attempt < 2; attempt++) {
-      const failuresBefore = this.counters.readFailures;
-      const candidates = this.scan(true).filter(
+      // Per-operation I/O outcome, independent of saturated public diagnostics.
+      const observation = strict ? { failed: false } : undefined;
+      const candidates = this.scan(true, observation).filter(
         (entry) =>
           (ownerSessionId === undefined ||
             entry.ownerSessionId === ownerSessionId) &&
           (taskId === undefined || entry.taskId === taskId),
       );
-      if (strict && this.counters.readFailures !== failuresBefore)
+      if (observation?.failed)
         throw Error(ERRORS.RUNTIME_STORAGE_FAILED);
       const page: RunRecord[] = [];
       let changed = false;
       for (const candidate of candidates.slice(offset, end)) {
-        const fresh = this.readRecord(candidate.runId);
+        const fresh = this.readRecord(candidate.runId, false, observation);
+        if (observation?.failed) throw Error(ERRORS.RUNTIME_STORAGE_FAILED);
         if (
           !fresh?.run ||
           fresh.metadata.signature !== candidate.signature ||

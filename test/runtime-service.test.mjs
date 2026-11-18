@@ -554,6 +554,59 @@ test("cancel immediately after resume admission wins before the recovery microta
   }
 });
 
+test("outer abort after resume admission cancels before requeue and saves the checkpoint", async () => {
+  let calls = 0;
+  const f = fixture(async () => { calls++; });
+  try {
+    const service = f.create();
+    const recovery = interrupted(f.store);
+    const startedAt = recovery.createdAt;
+    Object.assign(recovery.steps[0], {
+      state: "unknown", attempts: 1, startedAt, finishedAt: recovery.finishedAt,
+    });
+    f.store.save(recovery);
+    const outer = new AbortController();
+    const pending = service.resume({ runId: recovery.runId }, exec("owner", outer.signal));
+    outer.abort();
+    const result = await bounded(pending, "abort before recovery");
+    assert.equal(result.state, "cancelled");
+    assert.equal(result.error, "RUNTIME_CANCELLED");
+    const saved = new RunStore(f.root).load(recovery.runId);
+    assert.equal(saved.state, "cancelled");
+    assert.equal(saved.steps[0].state, "unknown", "the previous attempt was not requeued");
+    assert.equal(saved.steps[0].startedAt, startedAt);
+    assert.equal(saved.steps[0].attempts, 1);
+    assert.equal(calls, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("offline cancellation accepts a legacy requeued read without fabricating its start time", async () => {
+  let calls = 0;
+  const f = fixture(async () => { calls++; });
+  try {
+    const recovery = interrupted(f.store);
+    // A prior runtime crashed between requeue and the next attempt.
+    recovery.state = "running";
+    delete recovery.error;
+    delete recovery.finishedAt;
+    recovery.steps[0].attempts = 1;
+    f.store.save(recovery);
+    const reopened = new RunStore(f.root);
+    const service = f.create(undefined, reopened);
+    assert.equal(reopened.load(recovery.runId).state, "interrupted");
+    assert.equal(service.cancel({ runId: recovery.runId }, exec()).state, "cancelled");
+    const saved = reopened.load(recovery.runId);
+    assert.equal(saved.steps[0].state, "cancelled");
+    assert.equal(saved.steps[0].attempts, 1);
+    assert.equal(saved.steps[0].startedAt, undefined);
+    assert.equal(calls, 0);
+  } finally {
+    await f.close();
+  }
+});
+
 test("status applies owner filtering before limit/offset pagination", async () => {
   const f = fixture();
   try {

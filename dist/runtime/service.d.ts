@@ -205,10 +205,6 @@ export declare class RuntimeService {
         taskId?: string | undefined;
     } | {
         runs: {
-            updatedAt: number;
-            stepCount: number;
-            progress: RunProgress;
-            guidance: RunGuidance[];
             attention: RunAttention;
             decisionLedger: {
                 revision: number;
@@ -233,6 +229,10 @@ export declare class RuntimeService {
                 verification: "owner_declared_not_independently_verified";
             };
             action: import("./action.js").RunAction;
+            updatedAt: number;
+            stepCount: number;
+            progress: RunProgress;
+            guidance: RunGuidance[];
             error?: string | undefined;
             previousRunId?: string | undefined;
             taskId?: string | undefined;

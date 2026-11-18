@@ -140,13 +140,17 @@ export class RuntimeExecutor {
     async resume(run, signal) {
         if (run.state !== "interrupted")
             throw Error(ERRORS.RUNTIME_INVALID_STATE);
+        if (signal?.aborted) {
+            this.cancel(run);
+            return run;
+        }
         for (const record of run.steps) {
             if (record.state !== "running" && record.state !== "unknown")
                 continue;
             if (IDEMPOTENT_TOOLS.has(record.tool)) {
                 record.state = "pending";
                 record.error = undefined;
-                record.startedAt = undefined;
+                // Keep the last actual start time until a new attempt replaces it.
                 record.finishedAt = undefined;
             }
             else {
@@ -188,6 +192,8 @@ export class RuntimeExecutor {
     }
     /** Retry backoff retains its slot; timeout/failure stops new dispatch. */
     async executeReadOnly(run, execution) {
+        const dispatch = new AbortController();
+        execution.readOnlyDispatch = dispatch;
         const active = new Map();
         let rejected;
         const checkFailure = () => {
@@ -201,6 +207,7 @@ export class RuntimeExecutor {
                 checkFailure();
                 const failed = run.steps.find((step) => step.state === "failed" || step.state === "unknown");
                 if (failed) {
+                    dispatch.abort();
                     // Drain started siblings before changing run state, as in batch mode.
                     await Promise.all(active.values());
                     checkFailure();
@@ -221,6 +228,7 @@ export class RuntimeExecutor {
                         break;
                     if (execution.storageError ||
                         rejected ||
+                        dispatch.signal.aborted ||
                         execution.controller.signal.aborted ||
                         this.terminal(run))
                         break;
@@ -275,7 +283,9 @@ export class RuntimeExecutor {
             ? Math.min(spec.retry, MAX_RETRIES) + 1
             : 1;
         for (let attempt = 1; attempt <= attemptsAllowed; attempt++) {
-            if (execution.controller.signal.aborted || this.terminal(run))
+            if (execution.controller.signal.aborted ||
+                execution.readOnlyDispatch?.signal.aborted ||
+                this.terminal(run))
                 return;
             record.state = "running";
             record.startedAt = this.now(run);
@@ -344,6 +354,7 @@ export class RuntimeExecutor {
                     !background &&
                     !timedOut &&
                     !uncertain &&
+                    !execution.readOnlyDispatch?.signal.aborted &&
                     (classification = classifyRetryError(outcome.error)).retryable &&
                     attempt < attemptsAllowed;
                 record.state = retry
@@ -354,6 +365,8 @@ export class RuntimeExecutor {
                         : "failed";
                 record.finishedAt = retry ? undefined : this.now(run);
                 this.checkpoint(run);
+                if (!retry)
+                    execution.readOnlyDispatch?.abort();
                 if (retry) {
                     const delay = retryDelayMs(attempt);
                     const waitingSince = Date.now();
@@ -363,7 +376,13 @@ export class RuntimeExecutor {
                         retryCategory: classification.category,
                     });
                     try {
-                        await waitForRetry(delay, execution.controller.signal);
+                        const signal = execution.readOnlyDispatch
+                            ? AbortSignal.any([
+                                execution.controller.signal,
+                                execution.readOnlyDispatch.signal,
+                            ])
+                            : execution.controller.signal;
+                        await waitForRetry(delay, signal);
                     }
                     finally {
                         clearRetryBackoff(run, record.id);

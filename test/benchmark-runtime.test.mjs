@@ -4,8 +4,8 @@ import * as benchmarkIdentity from "../scripts/benchmark-runtime.mjs";
 test("runtime digest binds all current local dependencies and legacy absence", () => {
   const digest = benchmarkIdentity.runtimeArtifactDigest;
   assert.equal(typeof digest, "function");
-  const optional = ["retry", "agent", "agent-report", "agent-trace", "worker-quota", "attention", "insights", "waiting", "review", "plan-diff"].map(n => "runtime/" + n + ".js");
   const required = ["runtime/executor.js", "runtime/store.js", "runtime/plan.js", "runtime/service.js", "error-codes.js", "presentation.js"];
+  const optional = benchmarkIdentity.RUNTIME_ARTIFACT_FILES.filter(name => !required.includes(name));
   const files = new Map([...required, ...optional].map(n => [n, Buffer.from(n)]));
   const read = url => {
     const name = decodeURIComponent(new URL(url).pathname).split("/fixture-dist/")[1];
@@ -33,7 +33,8 @@ test("runtime digest binds all current local dependencies and legacy absence", (
   assert.throws(() => digest(root, () => { throw Object.assign(Error("denied"), { code: "EACCES" }); }), /denied/);
 });
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import ts from "typescript";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -50,6 +51,33 @@ import {
   benchmarkCapacity,
   benchmarkAlgorithmDigest,
 } from "../scripts/benchmark-runtime.mjs";
+
+test("runtime digest paths match the current local value import closure", () => {
+  const seen = new Set();
+  function walk(name) {
+    if (seen.has(name)) return;
+    seen.add(name);
+    assert.match(name, /^(?!\.\.)[\w/-]+\.js$/);
+    const file = new URL("../src/" + name.replace(/\.js$/, ".ts"), import.meta.url);
+    const source = ts.createSourceFile(name, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+    function visit(node) {
+      let spec;
+      if (ts.isImportDeclaration(node) && !node.importClause?.isTypeOnly) spec = node.moduleSpecifier;
+      if (ts.isExportDeclaration(node) && !node.isTypeOnly) spec = node.moduleSpecifier;
+      if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+          (ts.isIdentifier(node.expression) && node.expression.text === "require"))) {
+        spec = node.arguments[0];
+        assert.ok(spec && ts.isStringLiteralLike(spec), "Nonliteral import needs explicit fingerprint review in " + name);
+      }
+      if (spec && ts.isStringLiteralLike(spec) && /^\.{1,2}\//.test(spec.text))
+        walk(path.posix.normalize(path.posix.join(path.posix.dirname(name), spec.text)));
+      ts.forEachChild(node, visit);
+    }
+    visit(source);
+  }
+  for (const name of ["executor", "store", "plan", "service"]) walk("runtime/" + name + ".js");
+  assert.deepEqual([...benchmarkIdentity.RUNTIME_ARTIFACT_FILES].sort(), [...seen].sort());
+});
 
 function deferred() {
   let resolve;

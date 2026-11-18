@@ -1172,13 +1172,16 @@ function runText(value: unknown): string {
     if (!alerts.length)
       lines.push("暂无必须处理提醒；常规进度和结果复核保留在摘要与 JSON 中。");
   }
+  const closedDecisions: Record<string, unknown>[] = [];
   const decisions = object(run.decisionLedger);
   if (decisions && Array.isArray(decisions.items)) {
     const labels: Record<string, string> = { answered: "已记录答复", superseded: "被替代", dismissed: "不再处理" };
     for (const raw of decisions.items) {
       const item = object(raw);
-      if (item && typeof item.status === "string" && Object.hasOwn(labels, item.status))
+      if (item && typeof item.status === "string" && Object.hasOwn(labels, item.status)) {
+        closedDecisions.push(item);
         lines.push("决策处置" + (typeof item.stepId === "string" ? "[" + item.stepId + "]" : "") + "：" + labels[item.status] + "（owner声明，不证明用户批准、解决或验收；详情见decisionHistory）。");
+      }
     }
   }
   lines.push(progressText(run.progress));
@@ -1252,6 +1255,12 @@ function runText(value: unknown): string {
       const worker = object(raw);
       if (!worker) continue;
       const counts = object(worker.criteria);
+      const decisionClosed =
+        typeof worker.stepId === "string" &&
+        typeof worker.resultHash === "string" &&
+        closedDecisions.some(
+          (item) => item.stepId === worker.stepId && item.resultHash === worker.resultHash,
+        );
       lines.push(
         "[" +
           worker.stepId +
@@ -1268,7 +1277,7 @@ function runText(value: unknown): string {
               " / blocked " +
               counts.blocked
             : "") +
-          (worker.decisionRequired === true ? " · 待 Lead 决策" : ""),
+          (worker.decisionRequired === true && !decisionClosed ? " · 待 Lead 决策" : ""),
       );
     }
   }

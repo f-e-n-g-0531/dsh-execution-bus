@@ -398,6 +398,8 @@ export async function runComparison(
             assertStableDependencies();
             const receipt = await runChild(input);
             assertStableDependencies();
+            if (artifactDigest(input.dist) !== input.artifactDigest)
+              fail("ARTIFACT_CHANGED");
             const clean = validateReceipt(receipt, input, algorithmDigest);
             Object.assign(attempt, clean, {
               state: "succeeded",
@@ -415,6 +417,7 @@ export async function runComparison(
               "INVALID_RECEIPT",
               "SAMPLE_FAILED",
               "DEPENDENCY_CHANGED",
+              "ARTIFACT_CHANGED",
             ];
             attempt.failureCode = codes.includes(error?.message)
               ? error.message

@@ -15,7 +15,7 @@ export interface NotificationReceipt {
 export declare class NotificationStore {
     private readonly directory;
     constructor(directory: string);
-    sync(owner: string, runId: string, key: string, shouldNotify: boolean): NotificationReceipt | undefined;
+    sync(owner: string, runId: string, key: string, shouldNotify: boolean, legacyKey?: string): NotificationReceipt | undefined;
     get(owner: string, runId: string): NotificationReceipt | undefined;
     claim(owner: string, runId: string, key: string, expectedRevision: number): NotificationReceipt;
     settle(owner: string, runId: string, key: string, expectedRevision: number, attemptToken: string, outcome: "sent" | "failed"): NotificationReceipt;

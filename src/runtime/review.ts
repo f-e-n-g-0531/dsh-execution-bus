@@ -30,8 +30,9 @@ export function reviewSnapshot(run: RunRecord): string | undefined {
     )
       return undefined;
     try {
-      if (JSON.stringify(stored.value) === undefined) return undefined;
-      results.push({ stepId: step.id, resultHash: hash(stored.value) });
+      const text = JSON.stringify(stored.value);
+      if (text === undefined) return undefined;
+      results.push({ stepId: step.id, resultHash: createHash("sha256").update(text).digest("hex") });
     } catch {
       return undefined;
     }

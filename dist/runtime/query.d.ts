@@ -1,4 +1,5 @@
 import type { RunActionKind } from "./action.js";
+import type { RunAction } from "./action.js";
 import type { RunRecord, RunState } from "./store.js";
 export interface QueryInput {
     q?: string;
@@ -11,6 +12,7 @@ export interface QueryInput {
 }
 export interface QueryResult {
     runs: RunRecord[];
+    actions: ReadonlyMap<string, RunAction>;
     /** Number after all filters, including view, and before pagination. */
     matchedCount: number;
     /** Exclusive action groups before view filtering and pagination. */

@@ -1,6 +1,6 @@
 import { parseHandoffSnapshot } from "./handoff.js";
 import { ERRORS } from "../error-codes.js";
-import { parseAgentInput } from "./agent.js";
+import { parseAgentInput, parseStoredAgentInput } from "./agent.js";
 /** 声明式运行时只允许调用这些宿主工具；新增工具需同时更新幂等性判断。 */
 export const RUNTIME_TOOLS = Object.freeze([
     "read",
@@ -100,6 +100,13 @@ function provenanceString(value, maxChars) {
     return value.trim();
 }
 export function parsePlan(raw) {
+    return parsePlanWithAgentInput(raw, parseAgentInput);
+}
+/** Storage validation only; a legacy checkpoint is not a new submission. */
+export function parseStoredPlan(raw) {
+    return parsePlanWithAgentInput(raw, parseStoredAgentInput);
+}
+function parsePlanWithAgentInput(raw, parseWorkerInput) {
     if (!isPlainObject(raw))
         invalid();
     for (const key of Reflect.ownKeys(raw)) {
@@ -150,7 +157,7 @@ export function parsePlan(raw) {
         invalid();
     const ids = new Set();
     const steps = raw.steps.map((value) => {
-        const step = parseStep(value);
+        const step = parseStep(value, parseWorkerInput);
         if (ids.has(step.id))
             throw Error(ERRORS.PLAN_DUPLICATE_ID);
         ids.add(step.id);
@@ -177,7 +184,7 @@ export function parsePlan(raw) {
         concurrency,
     };
 }
-function parseStep(value) {
+function parseStep(value, parseWorkerInput) {
     if (!isPlainObject(value))
         invalid();
     for (const key of Reflect.ownKeys(value)) {
@@ -226,7 +233,7 @@ function parseStep(value) {
         id,
         tool: tool,
         input: tool === "agent"
-            ? { ...parseAgentInput(value.input) }
+            ? { ...parseWorkerInput(value.input) }
             : structuredClone(value.input),
         dependsOn: deps,
         retry,

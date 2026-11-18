@@ -53,6 +53,15 @@ export interface AgentInput {
 
 /** Keep the public wire names; never interpret prompt text as authorization. */
 export function parseAgentInput(raw: unknown): AgentInput {
+  return parseInput(raw, false);
+}
+
+/** Version-1 checkpoint compatibility only; dispatch must use parseAgentInput. */
+export function parseStoredAgentInput(raw: unknown): AgentInput {
+  return parseInput(raw, true);
+}
+
+function parseInput(raw: unknown, stored: boolean): AgentInput {
   const invalid = () => {
     throw Error(ERRORS.RUNTIME_AGENT_INVALID_INPUT);
   };
@@ -94,7 +103,9 @@ export function parseAgentInput(raw: unknown): AgentInput {
   if (
     typeof value.prompt !== "string" ||
     !value.prompt.trim() ||
-    Buffer.byteLength(value.prompt, "utf8") > 65_536
+    Buffer.byteLength(value.prompt, "utf8") > 65_536 ||
+    // Unicode mode matches lone surrogates only, not valid supplementary pairs.
+    (!stored && /[\uD800-\uDFFF]/u.test(value.prompt))
   )
     return invalid();
   if (

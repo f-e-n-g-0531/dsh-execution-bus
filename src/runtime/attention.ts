@@ -42,14 +42,44 @@ const NOTIFY_KINDS = new Set<AttentionKind>([
   "result_unavailable",
 ]);
 
+function notificationAlerts(items: AttentionItem[]): AttentionItem[] {
+  // Unknown external effects always remain urgent, even after acknowledgement.
+  return items.filter(
+    (item) =>
+      NOTIFY_KINDS.has(item.kind) &&
+      !(item.kind === "decision_required" && item.disposition) &&
+      (!item.acknowledged || item.kind === "inspect_external_state"),
+  );
+}
+
+/** Reconstruct the old key only for this exact alert set. Use it to match an
+ * existing receipt, never to create a new one or bypass receipt CAS. */
+export function legacyAcknowledgedNotificationKey(
+  runId: string,
+  attention: RunAttention,
+): string | undefined {
+  const alerts = notificationAlerts(attention.items);
+  if (alerts.some((item) => item.acknowledged))
+    return digest({ runId, items: alerts });
+  return undefined;
+}
+
 /**
  * Pure, owner-side advice: Worker decisions are self-reported, never verified.
  * Keys describe content, not delivery, acknowledgement, or cross-session deduplication.
  * No private report text, paths, errors, or plan inputs are projected.
  */
-export function runAttention(run: RunRecord, settled?: boolean): RunAttention {
-  const recovery = runRecovery(run, settled);
-  const acceptance = runAcceptance(run);
+export function runAttention(
+  run: RunRecord,
+  settled?: boolean,
+  derived?: {
+    recovery?: ReturnType<typeof runRecovery>;
+    acceptance?: ReturnType<typeof runAcceptance>;
+    review?: ReturnType<typeof ownerReview>;
+  },
+): RunAttention {
+  const recovery = derived?.recovery ?? runRecovery(run, settled);
+  const acceptance = derived?.acceptance ?? runAcceptance(run);
   const items: AttentionItem[] = [];
   const seen = new Set<string>();
   const add = (kind: AttentionKind, stepId?: string, resultHash?: string) => {
@@ -110,16 +140,6 @@ export function runAttention(run: RunRecord, settled?: boolean): RunAttention {
     }
   }
 
-  // A single run-level review also covers ordinary-tool results, not just Workers.
-  if (
-    run.state === "succeeded" &&
-    recovery.nextAction === "review_results" &&
-    complete &&
-    items.length === 0 &&
-    ownerReview(run).status !== "accepted"
-  )
-    add("review_results", undefined, digest(results));
-
   const snapshotHash = attentionSnapshot(run);
   for (const item of items) {
     if (item.kind === "decision_required") {
@@ -134,12 +154,19 @@ export function runAttention(run: RunRecord, settled?: boolean): RunAttention {
     )
       item.acknowledged = true;
   }
-  // Unknown external effects always remain urgent, even after explicit acknowledgement.
-  const alerts = items.filter(
-    (item) =>
-      NOTIFY_KINDS.has(item.kind) &&
-      !(item.kind === "decision_required" && item.disposition) &&
-      (!item.acknowledged || item.kind === "inspect_external_state"),
+  // A disposition closes the question, not the separate owner review action.
+  if (
+    run.state === "succeeded" &&
+    recovery.nextAction === "review_results" &&
+    complete &&
+    items.every((item) => item.kind === "decision_required" && item.disposition) &&
+    (derived?.review ?? ownerReview(run)).status !== "accepted"
+  )
+    add("review_results", undefined, digest(results));
+
+  // Preserve the pre-acknowledgement key's JSON fields and insertion order.
+  const alerts = notificationAlerts(items).map(
+    ({ acknowledged: _ack, disposition: _disposition, ...content }) => content,
   );
   return {
     ...(snapshotHash === undefined ? {} : { snapshotHash }),

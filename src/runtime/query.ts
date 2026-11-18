@@ -1,6 +1,7 @@
 import { ERRORS } from "../error-codes.js";
 import { runAction } from "./action.js";
 import type { RunActionKind } from "./action.js";
+import type { RunAction } from "./action.js";
 import type { RunRecord, RunState } from "./store.js";
 
 export interface QueryInput {
@@ -15,6 +16,7 @@ export interface QueryInput {
 
 export interface QueryResult {
   runs: RunRecord[];
+  actions: ReadonlyMap<string, RunAction>;
   /** Number after all filters, including view, and before pagination. */
   matchedCount: number;
   /** Exclusive action groups before view filtering and pagination. */
@@ -92,6 +94,7 @@ export function queryRuns(
   const q = input.q?.toLowerCase();
   const groups = { needsAction: 0, review: 0 };
   const matches: RunRecord[] = [];
+  const actions = new Map<string, RunAction>();
   for (const run of runs) {
     if (input.taskId !== undefined && run.plan.taskId !== input.taskId) continue;
     if (input.state !== undefined && run.state !== input.state) continue;
@@ -110,11 +113,13 @@ export function queryRuns(
     if (input.view === "review" && !review) continue;
     if (input.view === "needs_action" && !needsAction) continue;
     matches.push(run);
+    actions.set(run.runId, action);
   }
   matches.sort((a, b) => b.updatedAt - a.updatedAt ||
     (a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0));
   return {
     runs: matches.slice(input.offset, input.offset + input.limit),
+    actions,
     matchedCount: matches.length,
     groups,
     hasMore: input.offset + input.limit < matches.length,

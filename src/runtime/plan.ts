@@ -1,7 +1,7 @@
 import { parseHandoffSnapshot } from "./handoff.js";
 import type { HandoffSnapshot } from "./handoff.js";
 import { ERRORS } from "../error-codes.js";
-import { parseAgentInput } from "./agent.js";
+import { parseAgentInput, parseStoredAgentInput } from "./agent.js";
 
 /** 声明式运行时只允许调用这些宿主工具；新增工具需同时更新幂等性判断。 */
 export const RUNTIME_TOOLS = Object.freeze([
@@ -136,6 +136,18 @@ function provenanceString(value: unknown, maxChars: number): string {
 }
 
 export function parsePlan(raw: unknown): Plan {
+  return parsePlanWithAgentInput(raw, parseAgentInput);
+}
+
+/** Storage validation only; a legacy checkpoint is not a new submission. */
+export function parseStoredPlan(raw: unknown): Plan {
+  return parsePlanWithAgentInput(raw, parseStoredAgentInput);
+}
+
+function parsePlanWithAgentInput(
+  raw: unknown,
+  parseWorkerInput: typeof parseAgentInput,
+): Plan {
   if (!isPlainObject(raw)) invalid();
   for (const key of Reflect.ownKeys(raw)) {
     if (typeof key !== "string" || !PLAN_KEYS.has(key)) invalid();
@@ -188,7 +200,7 @@ export function parsePlan(raw: unknown): Plan {
 
   const ids = new Set<string>();
   const steps: PlanStep[] = raw.steps.map((value: unknown) => {
-    const step = parseStep(value);
+    const step = parseStep(value, parseWorkerInput);
     if (ids.has(step.id)) throw Error(ERRORS.PLAN_DUPLICATE_ID);
     ids.add(step.id);
     return step;
@@ -214,7 +226,10 @@ export function parsePlan(raw: unknown): Plan {
   };
 }
 
-function parseStep(value: unknown): PlanStep {
+function parseStep(
+  value: unknown,
+  parseWorkerInput: typeof parseAgentInput,
+): PlanStep {
   if (!isPlainObject(value)) invalid();
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== "string" || !STEP_KEYS.has(key)) invalid();
@@ -268,7 +283,7 @@ function parseStep(value: unknown): PlanStep {
     tool: tool as RuntimeTool,
     input:
       tool === "agent"
-        ? { ...parseAgentInput(value.input) }
+        ? { ...parseWorkerInput(value.input) }
         : structuredClone(value.input),
     dependsOn: deps,
     retry,

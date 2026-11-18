@@ -260,6 +260,57 @@ test("a page that changes in both bounded selection attempts returns no stale pa
     );
   }));
 
+test("strict listing reports enumeration and selected-page I/O even with saturated diagnostics", () =>
+  fixture((store, root) => {
+    const item = record(1);
+    store.save(item);
+    store.list(0); // Warm the metadata so the selected-page read is distinguishable.
+    store.counters.readFailures = 1_000_000;
+    const expected = { message: "RUNTIME_STORAGE_FAILED" };
+    const readdir = fs.readdirSync;
+    intercept(
+      "readdirSync",
+      (target, ...args) => {
+        if (target === root) throw Object.assign(Error("private"), { code: "EACCES" });
+        return readdir(target, ...args);
+      },
+      () => {
+        assert.throws(() => store.list(1, "owner", 0, undefined, true), expected);
+        assert.deepEqual(store.list(1, "owner"), []);
+      },
+    );
+    intercept(
+      "readSync",
+      () => { throw Object.assign(Error("private"), { code: "EIO" }); },
+      () => assert.throws(() => store.list(1, "owner", 0, undefined, true), expected),
+    );
+    assert.equal(store.diagnostics().readFailures, 1_000_000);
+    assert.deepEqual(store.list(1, "owner", 0, undefined, true), [item]);
+    fs.writeFileSync(store.pathFor(item.runId), "{bad json");
+    assert.deepEqual(store.list(1, "owner", 0, undefined, true), []);
+    assert.ok(store.diagnostics().invalidRecords > 0);
+  }));
+
+test("strict listing distinguishes persistent selected-member disappearance from I/O errors", () =>
+  virtual((v) => {
+    v.put(record(1));
+    v.store.list(0);
+    const open = fs.openSync;
+    let opens = 0;
+    intercept(
+      "openSync",
+      (target, flags, ...args) => {
+        if (target === v.store.pathFor(id(1)) && flags === "r" && ++opens % 2 === 0)
+          throw Object.assign(Error("disappeared"), { code: "ENOENT" });
+        return open(target, flags, ...args);
+      },
+      () => assert.throws(() => v.store.list(1, "owner", 0, undefined, true), {
+        message: "RUNTIME_BUSY",
+      }),
+    );
+    assert.equal(v.store.diagnostics().readFailures, 0);
+  }));
+
 test("descriptor changes during a read are rejected rather than cached", () =>
   virtual((v) => {
     v.put(record(1));

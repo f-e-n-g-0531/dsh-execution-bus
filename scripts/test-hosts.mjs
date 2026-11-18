@@ -68,9 +68,30 @@ async function hostIdentity(temp) {
   return { node: process.version, platform: process.platform, arch: process.arch, lockSha256: sha256(lockBytes), packages };
 }
 
+function validateHostVersions(versions) {
+  // Accept exact versions (including prereleases), never npm tags or ranges.
+  const exact = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+  if (!Array.isArray(versions) || !versions.length || new Set(versions).size !== versions.length)
+    throw Error("Invalid host version list: expected a non-empty array of distinct exact versions");
+  for (const version of versions) {
+    const match = typeof version === "string" && exact.exec(version);
+    if (!match || match[0] !== version || match[4]?.split(".").some(id => /^0[0-9]+$/.test(id)))
+      throw Error("Invalid host version list: expected a non-empty array of distinct exact versions");
+  }
+  return versions;
+}
+
+export function hostMatrixPassed(report) {
+  const { requested, results, candidateUnchanged } = report;
+  if (candidateUnchanged !== true || !requested.length || results.length !== requested.length) return false;
+  const passed = new Set(results.filter(row => row.status === "passed" && row.installation.status === "passed" && row.execution.status === "passed").map(row => row.version));
+  return passed.size === requested.length && requested.every(version => passed.has(version));
+}
+
 export async function main(args = process.argv.slice(2), root = process.cwd()) {
   for (const arg of args) if (!["--all", "--no-execute"].includes(arg)) throw Error("Unknown host matrix argument: " + arg);
-  const all = args.includes("--all") ? json(await readFile(path.join(root, "artifacts/dsh-versions.json"))) : DEFAULT;
+  const all = validateHostVersions(args.includes("--all")
+    ? json(await readFile(path.join(root, "artifacts/dsh-versions.json"))) : DEFAULT);
   const report = { schemaVersion: 2, generatedAt: new Date().toISOString(), requested: all, candidate: await candidateIdentity(root), results: [] };
   const output = path.join(root, "artifacts/host-compatibility-results.json");
   await mkdir(path.dirname(output), { recursive: true });
@@ -136,7 +157,7 @@ export async function main(args = process.argv.slice(2), root = process.cwd()) {
     for (const row of report.results) if (row.status === "passed") { row.status = "execution_failed"; row.error = "Candidate changed during matrix execution"; }
   }
   await writeFile(output, JSON.stringify(report, null, 2) + "\n");
-  if (!report.candidateUnchanged || report.results.some(row => row.status !== "passed")) process.exitCode = 1;
+  if (!hostMatrixPassed(report)) process.exitCode = 1;
   return report;
 }
 

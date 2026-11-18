@@ -139,6 +139,59 @@ test("failed read stops refill while already-started siblings drain", async () =
   });
 });
 
+test("terminal read failure stops another step's backoff without aborting in-flight reads", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  await fixture(async (store) => {
+    const failure = deferred();
+    const inFlight = deferred();
+    const calls = [];
+    let liveSignal;
+    const executor = new RuntimeExecutor(store, async (_tool, { id }, signal) => {
+      calls.push(id);
+      if (id === "retry" && calls.filter((call) => call === id).length === 1)
+        throw Object.assign(Error("busy"), { code: "EAGAIN" });
+      if (id === "failure") {
+        await failure.promise;
+        throw Object.assign(Error("bad"), { code: "EINVAL" });
+      }
+      if (id === "live") {
+        liveSignal = signal;
+        await inFlight.promise;
+      }
+      return id;
+    });
+    const run = executor.createRun("owner", parsePlan({
+      concurrency: 3,
+      steps: [{ ...step("retry"), retry: 1 }, step("failure"), step("live"), step("later")],
+    }));
+    const execution = executor.execute(run);
+    try {
+      await tick();
+      assert.equal(store.load(run.runId).steps[0].state, "pending");
+      assert.equal(run.steps[0].attempts, 1);
+      failure.resolve();
+      await tick();
+      assert.equal(store.load(run.runId).steps[1].state, "failed");
+      t.mock.timers.tick(100);
+      await tick();
+      assert.deepEqual(calls, ["retry", "failure", "live"]);
+      assert.equal(liveSignal.aborted, false);
+      assert.equal(run.state, "running");
+    } finally {
+      failure.resolve();
+      inFlight.resolve();
+      await tick();
+      t.mock.timers.tick(100);
+      await execution;
+    }
+    const saved = store.load(run.runId);
+    assert.equal(saved.state, "failed");
+    assert.equal(saved.steps[0].attempts, 1);
+    assert.equal(saved.steps[3].attempts, 0);
+    assert.equal(saved.results.live.value, "live");
+  });
+});
+
 test("cancelled pipeline never refills and ignores late results", async () => {
   await fixture(async (store) => {
     const slow = deferred(),
@@ -165,7 +218,8 @@ test("cancelled pipeline never refills and ignores late results", async () => {
   });
 });
 
-test("backoff retains one slot without duplicate dispatch while other slots refill", async () => {
+test("backoff retains one slot without duplicate dispatch while other slots refill", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   await fixture(async (store) => {
     const calls = [];
     let attempts = 0;
@@ -191,6 +245,7 @@ test("backoff retains one slot without duplicate dispatch while other slots refi
     await tick();
     assert.deepEqual(calls, ["a", "b", "c", "d"]);
     assert.equal(run.steps[0].state, "pending");
+    t.mock.timers.tick(100);
     await execution;
     assert.deepEqual(calls, ["a", "b", "c", "d", "a"]);
     assert.equal(run.steps[0].attempts, 2);

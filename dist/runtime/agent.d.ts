@@ -23,6 +23,8 @@ export interface AgentInput {
 }
 /** Keep the public wire names; never interpret prompt text as authorization. */
 export declare function parseAgentInput(raw: unknown): AgentInput;
+/** Version-1 checkpoint compatibility only; dispatch must use parseAgentInput. */
+export declare function parseStoredAgentInput(raw: unknown): AgentInput;
 /** The exact runtime-owned instructions hashed in WorkerTrace and sent to the child. */
 export declare function workerInstructions(input: AgentInput): string;
 /**

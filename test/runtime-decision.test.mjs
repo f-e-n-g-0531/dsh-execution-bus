@@ -10,6 +10,7 @@ import { runAttention } from "../dist/runtime/attention.js";
 import { attentionSnapshot } from "../dist/runtime/acknowledgement.js";
 import { reviewSnapshot } from "../dist/runtime/review.js";
 import { runAction } from "../dist/runtime/action.js";
+import { runtimePresentationMeta } from "../dist/presentation.js";
 import { decisionLedger, validDecisionDispositions } from "../dist/runtime/decision.js";
 import { createServiceContext } from "./fixtures/service-context.mjs";
 
@@ -51,7 +52,9 @@ test("decision persists reload, keeps execution snapshots/evidence/timestamps im
   assert.equal(saved.attention.items.find((i) => i.kind === "decision_required").disposition, "answered");
   assert.equal(saved.attention.items.find((i) => i.kind === "decision_required").acknowledged, undefined);
   assert.equal(saved.attention.notification.shouldNotify, false);
-  assert.notEqual(saved.action.kind, "decision_required");
+  assert.equal(saved.action.kind, "review_results");
+  assert.equal(saved.ownerReview.status, "not_recorded");
+  assert.deepEqual(service.query({ view: "review" }, exec()).runs.map((item) => item.runId), [run.runId]);
   assert.equal(saved.decisionHistory[0].answerRef, "opaque:PRIVATE_REF");
   const loaded = new RunStore(root).load(run.runId);
   assert.deepEqual(loaded.decisionDispositions, saved.decisionHistory);
@@ -61,12 +64,24 @@ test("decision persists reload, keeps execution snapshots/evidence/timestamps im
   assert.equal(calls(), 0);
   const status = service.status({ runId: run.runId }, exec());
   assert.doesNotMatch(JSON.stringify(status), /PRIVATE_REASON|PRIVATE_REF|PRIVATE_REPORT|PRIVATE_REQUEST|PRIVATE_PROMPT/);
-  assert.equal(service.task({ taskId: "decision-task" }, exec()).page.attentionCount, 0);
+  const taskPage = service.task({ taskId: "decision-task" }, exec()).page;
+  assert.equal(taskPage.attentionCount, 1);
+  assert.equal(taskPage.reviewCount, 1);
   assert.equal(service.status({}, exec()).runs[0].decisionLedger.items[0].status, "answered");
-  assert.deepEqual(service.result({ runId: run.runId }, exec()).decisionHistory, decisionDispositions);
+  const detail = service.result({ runId: run.runId }, exec());
+  assert.deepEqual(detail.decisionHistory, decisionDispositions);
+  assert.equal(detail.acceptance.workers[0].decisionRequired, true, "preserve Worker self-report");
+  const card = runtimePresentationMeta({}, detail).text;
+  assert.match(card, /已记录答复/);
+  assert.match(card, /结果待复核/);
+  assert.doesNotMatch(card, /待 Lead 决策|PRIVATE_REF|PRIVATE_REASON/);
   assert.deepEqual(service.result({ runId: run.runId, stepId: "worker", limit: 1 }, exec()).decisionHistory, decisionDispositions);
   saved.decisionHistory[0].reason = "mutated caller result";
   assert.equal(store.load(run.runId).decisionDispositions[0].reason, "PRIVATE_REASON");
+  const reviewInput = { runId: run.runId, snapshotHash: saved.ownerReview.snapshotHash, reason: "Reviewed results" };
+  assert.equal(service.review({ ...reviewInput, expectedRevision: 0, disposition: "needs_work" }, exec()).action.kind, "review_results");
+  assert.equal(service.review({ ...reviewInput, expectedRevision: 1, disposition: "accepted" }, exec()).action.kind, "settled");
+  assert.deepEqual(service.query({ view: "review" }, exec()).runs, []);
 }));
 
 test("CAS rejects stale revision/snapshot; changed execution reopens while retaining history", () => fixture(({ store, service }) => {

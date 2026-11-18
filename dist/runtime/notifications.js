@@ -69,9 +69,10 @@ export class NotificationStore {
             throw Error(ERRORS.RUNTIME_STORAGE_FAILED);
         }
     }
-    sync(owner, runId, key, shouldNotify) {
+    sync(owner, runId, key, shouldNotify, legacyKey) {
         const target = this.target(owner, runId);
-        if (!text(key) || typeof shouldNotify !== "boolean")
+        if (!text(key) || typeof shouldNotify !== "boolean" ||
+            (legacyKey !== undefined && !text(legacyKey)))
             throw Error(ERRORS.INVALID_PLAN);
         return this.locked(target, () => {
             const current = this.read(target, runId);
@@ -88,7 +89,9 @@ export class NotificationStore {
                     updatedAt: Date.now(),
                 });
             }
-            if (current?.key === key)
+            // A matching legacy key preserves the original delivery identity, including
+            // any sent state or in-flight token. Never write the alias into a new slot.
+            if (current && (current.key === key || current.key === legacyKey))
                 return current;
             return this.save(target, {
                 runId,

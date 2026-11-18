@@ -61,12 +61,29 @@ await tools.runtime_query({q:"issue:42", taskId:"audit", state:"failed"});
 快照随后继 plan 保存，仅完整 runtime_result 返回 handoff；状态、列表、任务卡不暴露摘要正文。资料不自动追加给 Worker 或普通工具；Lead 必须显式组织下一份任务 prompt，不能把摘要当指令或授权。没有跨 run 任意结果读取器，不向活 Worker 推送消息，不自动执行/恢复/重试。重启后源清理观察未知会阻止使用该交接恢复，不提供自动绕过。
 
 ```ts
-const page = await tools.runtime_result({runId: sourceRunId, stepId: "inspect"});
-// 先按需读完结果并核实，再写交接摘要。
+const resultInput = {runId: sourceRunId, stepId: "inspect"};
+let {page} = await tools.runtime_result(resultInput);
+if (!page) throw new Error("缺少结果分页");
+const resultHash = page.hash;
+const chunks = [page.text];
+while (page.nextOffset !== undefined) {
+  const next = await tools.runtime_result({
+    ...resultInput, offset: page.nextOffset, hash: resultHash,
+  });
+  if (!next.page) throw new Error("缺少结果分页");
+  page = next.page;
+  chunks.push(page.text);
+}
+const inspectResult = JSON.parse(chunks.join(""));
+```
+
+Lead 先核实完整的 `inspectResult` 和相应证据，再编写 `verifiedSummary`。如续页报 `RUNTIME_RESULT_CHANGED`，丢弃已读分页，从第一页重新核对，不混拼不同版本。哈希仅绑定保存的结果版本，不证明已读、已核实或获准执行。
+
+```ts
 const handoff = await tools.runtime_handoff({
   runId: sourceRunId,
-  selections: [{stepId: "inspect", resultHash: page.page.hash}],
-  summary: "已核对的事实与未解决事项；不构成执行授权",
+  selections: [{stepId: resultInput.stepId, resultHash}],
+  summary: verifiedSummary,
 });
 await tools.runtime_run({plan: {
   task_id: handoff.taskId, previous_run_id: handoff.sourceRunId, handoff,
@@ -200,7 +217,7 @@ if (first.pagination.nextCursor) {
 
 **宿主显式投递。** 包入口导出 RuntimeService 与 NotificationSender 类型。受控宿主用原 owner 的执行上下文调用 `service.deliverNotification(runId, ownerExec, sender)`，不注册新的模型工具，也不自动触发发送。方法对当前 pending 回执执行 sync → claim → 再校验 → sender → settle，正文仅含固定行动说明、runId 与结果读取入口，不含原始结果、输入、owner 身份或 token。messageId 按 runId 与通知 key 派生；渠道及授权由宿主绑定，sender 必须持久化并按该 ID 去重。sender 返回 sent 才登记 sent，明确 not_sent 登记 failed；unknown、非法返回或异常保留 delivering。重复调用跳过 sent/failed/delivering，不隐式重试。取消或存储失败可能发生在发送之后，须核验渠道，不可盲目重发；旧快照回调不能覆盖新状态。宿主须等待此 Promise 并在关闭前取消其 signal；不创建计时器、后台任务或调用 DAG。标准插件没有默认渠道，真实渠道送达仍须集成验收。
 
-**通知回执。** `runtime_notification` 只管理投递状态，不接外部渠道。get默认只读，返回runId/current/可选receipt/verification/message；current.shouldNotify来自当前attention.notification，current.key额外绑定attention.snapshotHash作为投递版本（不要直接使用attention.notification.key）；同类问题的新快照不会被旧sent/withdrawn压住。receipt可能是未sync的旧版本。verification固定owner_declared_not_delivery_verified。
+**通知回执。** `runtime_notification` 只管理投递状态，不接外部渠道。get默认只读，返回runId/current/可选receipt/verification/message；current.shouldNotify来自当前attention.notification，current.key额外绑定attention.snapshotHash作为投递版本（不要直接使用attention.notification.key）；同类问题的新快照不会被旧sent/withdrawn压住。仅知悉同一未知副作用不会改变其投递身份；能匹配当前问题的旧版回执保留原键与尝试状态。receipt可能是未sync的旧版本。verification固定owner_declared_not_delivery_verified。
 
 | operation | 额外参数 | 行为 |
 |---|---|---|
@@ -385,7 +402,7 @@ acceptance: {
 
 ## 持久化与恢复
 
-- 记录路径：`DSH_HOME/tmp/xiaohe-runtime/runs/<runId>.json`（`XIAOHE_RUNTIME_DIR` 可覆盖）。每次工具尝试前、每步完成和重试时写检查点；同目录唯一临时文件先 fsync 刷盘再原子替换，失败清理。掉电最多回退到上一检查点或由恢复扫描回收，Windows 不保证目录项级持久性；这仍不是分布式事务。
+- 记录路径：`DSH_HOME/tmp/xiaohe-runtime/runs/<runId>.json`（`XIAOHE_RUNTIME_DIR` 可覆盖）。每次工具尝试前、每步完成和重试时写检查点；同目录唯一临时文件先 fsync 刷盘再原子替换，失败清理。这不保证断电后的目录项持久性或能回退到上一检查点；首次保存没有上一检查点可回退，也不提供分布式事务。
 - 记录保留 version 1，新增可选进程所有权字段；新会话不会把本进程其他活跃运行误标中断。其他仍存活进程的记录在新鲜期内保守跳过；PID 探测存活不能证明属主身份，活属主每个步骤边界都写检查点且单次尝试受超时上界约束，故外部 PID 仍探测存活但超过 1 小时未写检查点的 `running` 记录按失联回收（防 PID 复用形成无法恢复、取消或清理的僵尸记录）。底层 RunStore 的进程字段只是兼容旧记录的恢复启发式，不能替代独占锁。当前 RuntimeService 在维护/恢复前取得规范化记录 root 的 `.runtime-owner.lock`，同模块同进程服务共享，其他持锁者（包括重复加载模块）拒绝 `RUNTIME_ROOT_LOCKED`；初始化失败释放新取得的锁，最后一个服务引用及本进程调度/owned Worker 收束后释放。锁是合作式本机互斥，不拦截旧版/直接 RunStore 或外部写入，不保证普通宿主工具/Job已停止，也不是分布式保证。
 - 目录锁不按时间或 PID 自动抢占。崩溃、断电、损坏或无法确认的遗留锁保持拒绝；先停掉所有访问该 root 的宿主，备份记录、核验外部工作，再由操作者移除 `.runtime-owner.lock`。不要在线清锁；锁的时间/PID/token不是授权或进程身份凭证。直接使用底层 RunStore 的受控调用仍须自行保证独占。
 - 仅失联的 `running` 记录标 `interrupted`，在途步骤标 `unknown`；不自动执行恢复。

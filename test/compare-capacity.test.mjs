@@ -393,26 +393,42 @@ test("runner source drift rejects receipt and prevents subsequent children", asy
   }
 });
 
-test("artifact digest binds transitive runtime presentation code", async () => {
+test("artifact digest binds presentation, root locking and notifications independently", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "xiaohe-compare-digest-"));
   try {
-    fs.cpSync("dist", path.join(root, "dist"), { recursive: true });
-    fs.appendFileSync(
-      path.join(root, "dist/presentation.js"),
-      "\n// digest mutation fixture\n",
-    );
-    const report = await runComparison(
-      { ...options, after: path.join(root, "dist") },
-      { runChild: async (r) => receipt(r) },
-    );
-    assert.notEqual(
-      report.environment.artifactDigests.before,
-      report.environment.artifactDigests.after,
-    );
+    const dist = path.join(root, "dist");
+    fs.cpSync("dist", dist, { recursive: true });
+    for (const name of ["presentation.js", "runtime/root-lock.js", "runtime/notifications.js"]) {
+      const file = path.join(dist, name);
+      const original = fs.readFileSync(file);
+      fs.appendFileSync(file, "\n// digest mutation fixture\n");
+      const report = await runComparison({ ...options, after: dist }, { runChild: async r => receipt(r) });
+      assert.notEqual(report.environment.artifactDigests.before, report.environment.artifactDigests.after, name);
+      fs.writeFileSync(file, original);
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("changed runtime artifact invalidates the corresponding child receipt", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "xiaohe-compare-change-"));
+  try {
+    const dist = path.join(root, "dist");
+    fs.cpSync("dist", dist, { recursive: true });
+    const report = await runComparison({ ...options, after: dist }, { runChild: async r => {
+      if (r.arm === "after") fs.appendFileSync(path.join(dist, "runtime/root-lock.js"), "\n// changed during sample\n");
+      return receipt(r);
+    } });
+    assert.equal(report.succeeded, 1);
+    assert.equal(report.failed, 1);
+    assert.equal(report.attempts.find(a => a.arm === "after").failureCode, "ARTIFACT_CHANGED");
+    assert.ok(report.summary.every(s => s.succeededPairs === 0));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 
 test("zero baseline does not manufacture percent improvement", async () => {
   const report = await runComparison(options, {

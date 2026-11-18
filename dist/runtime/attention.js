@@ -12,14 +12,28 @@ const NOTIFY_KINDS = new Set([
     "decision_required",
     "result_unavailable",
 ]);
+function notificationAlerts(items) {
+    // Unknown external effects always remain urgent, even after acknowledgement.
+    return items.filter((item) => NOTIFY_KINDS.has(item.kind) &&
+        !(item.kind === "decision_required" && item.disposition) &&
+        (!item.acknowledged || item.kind === "inspect_external_state"));
+}
+/** Reconstruct the old key only for this exact alert set. Use it to match an
+ * existing receipt, never to create a new one or bypass receipt CAS. */
+export function legacyAcknowledgedNotificationKey(runId, attention) {
+    const alerts = notificationAlerts(attention.items);
+    if (alerts.some((item) => item.acknowledged))
+        return digest({ runId, items: alerts });
+    return undefined;
+}
 /**
  * Pure, owner-side advice: Worker decisions are self-reported, never verified.
  * Keys describe content, not delivery, acknowledgement, or cross-session deduplication.
  * No private report text, paths, errors, or plan inputs are projected.
  */
-export function runAttention(run, settled) {
-    const recovery = runRecovery(run, settled);
-    const acceptance = runAcceptance(run);
+export function runAttention(run, settled, derived) {
+    const recovery = derived?.recovery ?? runRecovery(run, settled);
+    const acceptance = derived?.acceptance ?? runAcceptance(run);
     const items = [];
     const seen = new Set();
     const add = (kind, stepId, resultHash) => {
@@ -76,13 +90,6 @@ export function runAttention(run, settled) {
             results.push({ stepId: step.id, resultHash });
         }
     }
-    // A single run-level review also covers ordinary-tool results, not just Workers.
-    if (run.state === "succeeded" &&
-        recovery.nextAction === "review_results" &&
-        complete &&
-        items.length === 0 &&
-        ownerReview(run).status !== "accepted")
-        add("review_results", undefined, digest(results));
     const snapshotHash = attentionSnapshot(run);
     for (const item of items) {
         if (item.kind === "decision_required") {
@@ -93,10 +100,15 @@ export function runAttention(run, settled) {
         if (run.acknowledgements?.some((entry) => entry.snapshotHash === snapshotHash && entry.key === item.key))
             item.acknowledged = true;
     }
-    // Unknown external effects always remain urgent, even after explicit acknowledgement.
-    const alerts = items.filter((item) => NOTIFY_KINDS.has(item.kind) &&
-        !(item.kind === "decision_required" && item.disposition) &&
-        (!item.acknowledged || item.kind === "inspect_external_state"));
+    // A disposition closes the question, not the separate owner review action.
+    if (run.state === "succeeded" &&
+        recovery.nextAction === "review_results" &&
+        complete &&
+        items.every((item) => item.kind === "decision_required" && item.disposition) &&
+        (derived?.review ?? ownerReview(run)).status !== "accepted")
+        add("review_results", undefined, digest(results));
+    // Preserve the pre-acknowledgement key's JSON fields and insertion order.
+    const alerts = notificationAlerts(items).map(({ acknowledged: _ack, disposition: _disposition, ...content }) => content);
     return {
         ...(snapshotHash === undefined ? {} : { snapshotHash }),
         revision: run.acknowledgements?.at(-1)?.revision ?? 0,

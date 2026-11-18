@@ -19,8 +19,8 @@ const OWNER_MESSAGES = {
  * Display-only next action, derived from current observations. No storage,
  * execution, acknowledgement, retry grant, or private payload is returned.
  */
-export function runAction(run, settled) {
-    const recovery = runRecovery(run, settled);
+export function runAction(run, settled, observation) {
+    const recovery = observation?.recovery ?? runRecovery(run, settled);
     // Uncertainty cannot be dismissed by acknowledgement or owner review.
     if (recovery.nextAction === "inspect_external_state")
         return {
@@ -28,14 +28,14 @@ export function runAction(run, settled) {
             actor: "owner",
             message: "由 owner 先核验外部状态与已保存结果；已知悉不等于解决，未知不代表失败或回滚，不要自动重发。",
         };
-    const waiting = runWaiting(run, settled);
+    const waiting = observation?.waiting ?? runWaiting(run, settled);
     if (waiting.cleanupPending)
         return {
             kind: "wait_cleanup",
             actor: "runtime",
             message: "等待本进程调度及 owned Worker 清理收束；不确认普通宿主调用或后台 Job 已停止，不自动恢复或重跑。",
         };
-    const attention = runAttention(run, settled);
+    const attention = observation?.attention ?? runAttention(run, settled);
     for (const kind of OWNER_ACTIONS) {
         if (attention.items.some((item) => item.kind === kind && !item.acknowledged &&
             !(item.kind === "decision_required" && item.disposition)))

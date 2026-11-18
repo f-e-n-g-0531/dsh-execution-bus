@@ -85,3 +85,15 @@ test("current runtime docs keep migration and acceptance boundaries explicit", (
   assert.match(validation, /shell bridge[^\n]*不是实际 sandbox/);
   assert.match(validation, /真实模型\/桌面 UI\/实际沙箱[^\n]*未验收/);
 });
+
+test("crash guidance requires offline lock reconciliation and makes no power-loss guarantee", () => {
+  const flow = readFileSync("docs/FLOW-TEST.md", "utf8");
+  const crashStep = flow.match(/^4\. [^\r\n]*/m)?.[0] ?? "";
+  assert.match(crashStep, /RUNTIME_ROOT_LOCKED.*停止所有访问该目录的宿主.*备份记录.*核验.*离线处置.*interrupted/);
+  assert.match(crashStep, /不自动清锁或重发/);
+  const protocol = readFileSync("docs/protocol.md", "utf8");
+  const checkpoint = protocol.match(/^- 记录路径：[^\r\n]*/m)?.[0] ?? "";
+  assert.match(checkpoint, /不保证断电后的目录项持久性/);
+  assert.match(checkpoint, /首次保存没有上一检查点可回退/);
+  assert.doesNotMatch(checkpoint, /掉电最多回退/);
+});

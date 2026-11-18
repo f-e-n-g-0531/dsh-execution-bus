@@ -16,9 +16,10 @@ export function reviewSnapshot(run) {
             !Object.hasOwn(stored, "value"))
             return undefined;
         try {
-            if (JSON.stringify(stored.value) === undefined)
+            const text = JSON.stringify(stored.value);
+            if (text === undefined)
                 return undefined;
-            results.push({ stepId: step.id, resultHash: hash(stored.value) });
+            results.push({ stepId: step.id, resultHash: createHash("sha256").update(text).digest("hex") });
         }
         catch {
             return undefined;

@@ -1,10 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, readFile, rm, rename, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, rename, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { runHostSmoke } from "./fixtures/host-compat-smoke.mjs";
-import { executionStatus, fingerprint, candidateIdentity, main } from "../scripts/test-hosts.mjs";
+import { executionStatus, fingerprint, candidateIdentity, hostMatrixPassed, main } from "../scripts/test-hosts.mjs";
 
 test("real installed-host smoke registers plugin, guards, identities and both owners", async () => {
   const previous = process.env.XIAOHE_RUNTIME_DIR;
@@ -26,6 +28,38 @@ test("matrix distinguishes not executed, install failure, execution failure and 
   assert.equal(executionStatus({ status: 0 }, { status: 0 }, { status: "failed" }), "execution_failed");
   assert.equal(executionStatus({ status: 0 }, { status: 0 }), "execution_failed");
   assert.equal(executionStatus({ status: 0 }, { status: 0 }, { status: "passed" }), "passed");
+});
+
+test("host matrix rejects invalid --all lists before preparing or installing", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "host-matrix-invalid-"));
+  try {
+    const dir = path.join(root, "artifacts");
+    await mkdir(dir);
+    const script = fileURLToPath(new URL("../scripts/test-hosts.mjs", import.meta.url));
+    for (const invalid of [[], ["0.2.2-rc.3", "0.2.2-rc.3"], "0.2.2-rc.3", {}, [null], ["latest"], ["0.2.2-rc.03"], ["0.2.2\n"]]) {
+      await writeFile(path.join(dir, "dsh-versions.json"), JSON.stringify(invalid));
+      const child = spawnSync(process.execPath, [script, "--all", "--no-execute"], { cwd: root, encoding: "utf8", timeout: 5000 });
+      assert.ifError(child.error);
+      assert.equal(child.status, 1);
+      assert.match(child.stderr, /Invalid host version list/);
+      assert.deepEqual(await readdir(dir), ["dsh-versions.json"]);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("host matrix only passes when every distinct requested version passed both phases", () => {
+  const requested = ["0.2.0-rc.1", "0.2.2-rc.3"];
+  const row = (version, status = "passed") => ({ version, status, installation: { status }, execution: { status } });
+  const results = requested.map(version => row(version));
+  const valid = { requested, results, candidateUnchanged: true };
+  assert.equal(hostMatrixPassed(valid), true);
+  for (const patch of [
+    { results: [] }, { requested: [], results: [] }, { results: [results[0]] },
+    { results: [results[0], results[0]] }, { results: [results[0], row("0.2.2-rc.2")] },
+    { results: [results[0], row(requested[1], "not_executed")] },
+    { results: [results[0], { ...results[1], execution: { status: "failed" } }] },
+    { candidateUnchanged: false },
+  ]) assert.equal(hostMatrixPassed({ ...valid, ...patch }), false);
 });
 
 test("matrix fingerprints bind file bytes, paths, source, dist and harness independently", async () => {
@@ -57,11 +91,16 @@ test("matrix fingerprints bind file bytes, paths, source, dist and harness indep
       const report = await main(["--no-execute"], root);
       assert.equal(report.candidateUnchanged, true);
       assert.equal(report.results.length, 5);
+      assert.equal(process.exitCode, 1);
       assert.deepEqual(JSON.parse(await readFile(path.join(root, "artifacts/host-compatibility-results.json"), "utf8")), report);
       for (const row of report.results) {
         assert.equal(row.status, "not_executed"); assert.equal(row.installation.status, "not_executed"); assert.equal(row.execution.status, "not_executed");
         assert.equal(row.host, undefined);
       }
+      await writeFile(path.join(root, "artifacts/dsh-versions.json"), JSON.stringify(["0.2.0-rc.1", "0.2.2-rc.3"]));
+      const custom = await main(["--all", "--no-execute"], root);
+      assert.deepEqual(custom.results.map(row => row.version), ["0.2.0-rc.1", "0.2.2-rc.3"]);
+      assert.equal(process.exitCode, 1);
     } finally { process.exitCode = previousExit; }
   } finally { await rm(root, { recursive: true, force: true }); }
 });

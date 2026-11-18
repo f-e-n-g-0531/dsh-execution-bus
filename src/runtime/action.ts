@@ -45,8 +45,16 @@ const OWNER_MESSAGES: Record<(typeof OWNER_ACTIONS)[number], string> = {
  * Display-only next action, derived from current observations. No storage,
  * execution, acknowledgement, retry grant, or private payload is returned.
  */
-export function runAction(run: RunRecord, settled?: boolean): RunAction {
-  const recovery = runRecovery(run, settled);
+export function runAction(
+  run: RunRecord,
+  settled?: boolean,
+  observation?: {
+    recovery: ReturnType<typeof runRecovery>;
+    waiting: ReturnType<typeof runWaiting>;
+    attention: ReturnType<typeof runAttention>;
+  },
+): RunAction {
+  const recovery = observation?.recovery ?? runRecovery(run, settled);
   // Uncertainty cannot be dismissed by acknowledgement or owner review.
   if (recovery.nextAction === "inspect_external_state")
     return {
@@ -56,7 +64,7 @@ export function runAction(run: RunRecord, settled?: boolean): RunAction {
         "由 owner 先核验外部状态与已保存结果；已知悉不等于解决，未知不代表失败或回滚，不要自动重发。",
     };
 
-  const waiting = runWaiting(run, settled);
+  const waiting = observation?.waiting ?? runWaiting(run, settled);
   if (waiting.cleanupPending)
     return {
       kind: "wait_cleanup",
@@ -65,7 +73,7 @@ export function runAction(run: RunRecord, settled?: boolean): RunAction {
         "等待本进程调度及 owned Worker 清理收束；不确认普通宿主调用或后台 Job 已停止，不自动恢复或重跑。",
     };
 
-  const attention = runAttention(run, settled);
+  const attention = observation?.attention ?? runAttention(run, settled);
   for (const kind of OWNER_ACTIONS) {
     if (
       attention.items.some((item) => item.kind === kind && !item.acknowledged &&

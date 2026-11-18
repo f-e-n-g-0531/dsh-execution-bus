@@ -26,6 +26,8 @@ export type Invoke = (
 interface Execution {
   controller: AbortController;
   storageError?: Error;
+  /** Pure-read DAG only: stop new work without aborting in-flight attempts. */
+  readOnlyDispatch?: AbortController;
 }
 
 type Outcome =
@@ -178,12 +180,16 @@ export class RuntimeExecutor {
   /** 未知副作用不得重放；出现这种失败时整个恢复运行停止，不启动无关 pending 写。 */
   async resume(run: RunRecord, signal?: AbortSignal): Promise<RunRecord> {
     if (run.state !== "interrupted") throw Error(ERRORS.RUNTIME_INVALID_STATE);
+    if (signal?.aborted) {
+      this.cancel(run);
+      return run;
+    }
     for (const record of run.steps) {
       if (record.state !== "running" && record.state !== "unknown") continue;
       if (IDEMPOTENT_TOOLS.has(record.tool)) {
         record.state = "pending";
         record.error = undefined;
-        record.startedAt = undefined;
+        // Keep the last actual start time until a new attempt replaces it.
         record.finishedAt = undefined;
       } else {
         record.state = "failed";
@@ -226,6 +232,8 @@ export class RuntimeExecutor {
     run: RunRecord,
     execution: Execution,
   ): Promise<void> {
+    const dispatch = new AbortController();
+    execution.readOnlyDispatch = dispatch;
     const active = new Map<string, Promise<void>>();
     let rejected: { error: unknown } | undefined;
     const checkFailure = () => {
@@ -239,6 +247,7 @@ export class RuntimeExecutor {
           (step) => step.state === "failed" || step.state === "unknown",
         );
         if (failed) {
+          dispatch.abort();
           // Drain started siblings before changing run state, as in batch mode.
           await Promise.all(active.values());
           checkFailure();
@@ -264,6 +273,7 @@ export class RuntimeExecutor {
           if (
             execution.storageError ||
             rejected ||
+            dispatch.signal.aborted ||
             execution.controller.signal.aborted ||
             this.terminal(run)
           )
@@ -323,7 +333,12 @@ export class RuntimeExecutor {
       ? Math.min(spec.retry, MAX_RETRIES) + 1
       : 1;
     for (let attempt = 1; attempt <= attemptsAllowed; attempt++) {
-      if (execution.controller.signal.aborted || this.terminal(run)) return;
+      if (
+        execution.controller.signal.aborted ||
+        execution.readOnlyDispatch?.signal.aborted ||
+        this.terminal(run)
+      )
+        return;
       record.state = "running";
       record.startedAt = this.now(run);
       record.finishedAt = undefined;
@@ -403,6 +418,7 @@ export class RuntimeExecutor {
           !background &&
           !timedOut &&
           !uncertain &&
+          !execution.readOnlyDispatch?.signal.aborted &&
           (classification = classifyRetryError(outcome.error)).retryable &&
           attempt < attemptsAllowed;
         record.state = retry
@@ -413,6 +429,7 @@ export class RuntimeExecutor {
             : "failed";
         record.finishedAt = retry ? undefined : this.now(run);
         this.checkpoint(run);
+        if (!retry) execution.readOnlyDispatch?.abort();
         if (retry) {
           const delay = retryDelayMs(attempt);
           const waitingSince = Date.now();
@@ -422,7 +439,13 @@ export class RuntimeExecutor {
             retryCategory: classification!.category,
           });
           try {
-            await waitForRetry(delay, execution.controller.signal);
+            const signal = execution.readOnlyDispatch
+              ? AbortSignal.any([
+                  execution.controller.signal,
+                  execution.readOnlyDispatch.signal,
+                ])
+              : execution.controller.signal;
+            await waitForRetry(delay, signal);
           } finally {
             clearRetryBackoff(run, record.id);
           }

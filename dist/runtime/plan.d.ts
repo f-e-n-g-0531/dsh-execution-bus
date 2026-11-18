@@ -40,3 +40,5 @@ export declare const RUNTIME_LIMITS: Readonly<{
     resultBytes: number;
 }>;
 export declare function parsePlan(raw: unknown): Plan;
+/** Storage validation only; a legacy checkpoint is not a new submission. */
+export declare function parseStoredPlan(raw: unknown): Plan;

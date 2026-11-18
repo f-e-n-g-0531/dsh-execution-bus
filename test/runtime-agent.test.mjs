@@ -700,6 +700,63 @@ test("agent input defaults, strict validation, and unsupported write fail closed
   );
 });
 
+test("Worker prompt rejects lone surrogates in new plans and before dispatch", async () => {
+  const { parsePlan } = await import("../dist/runtime/plan.js");
+  const plan = (prompt) => ({
+    steps: [{ id: "worker", tool: "agent", input: { prompt } }],
+  });
+  const signal = new AbortController().signal;
+  for (const prompt of ["x\ud800", "\udc00x", "🧪\ud800"]) {
+    assert.throws(() => parseAgentInput({ prompt }), /RUNTIME_AGENT_INVALID_INPUT/);
+    assert.throws(() => parsePlan(plan(prompt)), /RUNTIME_AGENT_INVALID_INPUT/);
+    await assert.rejects(
+      executeAgentWithoutPolicy({}, {}, { prompt }, signal),
+      /RUNTIME_AGENT_INVALID_INPUT/,
+    );
+  }
+  for (const prompt of ["中🧪", "x\ufffd"])
+    assert.equal(parsePlan(plan(prompt)).steps[0].input.prompt, prompt);
+});
+
+test("legacy malformed Worker prompt remains readable but cannot execute on resume", async () => {
+  const { parsePlan } = await import("../dist/runtime/plan.js");
+  const { RuntimeExecutor } = await import("../dist/runtime/executor.js");
+  const { RuntimeService } = await import("../dist/runtime/service.js");
+  const { RunStore } = await import("../dist/runtime/store.js");
+  const dir = mkdtempSync(path.join(os.tmpdir(), "xiaohe-legacy-prompt-"));
+  const f = await fixture(() => text("must not run"));
+  const store = new RunStore(dir);
+  const service = new RuntimeService(f.ctx, store, f.policy);
+  try {
+    const executor = new RuntimeExecutor(store, () => {
+      assert.fail("the fixture executor must not dispatch");
+    });
+    const run = executor.createRun(f.exec.agent.id, parsePlan({
+      steps: [{ id: "worker", tool: "agent", input: { prompt: "inspect" } }],
+    }));
+    // Recreate a version-1 checkpoint accepted by the old parser before upgrade.
+    const legacyPrompt = "inspect\ud800";
+    run.plan.steps[0].input.prompt = legacyPrompt;
+    run.state = "interrupted";
+    run.error = "RUNTIME_INTERRUPTED";
+    run.finishedAt = run.updatedAt;
+    store.save(run);
+
+    assert.equal(store.load(run.runId).plan.steps[0].input.prompt, legacyPrompt);
+    assert.equal(service.status({ runId: run.runId }, f.exec).state, "interrupted");
+    const resumed = await service.resume({ runId: run.runId }, f.exec);
+    assert.equal(resumed.state, "failed");
+    assert.equal(resumed.steps[0].error, "RUNTIME_AGENT_INVALID_INPUT");
+    assert.equal(resumed.steps[0].childSessionId, undefined);
+    assert.equal(f.requests.length, 0);
+    assert.equal(store.load(run.runId).plan.steps[0].input.prompt, legacyPrompt);
+  } finally {
+    await service.dispose();
+    await f.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("real host loop creates independent read-only worker and disposes it", async () => {
   const f = await fixture((_request, n) =>
     n === 1 ? call("read") : text("verified by worker only"),
