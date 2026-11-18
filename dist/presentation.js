@@ -963,7 +963,8 @@ const alertKinds = new Set([
     "result_unavailable",
 ]);
 function alertItems(value) {
-    return actionableItems(value).filter((item) => alertKinds.has(item.kind));
+    return actionableItems(value).filter((item) => alertKinds.has(item.kind) &&
+        (item.acknowledged !== true || item.kind === "inspect_external_state"));
 }
 function actionableItems(value) {
     const attention = object(object(value)?.attention);
@@ -1237,13 +1238,11 @@ function pageAlertSummary(runs) {
     const counts = new Map();
     let reviews = 0;
     for (const run of runs) {
-        for (const item of actionableItems(run)) {
+        for (const item of alertItems(run)) {
             const kind = item.kind;
-            if (alertKinds.has(kind))
-                counts.set(kind, (counts.get(kind) ?? 0) + 1);
-            else if (kind === "review_results")
-                reviews++;
+            counts.set(kind, (counts.get(kind) ?? 0) + 1);
         }
+        reviews += actionableItems(run).filter((item) => item.kind === "review_results").length;
     }
     const alerts = Object.keys(alertLabels)
         .filter((kind) => counts.has(kind))

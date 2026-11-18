@@ -13,7 +13,9 @@ test("real installed-host smoke registers plugin, guards, identities and both ow
   const result = await runHostSmoke(process.cwd(), "local-installed-peers");
   assert.equal(result.status, "passed", JSON.stringify(result, null, 2));
   assert.equal(process.env.XIAOHE_RUNTIME_DIR, previous);
-  assert.equal(result.checks.length, 23);
+  assert.equal(result.checks.length, 24);
+  assert.ok(result.checks.includes("standard runtime_resume agent gate preserves interrupted checkpoint"));
+  assert.deepEqual(result.evidence.workerResumeGate, { error: "RUNTIME_AGENT_POLICY_UNSUPPORTED", creations: 0, checkpointUnchanged: true, nestedCalls: 0 });
   assert.deepEqual(result.evidence.workerGate, { error: "RUNTIME_AGENT_POLICY_UNSUPPORTED", creations: 0, agentToolCallsAfterControl: 0, newRuns: 0 });
   assert.deepEqual(result.evidence.identityPropagation, { parentMatchesToken: true, rootMatches: true, ownerMatches: true });
   assert.match(result.host["@deepseek-ai/dsh-tools"].manifestSha256, /^[a-f0-9]{64}$/);

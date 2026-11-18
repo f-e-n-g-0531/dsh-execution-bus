@@ -315,6 +315,35 @@ test("dispose cancels owned runs synchronously before its promise settles", asyn
   }
 });
 
+test("dispose publishes a single promise before abort callbacks re-enter", async () => {
+  const entered = deferred();
+  const gate = deferred();
+  let service, reentered;
+  const f = fixture(async ({ signal }) => {
+    signal.addEventListener("abort", () => { reentered = service.dispose(); }, { once: true });
+    entered.resolve();
+    return gate.promise;
+  });
+  try {
+    service = f.create();
+    const other = f.create();
+    const { runId } = await service.run({ plan: plan(), async: true }, exec());
+    await bounded(entered.promise, "tool entry");
+    const disposing = service.dispose();
+    assert.equal(reentered, disposing);
+    assert.equal(f.store.load(runId).state, "cancelled");
+    gate.resolve({});
+    await disposing;
+    const lock = path.join(f.store.root, ".runtime-owner.lock");
+    assert.ok(fs.existsSync(lock));
+    await other.dispose();
+    assert.ok(!fs.existsSync(lock));
+  } finally {
+    gate.resolve({});
+    await f.close();
+  }
+});
+
 test("status/result/cancel/resume reject another owner for active, interrupted and completed runs", async () => {
   const entered = deferred();
   const gate = deferred();

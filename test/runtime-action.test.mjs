@@ -44,7 +44,6 @@ const record = (steps = [step("read")], extra = {}) => ({
 });
 const workerResult = {
   value: {
-    output: "PRIVATE_OUTPUT",
     report: {
       outcome: "blocked",
       summary: "PRIVATE_SUMMARY",

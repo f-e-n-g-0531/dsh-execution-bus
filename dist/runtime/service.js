@@ -28,19 +28,18 @@ const RUN_KEYS = new Set(["plan", "async"]);
 const RUN_ID_KEYS = new Set(["runId"]);
 const RESULT_KEYS = new Set(["runId", "stepId", "offset", "limit", "hash"]);
 // Process-local settlement knowledge only; never infer cleanup after a restart.
-const settlement = new Map();
-function observeSettlement(runId, done) {
-    settlement.delete(runId);
-    settlement.set(runId, done);
-    while (settlement.size > 1024)
-        settlement.delete(settlement.keys().next().value);
+const settledHistory = new Set();
+function rememberSettlement(key) {
+    settledHistory.delete(key);
+    settledHistory.add(key);
+    while (settledHistory.size > 1024)
+        settledHistory.delete(settledHistory.values().next().value);
 }
 const STATUS_KEYS = new Set(["runId", "limit", "offset", "snapshot", "cursor"]);
 // Shared only inside this module/process. A new Agent scope is not a process restart.
 const managers = new Map();
 /** Reuse only within one synchronous response, never across record reads. */
-function observeRun(run, acceptance) {
-    const settled = settlement.get(run.runId);
+function observeRun(run, settled, acceptance) {
     const recovery = runRecovery(run, settled);
     const waiting = runWaiting(run, settled);
     const review = ownerReview(run);
@@ -55,8 +54,8 @@ function observeRun(run, acceptance) {
         action: runAction(run, settled, { recovery, waiting, attention }),
     };
 }
-function summary(run, acceptance) {
-    const { settled, ...observation } = observeRun(run, acceptance);
+function summarizeRun(run, settled, acceptance) {
+    const { settled: _settled, ...observation } = observeRun(run, settled, acceptance);
     return {
         runId: run.runId,
         state: run.state,
@@ -205,6 +204,10 @@ export class RuntimeService {
     dispose() {
         if (this.disposal)
             return this.disposal;
+        let resolve;
+        let reject;
+        const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+        this.disposal = promise;
         this.closed = true;
         this.history.clear();
         const own = [...this.manager.active.values()].filter((entry) => entry.owner === this);
@@ -222,12 +225,11 @@ export class RuntimeService {
                 entry.controller.abort();
             }
         }
-        this.disposal = (async () => {
-            await Promise.allSettled(own.map((entry) => entry.promise));
+        void Promise.allSettled(own.map((entry) => entry.promise)).then(() => {
             this.manager.references--;
             this.releaseManager();
-        })();
-        return this.disposal;
+        }).then(resolve, reject);
+        return promise;
     }
     /** Host-only aggregate of this module/process and canonical root. No paths, IDs or IO.
      * Executing includes admitted resume initialization (still interrupted).
@@ -292,7 +294,7 @@ export class RuntimeService {
         const promise = this.start(run, executor, exec, false, detached);
         if (detached)
             return { runId: run.runId, state: "running" };
-        return summary(await promise);
+        return this.summary(await promise);
     }
     /** Owner-scoped metadata search. Never dispatches tools or indexes payload text. */
     query(raw, exec) {
@@ -313,7 +315,7 @@ export class RuntimeService {
         }
         if (records.size > 1000)
             throw Error(ERRORS.RUNTIME_INVALID_STATE);
-        const result = queryRuns([...records.values()], input, (id) => settlement.get(id));
+        const result = queryRuns([...records.values()], input, (id) => this.executionSettled(id));
         return {
             kind: "owner_metadata_query",
             runs: result.runs.map((run) => ({
@@ -371,7 +373,7 @@ export class RuntimeService {
                     .sort((a, b) => b.updatedAt - a.updatedAt || a.runId.localeCompare(b.runId))
                     .slice(offset, offset + limit)
                     .map((run) => {
-                    const { settled: _settled, recovery: _recovery, ...observation } = observeRun(run);
+                    const { settled: _settled, recovery: _recovery, ...observation } = observeRun(run, this.executionSettled(run.runId));
                     return {
                         runId: run.runId,
                         state: run.state,
@@ -401,7 +403,7 @@ export class RuntimeService {
             input.snapshot !== undefined ||
             input.cursor !== undefined)
             throw Error(ERRORS.INVALID_PLAN);
-        return summary(this.owned(input.runId, sessionId));
+        return this.summary(this.owned(input.runId, sessionId));
     }
     /** Read-only task page over retained owned records; never a claim of complete history. */
     task(raw, exec) {
@@ -429,7 +431,7 @@ export class RuntimeService {
         const ordered = [...records.values()].sort((a, b) => b.updatedAt - a.updatedAt || a.runId.localeCompare(b.runId));
         const runs = ordered
             .slice(offset, offset + limit)
-            .map((run) => summary(run));
+            .map((run) => this.summary(run));
         return {
             taskId: input.taskId,
             runs,
@@ -482,7 +484,7 @@ export class RuntimeService {
                 (taskId !== undefined && run.plan.taskId !== taskId))
                 page.pagination.missingRunIds.push(id);
             else
-                runs.push(summary(run));
+                runs.push(this.summary(run));
         }
         return {
             ...(taskId === undefined ? {} : { taskId }),
@@ -514,7 +516,7 @@ export class RuntimeService {
             throw Error(ERRORS.INVALID_PLAN);
         return deliverNotification((input) => this.notification(input, exec), () => {
             const run = this.owned(runId, this.sessionId(exec));
-            const action = runAction(run, settlement.get(run.runId));
+            const action = runAction(run, this.executionSettled(run.runId));
             return [
                 "萧何运行待办",
                 "运行：" + run.runId,
@@ -565,7 +567,7 @@ export class RuntimeService {
         }
         if (operation !== "get" && exec.signal?.aborted)
             throw Error(ERRORS.RUNTIME_CANCELLED);
-        const attention = runAttention(run, settlement.get(run.runId));
+        const attention = runAttention(run, this.executionSettled(run.runId));
         // Delivery versions also bind the problem snapshot: a later occurrence of the
         // same action must not be suppressed by a prior sent/withdrawn receipt.
         const versionKey = (key) => createHash("sha256")
@@ -634,7 +636,7 @@ export class RuntimeService {
             reason: input.reason,
         });
         return {
-            ...summary(saved),
+            ...this.summary(saved),
             acknowledgementHistory: saved.acknowledgements,
         };
     }
@@ -675,7 +677,7 @@ export class RuntimeService {
         if (!validDecisionInput(declaration))
             throw Error(ERRORS.INVALID_PLAN);
         const saved = this.store.recordDecision(run.runId, sessionId, declaration);
-        return { ...summary(saved), decisionHistory: saved.decisionDispositions };
+        return { ...this.summary(saved), decisionHistory: saved.decisionDispositions };
     }
     review(raw, exec) {
         this.ensureOpen();
@@ -710,7 +712,7 @@ export class RuntimeService {
             disposition: input.disposition,
             reason: input.reason,
         });
-        return { ...summary(saved), ownerReviewHistory: saved.ownerReviews };
+        return { ...this.summary(saved), ownerReviewHistory: saved.ownerReviews };
     }
     result(raw, exec) {
         this.ensureOpen();
@@ -738,7 +740,7 @@ export class RuntimeService {
             const end = Math.min(chars.length, offset + limit);
             const acceptance = runAcceptance(run);
             return {
-                ...summary(run, acceptance),
+                ...this.summary(run, acceptance),
                 acceptance,
                 ownerReviewHistory: run.ownerReviews ?? [],
                 acknowledgementHistory: run.acknowledgements ?? [],
@@ -763,7 +765,7 @@ export class RuntimeService {
             throw Error(ERRORS.INVALID_PLAN);
         const acceptance = runAcceptance(run);
         return {
-            ...summary(run, acceptance),
+            ...this.summary(run, acceptance),
             acceptance,
             ownerReviewHistory: run.ownerReviews ?? [],
             acknowledgementHistory: run.acknowledgements ?? [],
@@ -811,7 +813,7 @@ export class RuntimeService {
             }
         }
         // Scheduling cancellation is not confirmation that an uncooperative tool stopped.
-        return summary(run);
+        return this.summary(run);
     }
     async resume(raw, exec) {
         this.ensureOpen();
@@ -826,7 +828,7 @@ export class RuntimeService {
             typeof this.delegationPolicy?.checkParentPolicy !== "function")
             throw Error(ERRORS.RUNTIME_AGENT_POLICY_UNSUPPORTED);
         this.admit(exec);
-        return summary(await this.start(run, this.executor(exec), exec, true, false));
+        return this.summary(await this.start(run, this.executor(exec), exec, true, false));
     }
     start(run, executor, exec, resume, detached) {
         const controller = new AbortController();
@@ -844,7 +846,7 @@ export class RuntimeService {
         };
         // Register before arbitrary host code, including synchronous re-entrancy.
         this.manager.active.set(run.runId, entry);
-        observeSettlement(run.runId, false);
+        settledHistory.delete(this.settlementKey(run.runId));
         const promise = Promise.resolve()
             .then(() => {
             // Recheck source versions after the scheduling boundary, before any dispatch.
@@ -880,10 +882,11 @@ export class RuntimeService {
         })
             .finally(() => {
             // Eviction means unknown, never a fabricated cleanup success.
-            observeSettlement(run.runId, true);
             exec.signal?.removeEventListener("abort", onAbort);
-            if (this.manager.active.get(run.runId) === entry)
+            if (this.manager.active.get(run.runId) === entry) {
                 this.manager.active.delete(run.runId);
+                rememberSettlement(this.settlementKey(run.runId));
+            }
             try {
                 this.store.prune(100);
             }
@@ -906,6 +909,17 @@ export class RuntimeService {
         this.manager.failures.set(run.runId, run);
         if (this.manager.failures.size > 100)
             this.manager.failures.delete(this.manager.failures.keys().next().value);
+    }
+    settlementKey(runId) {
+        return this.key + "\0" + runId;
+    }
+    executionSettled(runId) {
+        if (this.manager.active.has(runId))
+            return false;
+        return settledHistory.has(this.settlementKey(runId)) ? true : undefined;
+    }
+    summary(run, acceptance) {
+        return summarizeRun(run, this.executionSettled(run.runId), acceptance);
     }
     releaseManager() {
         if (this.manager.references === 0 &&
@@ -970,7 +984,7 @@ export class RuntimeService {
         if (!["succeeded", "failed", "cancelled"].includes(source.state) ||
             this.manager.active.has(runId) ||
             this.manager.failures.has(runId) ||
-            settlement.get(runId) !== true ||
+            this.executionSettled(runId) !== true ||
             !source.plan.taskId)
             throw Error(ERRORS.RUNTIME_INVALID_STATE);
         return source;

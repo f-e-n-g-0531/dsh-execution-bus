@@ -412,6 +412,22 @@ export function historyRecord(runtime, i, state) {
   };
 }
 
+function capacityStep(row) {
+  const step = row.steps?.[0];
+  return { stepState: step?.state, attempts: step?.attempts };
+}
+
+function sameCapacityRecord(row, expected) {
+  return row != null && row.results != null && expected !== undefined && row.runId === expected.runId &&
+    row.ownerSessionId === "benchmark-owner" && row.state === expected.state &&
+    row.steps?.length === 1 && row.steps[0].id === "synthetic" &&
+    row.steps[0].tool === "write" && row.steps[0].state === expected.stepState &&
+    row.steps[0].attempts === expected.attempts &&
+    (row.state === "succeeded"
+      ? Object.keys(row.results).length === 1 && row.results.synthetic?.value?.ok === true
+      : Object.keys(row.results).length === 0);
+}
+
 export async function benchmarkCapacity(runtime, options) {
   const samples = [];
   for (const size of options.sizes)
@@ -424,9 +440,9 @@ export async function benchmarkCapacity(runtime, options) {
               const recoverable = Math.floor(size * ratio);
               // Half already interrupted, half abandoned running: startup must preserve unknown.
               const existingInterrupted = Math.ceil(recoverable / 2);
-              for (let i = 0; i < size; i++)
-                setupStore.save(
-                  historyRecord(
+              const seeded = [];
+              for (let i = 0; i < size; i++) {
+                const record = historyRecord(
                     runtime,
                     i,
                     i < existingInterrupted
@@ -434,15 +450,22 @@ export async function benchmarkCapacity(runtime, options) {
                       : i < recoverable
                         ? "running"
                         : "succeeded",
-                  ),
-                );
+                  );
+                seeded.push({ runId: record.runId, state: record.state, ...capacityStep(record) });
+                setupStore.save(record);
+              }
+              const expectedPage = seeded.slice(-20).reverse();
+              const expectedRemaining = new Map(seeded.filter((row, i) =>
+                operation === "list" || i < recoverable || i >= size - 100,
+              ).map((row) => [row.runId, operation === "startup" && row.state === "running"
+                ? { ...row, state: "interrupted", stepState: "unknown" } : row]));
               // Unique fresh history/root; setup uses saves, not list. A new instance alone
               // does NOT isolate module-level metadata caches; OS file cache is NOT flushed.
               const store = new runtime.RunStore(root);
               let service;
               const measured = await measureBlocking(() => {
                 if (operation === "list")
-                  return store.list(20, "benchmark-owner").length;
+                  return store.list(20, "benchmark-owner");
                 if (operation === "prune") {
                   store.prune(100);
                   return null;
@@ -454,11 +477,19 @@ export async function benchmarkCapacity(runtime, options) {
               const warm =
                 operation === "list"
                   ? await measureBlocking(
-                      () => store.list(20, "benchmark-owner").length,
+                      () => store.list(20, "benchmark-owner"),
                     )
                   : null;
               try {
-                const remaining = store.list(Number.MAX_SAFE_INTEGER);
+                let remaining = [], verified = false;
+                try {
+                  remaining = store.list(Number.MAX_SAFE_INTEGER);
+                  verified = remaining.length === expectedRemaining.size &&
+                    new Set(remaining.map((row) => row.runId)).size === remaining.length &&
+                    remaining.every((row) => sameCapacityRecord(row, expectedRemaining.get(row.runId)));
+                } catch {
+                  remaining = [];
+                }
                 const states = Object.fromEntries(
                   ["succeeded", "running", "interrupted"].map((s) => [
                     s,
@@ -486,8 +517,10 @@ export async function benchmarkCapacity(runtime, options) {
                   cacheState,
                   operationMs: m.operationMs,
                   eventLoopProbeDelayMs: m.eventLoopProbeDelayMs,
-                  failed: m.failed,
-                  returnedRecords: m.value ?? null,
+                  failed: m.failed || !verified || (operation === "list" &&
+                    (!Array.isArray(m.value) || m.value.length !== expectedPage.length ||
+                      !m.value.every((row, i) => sameCapacityRecord(row, expectedPage[i])))),
+                  returnedRecords: Array.isArray(m.value) ? m.value.length : null,
                 });
                 return [
                   sample(
@@ -571,7 +604,7 @@ export async function runBenchmark(options = {}, runtime) {
       runtime:
         "real RuntimeExecutor with disk RunStore; pure read/glob/grep DAGs use completion-driven bounded scheduling; mixed plans retain batch barriers; includes checkpoints",
       capacity:
-        "fresh synthetic history/root per operation/iteration; setup excluded; list=first list after setup saves, warm-list=same-instance second read before verification; new instances do not isolate module metadata, other roots may be cached; neither is OS-cold; iterations are independent histories, list/warm-list are paired not independent; startup=RuntimeService constructor including markInterrupted and prune(100); no host execution; failed samples remain but missing from timing summaries",
+        "fresh synthetic history/root per operation/iteration; setup excluded; list=first list after setup saves, warm-list=same-instance second read before verification; new instances do not isolate module metadata, other roots may be cached; neither is OS-cold; iterations are independent histories, list/warm-list are paired not independent; startup=RuntimeService constructor including markInterrupted and prune(100); no host execution; failed or semantically incorrect samples remain but are excluded from timing summaries",
       eventLoop:
         "queued setImmediate wall delay, including scheduler baseline and synchronous blocking; not CPU time, isolated attribution, or lag histogram",
       reproducibility:

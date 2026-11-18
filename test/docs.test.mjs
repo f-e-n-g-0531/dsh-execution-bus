@@ -2,7 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import path from "node:path";
+import { apply } from "../dist/plugin.js";
 import { parsePlan } from "../dist/runtime/plan.js";
+
+test("protocol tool index exactly matches the runtime registration", () => {
+  const names = [];
+  apply({ effect() {}, tools: { register(tool) { names.push(tool.name); } } });
+  const text = readFileSync("docs/protocol.md", "utf8").split("## 工具\n")[1].split("\n\n").filter(Boolean)[0];
+  const entries = [...text.matchAll(/^\| `([a-z_]+)` \|/gm)].map(match => match[1]);
+  assert.deepEqual(entries.sort(), names.sort());
+});
 
 function docs(dir) {
   return readdirSync(dir, { withFileTypes: true })

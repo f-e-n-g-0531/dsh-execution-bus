@@ -14,6 +14,11 @@
 | `runtime_review` | `{runId,snapshotHash,expectedRevision,disposition,reason}` | 记录 owner 处置并返回摘要与 `ownerReviewHistory`；不是独立验收 |
 | `runtime_cancel` | `{ runId }` | 发起取消后的运行摘要；不保证 Worker 已清理或宿主操作已实际停止 |
 | `runtime_resume` | `{ runId }` | 同步等待恢复结果；仅 `interrupted` 可恢复 |
+| `runtime_task` | `{ taskId, limit?, offset? }` 或同任务的快照 / 游标参数 | [同任务运行与本页待办](#行动摘要任务视图与通知回执源码新增) |
+| `runtime_query` | `{ q?, taskId?, state?, action?, view?, limit?, offset? }` | [跨任务待办与元数据](#跨任务待办与历史元数据检索源码新增未发布) |
+| `runtime_decision` | 运行、快照、事项 key、预期修订及处置参数 | [记录决策处置](#决策处置关联源码新增未发布)；不执行后续操作 |
+| `runtime_handoff` | 运行、所选结果及摘要 | [生成交接快照](#跨-run-显式上下文交接源码新增未发布)；快照不授予权限 |
+| `runtime_notification` | 运行及 `get/sync/claim/settle` 对应参数 | [通知回执](#行动摘要任务视图与通知回执源码新增)；不发送消息 |
 
 `runtime_status` 列表 `limit` 为 1–100，默认 20；`offset` 为 0–10000，默认 0。先按所有者过滤，再按更新时间降序分页；同时间以运行 ID 稳定排序。指定 `runId` 时不能同时提供分页参数。所有工具拒绝未知字段。
 
@@ -108,8 +113,8 @@ await tools.runtime_run({plan: {
 ```ts
 const saved = await tools.runtime_result({runId});
 // 先核实完整报告与证据，必要时继续分页读取。
-const question = saved.attention.items.find(item => item.kind === "decision_required");
-if (question) {
+const question = saved.decisionLedger?.items.find(item => item.status === "open");
+if (question && saved.attention?.snapshotHash) {
   await tools.runtime_decision({
     runId, snapshotHash: saved.attention.snapshotHash, key: question.key,
     expectedRevision: saved.decisionLedger.revision,
@@ -127,7 +132,7 @@ if (question) {
 仅完整 `runtime_result({runId})` 返回 `planComparison`；不新增模型工具或输入参数。列表、task、status、run/review/cancel/resume 摘要及 stepId 结果分页不计算差异，避免列表逐条读取前驱。
 
 - 可比较：`{comparable:true,changes:{addedSteps,removedSteps,changedSteps,concurrencyChanged,goalChanged,provenanceChanged,handoffChanged}}`。按显式 previousRunId 读取同 owner、同 task 且已终态收束的前驱，不自动寻找别的历史。步骤 ID 排序；changedSteps 为 `[{id,fields}]`，fields 仅包含 tool/input/dependsOn/retry/timeoutMs，不输出输入正文、前后值、字段路径或哈希。目标、来源说明与交接快照只报变化布尔值，不展示交接正文或哈希。
-- 忽略对象键顺序、步骤列表顺序和依赖集合顺序；输入数组仍区分顺序。步骤改名算删除加新增，不推测重命名。task/previousRunId 是关联，不列为计划内容变化。
+- 忽略对象键顺序、步骤列表顺序和依赖集合顺序；输入数组仍区分顺序。依赖比较按集合；Worker 拼装上游正文和预览时仍按声明顺序，因此依赖重排可能改变实际提示词。步骤改名算删除加新增，不推测重命名。task/previousRunId 是关联，不列为计划内容变化。
 - 不可比较：`{comparable:false,reason}`，无 changes。reason 为 no_previous_run（未关联前驱）、predecessor_unavailable（缺失、不可读、记录/schema 不可用或不属于 owner，统一处理避免泄漏）、incompatible_predecessor（任务/状态不兼容或前驱仍占活动槽）。不可比较不等于无变化；仅 comparable:true 且所有变化列表为空、布尔值为 false 才表示所列字段无变化。
 - 比较只派生详情，不写入运行记录，不复用结果、不执行或恢复、不授予权限；差异小或无变化不证明行为等价、安全、交付或验收。返回的是当前仍保留的前驱记录比较，不是不可篡改历史。模型预算等待诊断本次不实现。
 

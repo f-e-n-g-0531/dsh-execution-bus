@@ -41,7 +41,7 @@ const report = (extra = {}) => ({
 });
 const envelope = (reportValue) => ({
   sessionId: "PRIVATE_SESSION",
-  output: "PRIVATE_OUTPUT",
+  output: JSON.stringify(reportValue),
   verification: "not_independently_verified",
   report: reportValue,
 });
@@ -242,6 +242,25 @@ test("contract mismatch, invalid evidence index, and oversized report are not co
       resultHash: hash(value),
     });
   }
+});
+
+test("wire byte budget stays authoritative after parsing and reload", () => {
+  const original = report({ outcome: "partial", requestedDecision: "choose", limitations: ["pending"],
+    evidence: [{ path: "probe", lineStart: 1000000000000000 }, ...Array.from({ length: 8 }, () => ({ path: "x".repeat(2048) }))] });
+  const long = JSON.stringify(original);
+  const target = long.length - 16384 - 1;
+  original.evidence.at(-1).path = "x".repeat(2048 - target);
+  const canonical = JSON.stringify(original);
+  const output = canonical.replace("1000000000000000", "1e15");
+  assert.ok(Buffer.byteLength(canonical) > 16384);
+  assert.ok(Buffer.byteLength(output) <= 16384);
+  const value = { ...envelope(original), output };
+  const run = record([step("worker")], { results: { worker: { value } } });
+  assert.equal(runAcceptance(run).workers[0].decisionRequired, true);
+  value.output = canonical;
+  assert.equal(runAcceptance(run).workers[0].decisionRequired, undefined);
+  value.output = output.replace("choose", "other decision");
+  assert.equal(runAcceptance(run).workers[0].decisionRequired, undefined);
 });
 
 test("hash uses the full JSON value with Unicode and no report or contract fallback", () => {

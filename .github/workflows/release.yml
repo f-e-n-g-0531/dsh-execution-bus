@@ -44,6 +44,7 @@ jobs:
       - run: node scripts/release-preflight.mjs
       - run: npm ci --include=dev --ignore-scripts
       - run: npm run check
+      - run: node scripts/verify-dist.mjs
       - run: npm run verify:package
       - run: npm run pack:candidate
         id: pack

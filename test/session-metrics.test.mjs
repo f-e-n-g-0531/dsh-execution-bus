@@ -326,6 +326,75 @@ test("runtime observations deduplicate runId and step attempts across status/lis
   assert.equal(s.observedRuntimeRetryAttempts, 2);
 });
 
+test("snapshot gaps are redacted, deduplicated and separate from observed runs", () => {
+  const snapshot = (runs, missingRunIds) => ({
+    runs,
+    pagination: {
+      mode: "snapshot",
+      capturedAt: 1000,
+      expiresAt: 301000,
+      total: 3,
+      missingRunIds,
+      nextCursor: "private-snapshot-cursor",
+    },
+  });
+  const observed = run("succeeded", [step("a", "succeeded", 2)]);
+  const page = dispatch(
+    "runtime_status",
+    snapshot([observed], ["private-missing-a", "private-missing-a"]),
+    { subCallId: "snapshot-page" },
+  );
+  const stats = diagnostics();
+  const row = metricsFromEvents([
+    header(),
+    page,
+    page,
+    dispatch("runtime_status", snapshot([], ["private-duplicate-only"]), {
+      subCallId: "snapshot-page",
+    }),
+    directCall("runtime_task", "snapshot-task"),
+    {
+      type: "tool/result",
+      data: {
+        message: {
+          toolCallId: "snapshot-task",
+          content: blocks(snapshot([], ["private-missing-a", "private-missing-b"])),
+        },
+      },
+    },
+    dispatch("runtime_result", observed, { subCallId: "observed-again" }),
+  ], stats);
+
+  assert.equal(stats.snapshotMissingRuns, 2);
+  assert.equal(stats.unsupportedResults, 0);
+  assert.equal(row.quality.diagnostics.snapshotMissingRuns, 2);
+  assert.equal(row.quality.classification, "partial");
+  assert.equal(row.runtime.callsSeenResultsUnseen, 0);
+  assert.equal(row.runtime.resultsSeen.runtime_status, 1);
+  assert.equal(row.runtime.resultsSeen.runtime_task, 1);
+  assert.equal(row.runtime.observedRuns, 1);
+  assert.equal(row.runtime.observedSteps, 1);
+  assert.equal(row.runtime.observedAttempts, 2);
+  assert.equal(summarize([row]).sampleQuality.partial, 1);
+  assert.doesNotMatch(JSON.stringify(row), /private-missing|private-duplicate|private-snapshot-cursor/);
+});
+
+test("empty snapshot gaps and non-snapshot pagination do not make a sample partial", () => {
+  const row = metricsFromEvents([
+    header(),
+    dispatch("runtime_status", {
+      runs: [],
+      pagination: { mode: "snapshot", missingRunIds: [] },
+    }, { subCallId: "snapshot-empty" }),
+    dispatch("runtime_status", {
+      runs: [],
+      pagination: { mode: "offset", missingRunIds: ["private-ignored"] },
+    }, { subCallId: "offset-page" }),
+  ]);
+  assert.equal(row.quality.diagnostics.snapshotMissingRuns, 0);
+  assert.equal(row.quality.classification, "withoutDetectedGaps");
+});
+
 test("retry config, cancel and resume requests do not imply execution or recovery success", () => {
   const stats = diagnostics();
   const row = metricsFromEvents(

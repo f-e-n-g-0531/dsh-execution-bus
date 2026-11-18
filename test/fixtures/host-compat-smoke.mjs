@@ -112,6 +112,28 @@ export async function runHostSmoke(candidateDirectory, version = "unspecified") 
       denied(gate, "RUNTIME_AGENT_POLICY_UNSUPPORTED"); assert.equal(creations, 0); assert.equal(agentToolCalls, 1); assert.deepEqual(after, before);
     });
     evidence.workerGate = { error: "RUNTIME_AGENT_POLICY_UNSUPPORTED", creations, agentToolCallsAfterControl: agentToolCalls - 1, newRuns: after.length - before.length };
+    const { RunStore } = await load("dist/runtime/store.js");
+    const { RuntimeExecutor } = await load("dist/runtime/executor.js");
+    const { parsePlan } = await load("dist/runtime/plan.js");
+    const store = new RunStore(dir);
+    const interrupted = new RuntimeExecutor(store, () => assert.fail("fixture must not dispatch")).createRun(
+      a.agent.id, parsePlan({ steps: [{ id: "worker", tool: "agent", input: { prompt: "must not resume worker" } }] }),
+    );
+    Object.assign(interrupted, { state: "interrupted", error: "RUNTIME_INTERRUPTED", finishedAt: interrupted.updatedAt });
+    store.save(interrupted);
+    const read = () => readFileSync(store.pathFor(interrupted.runId));
+    const saved = read();
+    assert.equal(ok(await a.call("runtime_status", { runId: interrupted.runId })).state, "interrupted");
+    observations.length = 0;
+    const resume = await a.call("runtime_resume", { runId: interrupted.runId });
+    pass("standard runtime_resume agent gate preserves interrupted checkpoint", () => {
+      denied(resume, "RUNTIME_AGENT_POLICY_UNSUPPORTED");
+      assert.deepEqual(read(), saved);
+      assert.deepEqual(observations.map(x => x.name), ["runtime_resume"]);
+      assert.equal(creations, 0);
+      assert.equal(agentToolCalls, 1);
+    });
+    evidence.workerResumeGate = { error: "RUNTIME_AGENT_POLICY_UNSUPPORTED", creations, checkpointUnchanged: true, nestedCalls: 0 };
     outcome = { status: "passed", version, host: hostIdentity(), checks, evidence };
   } catch (error) {
     outcome = { status: "failed", version, checks, evidence, error: String(error?.stack ?? error) };

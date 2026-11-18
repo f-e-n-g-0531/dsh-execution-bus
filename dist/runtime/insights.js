@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { ERRORS } from "../error-codes.js";
 import { parseAcceptanceCriteria, parseWorkerReport } from "./agent-report.js";
 import { IDEMPOTENT_TOOLS } from "./plan.js";
@@ -32,11 +33,17 @@ export function runAcceptance(run) {
             const criteria = input?.acceptance_criteria === undefined
                 ? undefined
                 : parseAcceptanceCriteria(input.acceptance_criteria);
-            // executeAgent stores the parsed report object, not the wire output string.
-            const reportText = JSON.stringify(value.report);
-            if (reportText === undefined)
+            const saved = value;
+            // Older envelopes without a wire output retain the bounded object fallback.
+            const reportText = Object.hasOwn(saved, "output")
+                ? saved.output
+                : JSON.stringify(saved.report);
+            if (typeof reportText !== "string")
                 return worker;
             const report = parseWorkerReport(reportText, criteria);
+            // Match the JSON checkpoint representation (including numeric -0 → 0).
+            if (!isDeepStrictEqual(JSON.parse(JSON.stringify(report)), saved.report))
+                return worker;
             worker.reportOutcome = report.outcome;
             worker.evidenceCount = report.evidence.length;
             worker.limitationCount = report.limitations.length;

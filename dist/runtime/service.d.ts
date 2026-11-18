@@ -512,6 +512,9 @@ export declare class RuntimeService {
     resume(raw: unknown, exec: ToolRunContext): Promise<RunSummary>;
     private start;
     private rememberStorageFailure;
+    private settlementKey;
+    private executionSettled;
+    private summary;
     private releaseManager;
     private ensureOpen;
     private admit;

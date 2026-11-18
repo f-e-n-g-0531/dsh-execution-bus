@@ -28,6 +28,7 @@ jobs:
         run: node scripts/verify-tag.mjs
       - run: npm ci --include=dev --ignore-scripts
       - run: npm run check
+      - run: node scripts/verify-dist.mjs
       - run: npm run verify:package
       - run: npm run pack:candidate
         id: pack

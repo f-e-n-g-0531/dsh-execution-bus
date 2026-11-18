@@ -134,6 +134,7 @@ export function diagnostics() {
     unsupportedResults: 0,
     duplicateEvents: 0,
     malformedPresetSelections: 0,
+    snapshotMissingRuns: 0,
   };
 }
 
@@ -378,6 +379,7 @@ export function metricsFromEvents(events, stats = diagnostics()) {
     missingIdStarts = 0;
   const resultCounts = countMap(RUNTIME_TOOLS);
   const runs = new Map();
+  const missingSnapshotRuns = new Set();
   const bus = [];
   const pending = new Map();
   const seenCalls = new Set();
@@ -390,6 +392,13 @@ export function metricsFromEvents(events, stats = diagnostics()) {
   function observe(value, time) {
     if (!object(value)) return false;
     if (Array.isArray(value.runs)) {
+      if (value.pagination?.mode === "snapshot" && Array.isArray(value.pagination.missingRunIds)) {
+        for (const id of value.pagination.missingRunIds) {
+          if (typeof id !== "string" || !id || missingSnapshotRuns.has(id)) continue;
+          missingSnapshotRuns.add(id);
+          stats.snapshotMissingRuns++;
+        }
+      }
       return value.runs.map((run) => observe(run, time)).every(Boolean);
     }
     if (typeof value.runId !== "string" || !RUN_STATES.includes(value.state))

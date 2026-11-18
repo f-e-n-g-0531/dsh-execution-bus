@@ -12,6 +12,8 @@
 
 ## 2. 本地验证
 
+锁定开发依赖声明要求 Node.js ≥22.19.0。这是依赖下限，不代表该最低补丁版已经实测，也不改变插件包的 `engines` 声明。
+
 ```powershell
 npm ci --include=dev --ignore-scripts
 npm run check
@@ -26,7 +28,7 @@ npm run test:install -- artifacts/candidate/feng0531-dsh-execution-bus-X.Y.Z.tgz
 
 只有匹配格式的版本标签 push 和手动 workflow_dispatch 触发 [CI](https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/.github/workflows/ci.yml)；普通分支 push、PR 不触发。标签检查会进一步严格校验格式及版本一致性。
 
-创建新 vX.Y.Z 标签后，等待 Windows/Ubuntu × Node 22/24 四项全部成功。各项编译、测试、检查包、生成候选，再安装该项的同一 tgz，并上传候选和 SHA-256 文件。手动分支 CI 不能替代同标签 push CI。
+创建新 vX.Y.Z 标签后，等待 Windows/Ubuntu × Node 22/24 四项全部成功。各项编译、测试，校验重建后的 `dist` 路径和字节与检出提交一致，再检查包、生成候选，再安装该项的同一 tgz，并上传候选和 SHA-256 文件。手动分支 CI 不能替代同标签 push CI。
 
 失败后先定位。需要修改冻结源码或测试时使用新的版本/标签，不强推覆盖。制品过期或缺少任何一份时，发布门禁会拒绝，需要先恢复可核验的同标签 CI。
 

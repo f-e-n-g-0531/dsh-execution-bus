@@ -335,7 +335,24 @@ test(
       successor.status({ runId }, f.host.exec).executionSettled,
       false,
     );
-    cleaned.resolve();
+    try {
+      // Keep the Worker held while unrelated completions exceed the history limit.
+      const churnStore = new RunStore(f.root);
+      const churn = new RuntimeService(f.host.ctx, churnStore);
+      try {
+        churnStore.save = () => {};
+        churnStore.prune = () => {};
+        for (let i = 0; i < 1025; i++) {
+          await churn.run({ plan: { steps: [{ id: "read", tool: "read", input: {} }] } }, f.host.exec);
+        }
+        assert.equal(successor.status({ runId }, f.host.exec).executionSettled, false);
+        assert.equal(successor.result({ runId }, f.host.exec).waiting.cleanupPending, true);
+      } finally {
+        await churn.dispose();
+      }
+    } finally {
+      cleaned.resolve();
+    }
     await closing;
     const drained = await done;
     assert.equal(drained.state, "cancelled");

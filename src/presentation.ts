@@ -1016,7 +1016,8 @@ const alertKinds = new Set([
 
 function alertItems(value: unknown): Record<string, unknown>[] {
   return actionableItems(value).filter((item) =>
-    alertKinds.has(item.kind as string),
+    alertKinds.has(item.kind as string) &&
+    (item.acknowledged !== true || item.kind === "inspect_external_state"),
   );
 }
 
@@ -1348,11 +1349,11 @@ function pageAlertSummary(runs: unknown[]): string {
   const counts = new Map<string, number>();
   let reviews = 0;
   for (const run of runs) {
-    for (const item of actionableItems(run)) {
+    for (const item of alertItems(run)) {
       const kind = item.kind as string;
-      if (alertKinds.has(kind)) counts.set(kind, (counts.get(kind) ?? 0) + 1);
-      else if (kind === "review_results") reviews++;
+      counts.set(kind, (counts.get(kind) ?? 0) + 1);
     }
+    reviews += actionableItems(run).filter((item) => item.kind === "review_results").length;
   }
   const alerts = Object.keys(alertLabels)
     .filter((kind) => counts.has(kind))

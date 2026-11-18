@@ -509,6 +509,22 @@ test("capacity repeats are independent roots while warm-list reuses first-list s
   }
 });
 
+test("nonthrowing wrong pages, retention and recovery are not timed as successes", async () => {
+  const roots = new Map();
+  class Store {
+    constructor(root) { if (!roots.has(root)) roots.set(root, []); this.records = roots.get(root); }
+    save(row) { this.records.push(row); }
+    list(limit) { return limit === 20 ? this.records.slice(-20) : this.records.slice(); }
+    prune() { this.records.splice(100); } // drops newest terminals instead of oldest ones
+  }
+  class Service { async dispose() {} } // silently leaves abandoned runs running
+  const report = await benchmarkCapacity({ RunStore: Store, RuntimeService: Service, parsePlan: p => p },
+    { sizes: [125], interrupted: [0.1], iterations: 1 });
+  assert.equal(report.samples.length, 4);
+  assert.ok(report.samples.every(row => row.failed));
+  assert.ok(report.summary.every(row => row.operationMs.observed === 0 && row.operationMs.missing === 1));
+});
+
 test("failed capacity operations remain samples but are missing from timing statistics", async () => {
   class Store {
     constructor() {
@@ -544,7 +560,7 @@ test("failed capacity operations remain samples but are missing from timing stat
   }
   assert.equal(
     report.summary.find((s) => s.operation === "warm-list").failed,
-    0,
+    1,
   );
   assert.doesNotMatch(
     JSON.stringify(report),

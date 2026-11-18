@@ -46,10 +46,10 @@ test("install smoke cannot recover or prune the operator's home or explicit run 
         .map((name) => [name, readFileSync(path.join(dir, name), "utf8")]);
     const before = [snapshot(defaultRoot), snapshot(explicitRoot)];
     const source =
-      "import { apply } from " +
+      "import assert from 'node:assert/strict'; import { apply } from " +
       JSON.stringify(pathToFileURL(path.resolve("dist/plugin.js")).href) +
       ";\n" +
-      `const disposers=[],tools=[];apply({effect(fn){disposers.push(fn())},tools:{register(tool){tools.push(tool)}}});try{await tools.find(t=>t.name==="runtime_status").execute({},{});}catch(e){if(e.message!=="OWNING_SESSION_REQUIRED")throw e;}for(const dispose of disposers)await dispose();`;
+      `const disposers=[],tools=[];apply({effect(fn){disposers.push(fn())},tools:{register(tool){tools.push(tool)}}});try{await assert.rejects(async()=>tools.find(t=>t.name==="runtime_status").execute({},{}),{message:"OWNING_SESSION_REQUIRED"});}finally{for(const dispose of disposers)await dispose();}`;
     const script = path.join(temp, "verify.mjs");
     writeFileSync(script, source);
     for (const override of [undefined, explicitRoot]) {

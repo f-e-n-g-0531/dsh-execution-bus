@@ -39,7 +39,6 @@ const record = (steps = [], extra = {}) => ({
   ...extra,
 });
 const workerValue = (extra = {}) => ({
-  output: "PRIVATE_OUTPUT",
   sessionId: "PRIVATE_SESSION",
   report: {
     outcome: "partial",

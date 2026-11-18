@@ -57,6 +57,18 @@ test("current-page action partition is stable and pure", () => {
   assert.match(repeated, /two ·/);
   assert.deepEqual(requests(repeated), [{ runId: "one" }, { runId: "two" }]);
 });
+test("known failures remain in detail without taking an urgent list slot", () => {
+  const known = run("known", [item("inspect_failure", { acknowledged: true })]);
+  const fresh = run("fresh", [item("inspect_failure")]);
+  const unknown = run("unknown", [item("inspect_external_state", { acknowledged: true })]);
+  const review = run("review", [item("review_results")]);
+  const text = runtimePresentationMeta({}, { runs: [known, fresh, review, unknown] }).text;
+  assert.match(text, /失败待查 1/);
+  assert.match(text, /外部状态未知 1/);
+  assert.match(text, /结果待复核 1/);
+  assert.match(text, /已知悉/);
+  assert.deepEqual(requests(text).map((x) => x.runId), ["fresh", "unknown", "known", "review"]);
+});
 test("uncertainty and actions precede progress and cleanup", () => {
   const value = {
     ...run("ordered", [
