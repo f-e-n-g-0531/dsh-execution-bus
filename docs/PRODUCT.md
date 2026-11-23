@@ -16,7 +16,7 @@
 | Agent 内 /mode | 预设末尾插件行 | 追加运行时工具与模式说明 |
 | `./test-mode` | 兼容别名 | 与 /mode 同一模块 |
 
-标准 rc.3 支持普通工具 DAG，独立分工可用宿主原生委派；原生委派不是运行时 `agent` 步骤，也不证明 Worker 门禁已打通。普通任务继续用原工具；运行时只处理“能写成稳定 DAG”的协调工作，简单一次性操作不包装。普通工具的 `depends_on` 只约束顺序，不插值结果；Agent 则追加直接依赖结果为不可信 JSON（缺失/截断或追加 prompt >64KiB 拒绝）；同一记录 root 的单进程 service 共享 8 个 active run，run/resume 均需准入。
+标准 0.2.3 支持普通工具 DAG，独立分工可用宿主原生委派；原生委派不是运行时 `agent` 步骤，也不证明 Worker 门禁已打通。普通任务继续用原工具；运行时只处理“能写成稳定 DAG”的协调工作，简单一次性操作不包装。普通工具的 `depends_on` 只约束顺序，不插值结果；Agent 则追加直接依赖结果为不可信 JSON（缺失/截断或追加 prompt >64KiB 拒绝）；同一记录 root 的单进程 service 共享 8 个 active run，run/resume 均需准入。
 
 Worker 通过公开 `agents.create` + `agentPresets.composeFrom` 创建独立上下文并继承模型路由，强制使用 `NativeToolExecutor`（不是 PTC），宿主沙箱 read-only、approval never，guard 仅允许 `read/glob/grep` 并与父 admission identity 取交集。禁止 `run_code`、命令、写入与递归委派；不靠提示词限制权限。Agent 输入为 `{prompt, access?:"read", max_steps?:1..32, output_format?:"text"|"report"}`（默认 12 步；省略输出格式保留旧 text），不支持 write 或写入范围授权；非空 `write_scopes` 拒绝，空数组仅作兼容归一化。
 

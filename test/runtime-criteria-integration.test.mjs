@@ -8,7 +8,7 @@ import { AgentRegistry } from "@deepseek-ai/dsh-agent";
 import AgentLoop from "@deepseek-ai/dsh-agent-loop";
 import { SessionStore } from "@deepseek-ai/dsh-session";
 import { SessionProjectionRegistry } from "@deepseek-ai/dsh-session-projection";
-import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
+import { mountSystemPrompt } from "./fixtures/system-prompt.mjs";
 import { ToolRuntime } from "@deepseek-ai/dsh-tools";
 import { NativeToolExecutor } from "@deepseek-ai/dsh-tool-executor-native";
 import { RuntimeService } from "../dist/runtime/service.js";
@@ -41,11 +41,11 @@ test("real host criteria report survives disk reload and feeds dependent worker 
     ],
   };
   const requests = [];
-  const host = root.plugin(function services(c) {
+  const host = root.plugin(async function services(c) {
     ctx = c;
     new SessionProjectionRegistry(c);
     new SessionStore(c);
-    new SystemPrompt(c, {});
+    await mountSystemPrompt(c);
     new ToolRuntime(c);
     c.provide("workingDirectory");
     c.set("workingDirectory", { get: () => process.cwd() });

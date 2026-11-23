@@ -5,12 +5,18 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Context } from "@deepseek-ai/cordis";
+import { Context, Service } from "@deepseek-ai/cordis";
+import { SessionProjectionRegistry } from "@deepseek-ai/dsh-session-projection";
 import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
 import { ToolRuntime } from "@deepseek-ai/dsh-tools";
 import { createScope } from "@deepseek-ai/dsh-scope";
 
 const require = createRequire(import.meta.url);
+/** Self-contained copy: the matrix copies only this file, so it cannot import the sibling fixture. */
+async function mountSystemPrompt(ctx) {
+  const prompt = new SystemPrompt(ctx, {});
+  await prompt[Service.init]?.();
+}
 export function hostIdentity() {
   return Object.fromEntries(["cordis", "dsh-tools", "dsh-scope", "dsh-system-prompt", "dsh-agent"].map(name => {
     const bytes = readFileSync(require.resolve("@deepseek-ai/" + name + "/package.json"));
@@ -35,7 +41,8 @@ export async function runHostSmoke(candidateDirectory, version = "unspecified") 
     const { executeHostTool } = await load("dist/runtime/host-compat.js");
     const { derivePreset } = await load("dist/preset.js");
     const mode = await load("dist/mode.js");
-    new SystemPrompt(ctx, {}); new ToolRuntime(ctx, {});
+    new SessionProjectionRegistry(ctx);
+    await mountSystemPrompt(ctx); new ToolRuntime(ctx, {});
     const cwd = dir;
     ctx.provide("workingDirectory");
     ctx.set("workingDirectory", { defaultDirectory: cwd, get: () => cwd, ensure: async () => cwd, set: async () => cwd });
@@ -65,6 +72,11 @@ export async function runHostSmoke(candidateDirectory, version = "unspecified") 
     const ok = result => { assert.equal(result.isError, false, JSON.stringify(result)); return result.value; };
     const denied = (result, code) => { assert.equal(result.isError, true, JSON.stringify(result)); assert.match(JSON.stringify(result), new RegExp(code)); };
     pass("plugin entry/preset/mode", () => { assert.equal(plugin.name, "xiao-he-runtime"); assert.equal(typeof derivePreset, "function"); assert.equal(typeof mode.apply, "function"); });
+    pass("preset derivation preserves !!js through the host include dialect", () => {
+      const definition = derivePreset("- name: probe\n  disabled: !!js true");
+      assert.equal(definition.plugins[0].disabled.__jsExpr, "true");
+      assert.equal(definition.plugins.at(-1).id, "xiao-he-runtime");
+    });
     const direct = ok(await a.call("read", { file_path: "direct-control" }));
     pass("registered ordinary read positive control", () => assert.equal(direct.content, "direct-control"));
     ok(await a.call("write", { file_path: "control", content: "probe" }));

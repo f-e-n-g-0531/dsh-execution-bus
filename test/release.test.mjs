@@ -144,8 +144,8 @@ test("package whitelist rejects missing exports and sensitive additions", () => 
   );
   assert.throws(() => verifyReport({ ...report, bundled: ["secret"] }, pkg));
 });
-test("all host peers and locked DSH components target 0.2.2-rc.3 without mixed release candidates", () => {
-  const target = "0.2.2-rc.3";
+test("all host peers and locked DSH components target 0.2.3-alpha.2 without mixed release candidates", () => {
+  const target = "0.2.3-alpha.2";
   assert.deepEqual(lock.packages[""].peerDependencies, pkg.peerDependencies);
   assert.deepEqual(lock.packages[""].devDependencies, pkg.devDependencies);
   for (const [name, version] of Object.entries({
@@ -169,7 +169,7 @@ test("CI is tag/manual only with four platform combinations and exact candidate 
   assert.deepEqual(Object.keys(ci.on.push), ["tags"]);
   assert.deepEqual(ci.jobs.test.strategy.matrix, {
     os: ["ubuntu-latest", "windows-latest"],
-    node: [22, 24],
+    node: ["24.22.3", "26.13.1"],
   });
   assert.equal(ci.permissions.contents, "read");
   const runs = ci.jobs.test.steps.map((step) => step.run).filter(Boolean);

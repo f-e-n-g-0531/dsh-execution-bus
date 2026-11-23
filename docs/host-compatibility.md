@@ -1,10 +1,10 @@
 # 宿主兼容性
 
-当前源码包版本 **1.8.3** 包含 V0.2 兼容实现，重点适配 **DSH 0.2.2-rc.3**；兼容声明仅限已经验证的 DSH V0.2 版本。其余列入兼容范围的 V0.2 版本仍待矩阵验证，未验证版本与未来版本均不承诺；不保证整个 V0.2 系列兼容。公开 1.7.3 原包仍面向 rc.1，不追认新兼容。legacy/modern API 适配已落地，但当前候选的逐版本结果仍须独立核对；新兼容须以本地候选隔离验证，不修改日常 DSH。以下 v1.4.0 / rc.1 记录仅为历史证据，不替代当前候选验证。
+当前源码包版本 **1.8.4** 包含 V0.2 兼容实现，重点适配 **DSH 0.2.3-alpha.2**；兼容声明仅限已经验证的 DSH V0.2 版本。其余列入兼容范围的 V0.2 版本仍待矩阵验证，未验证版本与未来版本均不承诺；不保证整个 V0.2 系列兼容。公开 1.7.3 原包仍面向 rc.1，不追认新兼容。legacy/modern API 适配已落地，但当前候选的逐版本结果仍须独立核对；新兼容须以本地候选隔离验证，不修改日常 DSH。以下 v1.4.0 / rc.1 记录仅为历史证据，不替代当前候选验证。
 
 v1.4.0 目标宿主：DSH **0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node ≥22；锁定依赖实际解析为 Cordis 4.1.0、include 1.1.0。DSH peer 与测试依赖精确锁定 0.2.2-rc.1，不推导兼容其他版本。旧公开 1.3.3 的宿主目标仍为 0.2.1-rc.5，不追认新宿主支持。
 
-> **当前安全兼容边界：**标准 DSH 0.2.2-rc.3 没有“仅补查父级缺失策略且去重公共层”的公开接口。本插件入口未接入可信 `DelegationPolicyAdapter`，含 `agent` 的 run/resume 在执行前以 `RUNTIME_AGENT_POLICY_UNSUPPORTED` 拒绝；普通工具 DAG 不受影响。下述 Worker 执行能力仅适用于显式注入该适配器的受控宿主集成，测试适配器不是 rc.3 通用实现。不能通过删父策略、回放完整父链或修改已安装宿主绕过此门禁。
+> **当前安全兼容边界：**标准 DSH 0.2.2-rc.3 至 0.2.3-alpha.2 没有“仅补查父级缺失策略且去重公共层”的公开接口。本插件入口未接入可信 `DelegationPolicyAdapter`，含 `agent` 的 run/resume 在执行前以 `RUNTIME_AGENT_POLICY_UNSUPPORTED` 拒绝；普通工具 DAG 不受影响。下述 Worker 执行能力仅适用于显式注入该适配器的受控宿主集成，测试适配器不是 rc.3 通用实现。不能通过删父策略、回放完整父链或修改已安装宿主绕过此门禁。
 
 ## 可信适配核实（2026-11-06）
 
@@ -18,6 +18,14 @@ v1.4.0 目标宿主：DSH **0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node
 - `dsh-tools/package.json:28–31` 公开导出 `./pipeline`；`dsh-tools/src/pipeline.ts:185–234` 的 `prepare` 仍执行 pre-execute、审批及 guard，`dsh-tools/src/index.ts:388–400` 的 `checkGuards` 仍遍历 global 与继承作用域全链。未发现可信的“只补查缺失父局部 hooks/guards、去重已由子链执行的公共/global/preset 层”公开 API；单独调用父 `checkGuards` 会漏 pre-execute，并不能解决公共层重复。
 - 因此 V0.2 范围内的标准 Worker 门禁保持 fail-closed：不注入无条件 allow 适配器，不回放完整父 pipeline，不以预设或 lineage 继承冒充策略继承；普通工具 DAG 的兼容验证与受控 Worker fixture 分开。此处是 API 核实，不是 rc.3 本轮测试通过声明，验证结果由主线程后补。
 
+## 0.2.3-alpha.2 适配核实（2026-11-23）
+
+只读与运行核实当前安装的 DSH **0.2.3-alpha.2**：实际解析 Cordis **4.2.0-alpha.1**、include **1.2.0-alpha.1**、cordis-plugin-loader **1.2.0-alpha.1**，`dsh-agent-preset-registry` 为 0.2.3-alpha.2。
+
+- include 1.2 不再导出 `entryListSchema`，改为 `parseEntryYaml`（YAML 1.2 core + `!!js`）。旧静态命名导入会在模块链接期抛 `SyntaxError`，导致 `preset-xiao-he-runtime` 启用失败。派生改为运行时选择方言：1.2 用 `parseEntryYaml`，1.0/1.1 回退 js-yaml `entryListSchema`，两者都保留 `!!js` 数据而不求值；两种方言都不存在时直接失败，不放开表达式标签。
+- `entryListProblem` 仍由 preset-registry 导出且签名未变；`readDocument`、`register`、`mount` 与 `ToolExecutionPipeline.prepare/dispatch/complete` 仍在公开入口。Worker 门禁仍无“仅补查父级缺失策略且去重公共层”的公开接口，保持 fail-closed。
+- 宿主行为变化只影响夹具：0.2.3 的 SystemPrompt 在初始化钩子中发布 session admission（仅构造实例不够），PTC 默认改为 scoped REPL 且 `run_code` 不再回传完成值。测试夹具显式初始化服务、为 PTC 夹具选择 `per-call`，并用受控输出标记取回程序值；生产运行时未改用例语义。
+
 ## 兼容目标与验证矩阵
 
 兼容目标是尽量支持 DSH V0.2，不是对全系列或未来版本的保证。逐版本结果由主线程在矩阵验证后补充；只有明确列为已验证的版本才能声称支持。当前确认的 rc.3 API 重点及兼容实现边界见上节；legacy/modern 分流实现已落地，不等于矩阵验证通过。普通 DAG 是兼容范围，标准 Worker 在所有版本均保持 fail-closed。
@@ -30,11 +38,12 @@ v1.4.0 目标宿主：DSH **0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node
 | 0.2.1-rc.1..rc.5 | legacy（单调用 execute） | 待验证 | fail-closed | 待矩阵验证 |
 | 0.2.2-alpha.2、0.2.2-alpha.3 | modern（公开 pipeline） | 待验证 | fail-closed | 待矩阵验证 |
 | 0.2.2-rc.1、0.2.2-rc.2 | modern（公开 pipeline） | 待验证 | fail-closed | 待矩阵验证 |
-| 0.2.2-rc.3 | modern（公开 pipeline） | 本地组件及隔离安装通过 | fail-closed 零创建断言通过 | 1.8.0 锁定 SDK 回归；非桌面/模型/OS 沙箱验收，非全版本矩阵 |
+| 0.2.2-rc.3 | modern（公开 pipeline） | 本地组件及隔离安装通过 | fail-closed 零创建断言通过 | 1.8.0 锁定 SDK 回归；1.8.4 再次通过隔离安装 smoke；非桌面/模型/OS 沙箱验收，非全版本矩阵 |
+| 0.2.3-alpha.2 | modern（公开 pipeline） | 本地组件及隔离安装通过 | fail-closed 零创建断言通过 | 1.8.4 锁定 SDK 回归；非桌面/模型/OS 沙箱验收，非全版本矩阵 |
 
 ## 依赖的宿主契约
 
-- 工具注册仍使用 `ctx.tools.register`；rc.3 的 `ctx.tools.execute` 为 batch 接口，不能沿用旧单调用形式。运行时通过公开 `ToolExecutionPipeline.prepare/dispatch/complete` 执行嵌套工具，传递 `parent: exec.token`、`rootCallId`、`agent`、`signal` 与 `toolSet`，沿用宿主权限、工作目录与沙箱，不绕过宿主策略。
+- 工具注册仍使用 `ctx.tools.register`；0.2.2 起的 `ctx.tools.execute` 为 batch 接口，不能沿用旧单调用形式。运行时通过公开 `ToolExecutionPipeline.prepare/dispatch/complete` 执行嵌套工具，传递 `parent: exec.token`、`rootCallId`、`agent`、`signal` 与 `toolSet`，沿用宿主权限、工作目录与沙箱，不绕过宿主策略。
 - 预设派生：通过 `agentPresets.readDocument("ptc")` 读取公开声明，再用 `register` 注册派生预设；不修改默认预设或全局工具。
 - 模式提示：`ctx.systemPrompt.section` 追加运行时说明。
 - 同步 run/resume 传播外层 signal；仅不含 Agent 且调用未携带 `exec.toolSet` 的受控宿主计划可用 `async:true`，成功接收后脱离外层信号，但仍在宿主进程内。取消不保证不合作工具退出。

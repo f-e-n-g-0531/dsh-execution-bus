@@ -44,10 +44,10 @@ try {
   );
   // A real host install supplies one coherent SDK set. Resolving these wide
   // peer ranges freely lets npm mix alpha/rc packages from different releases.
-  const hostTarget = "0.2.2-rc.3";
+  const hostTarget = "0.2.3-alpha.2";
   const hostPins = {
-    "@deepseek-ai/cordis": "4.1.0",
-    "@deepseek-ai/cordis-plugin-include": "1.1.0",
+    "@deepseek-ai/cordis": "4.2.0-alpha.1",
+    "@deepseek-ai/cordis-plugin-include": "1.2.0-alpha.1",
   };
   const specs = Object.keys(expected.peerDependencies).map((name) =>
     name + "@" + (hostPins[name] ?? hostTarget),

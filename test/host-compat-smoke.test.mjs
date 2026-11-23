@@ -13,7 +13,7 @@ test("real installed-host smoke registers plugin, guards, identities and both ow
   const result = await runHostSmoke(process.cwd(), "local-installed-peers");
   assert.equal(result.status, "passed", JSON.stringify(result, null, 2));
   assert.equal(process.env.XIAOHE_RUNTIME_DIR, previous);
-  assert.equal(result.checks.length, 24);
+  assert.equal(result.checks.length, 25);
   assert.ok(result.checks.includes("standard runtime_resume agent gate preserves interrupted checkpoint"));
   assert.deepEqual(result.evidence.workerResumeGate, { error: "RUNTIME_AGENT_POLICY_UNSUPPORTED", creations: 0, checkpointUnchanged: true, nestedCalls: 0 });
   assert.deepEqual(result.evidence.workerGate, { error: "RUNTIME_AGENT_POLICY_UNSUPPORTED", creations: 0, agentToolCallsAfterControl: 0, newRuns: 0 });
@@ -92,7 +92,7 @@ test("matrix fingerprints bind file bytes, paths, source, dist and harness indep
       // Uses the existing matrix writer in a disposable fixture, with no npm or child execution.
       const report = await main(["--no-execute"], root);
       assert.equal(report.candidateUnchanged, true);
-      assert.equal(report.results.length, 5);
+      assert.equal(report.results.length, 6);
       assert.equal(process.exitCode, 1);
       assert.deepEqual(JSON.parse(await readFile(path.join(root, "artifacts/host-compatibility-results.json"), "utf8")), report);
       for (const row of report.results) {

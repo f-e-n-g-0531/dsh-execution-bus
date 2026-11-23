@@ -4,9 +4,9 @@
 
 模型说明“做哪些步骤、先后有什么依赖”，萧何负责执行与保存结果；主助手（Lead）负责判断结果、继续修改和验收。适合把已经明确的重复操作交给运行时，而不是让模型每次重新编写调度代码。
 
-DSH 插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.8.3** · [版本变化](<docs/releases/1.8.3.md>)
+DSH 插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.8.4** · [版本变化](<docs/releases/1.8.4.md>)
 
-> **使用前先确认：**本版重点适配 **DSH 0.2.2-rc.3**，并对已审计的 V0.2 legacy/alpha/RC 公开 API 做尽力兼容；未验证版本及未来版本不作兼容承诺，不保证 V0.2 全系列兼容。标准插件支持普通工具 DAG（按依赖连接的步骤图）；宿主原生委派可照常使用，但不等于运行时 Worker；**独立只读 Worker 不可直接使用**，含 agent 的计划会因缺少可信父策略适配器而拒绝。按 [MIT License](<LICENSE>) 使用，允许商业用途。
+> **使用前先确认：**本版重点适配 **DSH 0.2.3-alpha.2**，并对已审计的 V0.2 legacy/alpha/RC 公开 API 做尽力兼容；未验证版本及未来版本不作兼容承诺，不保证 V0.2 全系列兼容。标准插件支持普通工具 DAG（按依赖连接的步骤图）；宿主原生委派可照常使用，但不等于运行时 Worker；**独立只读 Worker 不可直接使用**，含 agent 的计划会因缺少可信父策略适配器而拒绝。按 [MIT License](<LICENSE>) 使用，允许商业用途。
 
 ## 为什么使用萧何？
 
@@ -32,7 +32,7 @@ DSH 插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.8.3** · [版本�
 
 ### 1. 确认环境
 
-- 本版重点适配 DSH **0.2.2-rc.3**、Node.js **22 或更高版本**；兼容范围仅包含已验证的 DSH V0.2 版本，不推导对未验证版本或未来版本的兼容。
+- 本版重点适配 DSH **0.2.3-alpha.2**；该宿主要求 Node.js **24.22.3+（24.x）或 26.13.1+**，以宿主安装要求为准。兼容范围仅包含已验证的 DSH V0.2 版本，不推导对未验证版本或未来版本的兼容。
 - 宿主已有声明式 ptc 预设。萧何从它派生独立预设，不覆盖原 PTC 或全局工具。
 - 宿主依赖目标与已知告警见[宿主兼容性](<docs/host-compatibility.md>)。
 
@@ -41,7 +41,7 @@ DSH 插件：`@feng0531/dsh-execution-bus` · 当前版本 **1.8.3** · [版本�
 安装本版：
 
 ```text
-npm install --ignore-scripts @feng0531/dsh-execution-bus@1.8.3
+npm install --ignore-scripts @feng0531/dsh-execution-bus@1.8.4
 ```
 
 将包加入该配置的 `dsh.profile.bundles`，或通过宿主插件管理器加载 bundle。加载后选择 **萧何 / Xiao He**，预设 ID 为 `xiao-he-runtime`。安装 npm 包本身不等于已加载 bundle；发布新版本也不会自动升级或重启你的 DSH。

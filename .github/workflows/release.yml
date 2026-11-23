@@ -38,7 +38,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24.22.3
           cache: npm
           registry-url: https://registry.npmjs.org/
       - run: node scripts/release-preflight.mjs

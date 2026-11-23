@@ -1,11 +1,26 @@
 import { Service } from "@deepseek-ai/cordis";
 import { entryListProblem } from "@deepseek-ai/dsh-agent-preset-registry";
-import { entryListSchema } from "@deepseek-ai/cordis-plugin-include";
-import { load } from "js-yaml";
+import * as Include from "@deepseek-ai/cordis-plugin-include";
+import { createRequire } from "node:module";
 import { setTimeout as pause } from "node:timers/promises";
 import { PRODUCT } from "./product.js";
 import { ERRORS } from "./error-codes.js";
 export const PRESET_ID = PRODUCT.presetId;
+const include = Include;
+/** js-yaml is only needed by the pre-1.2 fallback; load it lazily so 1.2 hosts do not require it. */
+const loadJsYaml = () => createRequire(import.meta.url)("js-yaml");
+/** Parse a composition in the host include package's YAML dialect, keeping `!!js` nodes as data.
+ *  include 1.2 replaced `entryListSchema` with `parseEntryYaml`; an unknown dialect fails closed
+ *  rather than parsing without the expression tag. */
+export function parseEntryList(content) {
+    if (typeof include.parseEntryYaml === "function")
+        return include.parseEntryYaml(content);
+    if (include.entryListSchema !== undefined)
+        return loadJsYaml().load(content, {
+            schema: include.entryListSchema,
+        });
+    throw Error("Unsupported @deepseek-ai/cordis-plugin-include dialect: neither parseEntryYaml nor entryListSchema is available");
+}
 /** 校验派生源组合：拒绝已含运行时，以及缺少公开基准地址的相对模块/include 子文件。 */
 function validateDerivation(rows) {
     for (const row of rows) {
@@ -43,7 +58,7 @@ function validateGroupGraph(plugins) {
 export function derivePreset(content) {
     if (Buffer.byteLength(content) > 1048576)
         throw Error(ERRORS.PTC_PRESET_TOO_LARGE);
-    const plugins = load(content, { schema: entryListSchema });
+    const plugins = parseEntryList(content);
     validateGroupGraph(plugins);
     const problem = entryListProblem(plugins);
     if (problem)
@@ -54,7 +69,7 @@ export function derivePreset(content) {
         id: PRESET_ID,
         name: PRODUCT.name,
         order: 20,
-        description: "PTC 声明式工具 DAG（runtime_*）：标准 rc.3 支持普通工具计划，独立分析可用原生委派；运行时 Worker 仅适用于显式接入可信父策略适配器的受控宿主。Lead 负责修改与验收，授权和沙箱由宿主管理，不保证 exactly-once。",
+        description: "PTC 声明式工具 DAG（runtime_*）：标准宿主支持普通工具计划，独立分析可用原生委派；运行时 Worker 仅适用于显式接入可信父策略适配器的受控宿主。Lead 负责修改与验收，授权和沙箱由宿主管理，不保证 exactly-once。",
         plugins: [
             ...rows,
             {

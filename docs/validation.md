@@ -1,6 +1,16 @@
 # 验证范围与使用限制
 
-本文说明证据边界，不是生产环境认证。本文固定的历史参考基线为 **v1.3.2**（提交 `8d1a5bf`），已于 2026-11-04 发布至 [npm](https://registry.npmjs.org/@feng0531/dsh-execution-bus/1.3.2) 和 [GitHub Release](https://github.com/f-e-n-g-0531/dsh-execution-bus/releases/tag/v1.3.2)，交付范围见[发布说明](<releases/1.3.2.md>)；v1.3.0 是历史研发起点，v1.3.2 生产运行时与 v1.3.1 一致；版本发布不代表下述真实环境验收已经完成。v1.4.0 依赖目标为 **DSH 0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node ≥22；当前源码包版本为 1.8.3，包含 DSH V0.2 兼容实现，重点适配 rc.3；legacy/modern API 分流已落地，但逐版本 smoke 和候选绑定仍须按本次产物复核。只对已验证的 V0.2 版本声称支持，其余版本及未来版本兼容性未知，不保证全系列兼容；公开 1.7.3 原包仍面向 rc.1，不追认新兼容。多 Agent 编排自 1.4.0 提供，公开 1.3.3 的原包兼容范围不因本次适配而改变，兼容范围见[宿主兼容性](<host-compatibility.md>)。历史 v1.2.0 的 Windows、Node.js 24.21.0、DSH rc.2 组件验证记录只属于当时版本，不能代替当前候选复核。后续研发与真实验收门禁见[研发计划](<DEVELOPMENT-PLAN.md>)。
+本文说明证据边界，不是生产环境认证。本文固定的历史参考基线为 **v1.3.2**（提交 `8d1a5bf`），已于 2026-11-04 发布至 [npm](https://registry.npmjs.org/@feng0531/dsh-execution-bus/1.3.2) 和 [GitHub Release](https://github.com/f-e-n-g-0531/dsh-execution-bus/releases/tag/v1.3.2)，交付范围见[发布说明](<releases/1.3.2.md>)；v1.3.0 是历史研发起点，v1.3.2 生产运行时与 v1.3.1 一致；版本发布不代表下述真实环境验收已经完成。v1.4.0 依赖目标为 **DSH 0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node ≥22；当前源码包版本为 1.8.4，包含 DSH V0.2 兼容实现，重点适配 0.2.3-alpha.2；legacy/modern API 分流已落地，但逐版本 smoke 和候选绑定仍须按本次产物复核。只对已验证的 V0.2 版本声称支持，其余版本及未来版本兼容性未知，不保证全系列兼容；公开 1.7.3 原包仍面向 rc.1，不追认新兼容。多 Agent 编排自 1.4.0 提供，公开 1.3.3 的原包兼容范围不因本次适配而改变，兼容范围见[宿主兼容性](<host-compatibility.md>)。历史 v1.2.0 的 Windows、Node.js 24.21.0、DSH rc.2 组件验证记录只属于当时版本，不能代替当前候选复核。后续研发与真实验收门禁见[研发计划](<DEVELOPMENT-PLAN.md>)。
+
+### 1.8.4 DSH 0.2.3-alpha.2 适配验证（2026-11-23）
+
+Windows / Node **v26.13.1**，开发依赖实际解析 DSH **0.2.3-alpha.2**、Cordis **4.2.0-alpha.1**、include **1.2.0-alpha.1**。重新构建后 `npm run check` 为 **700/700 通过、0 失败、0 跳过**；`npm run verify:package` 核验 **155 个打包文件**；`npm run test:install` 在隔离临时目录按 `0.2.3-alpha.2` 同组 SDK 安装候选包，生产入口、注册与离线工具导入通过（stub host）；`npm run test:hosts -- --all` 对 **0.2.2-rc.3** 与 **0.2.3-alpha.2** 完成真实安装与宿主 smoke，安装与执行均 passed；两个宿主分别覆盖 include 1.1 的 `entryListSchema` 回退与 include 1.2 的 `parseEntryYaml` 路径（本机矩阵记录保存于被忽略的 `artifacts/`，不作为随包证据）。
+
+include 1.2 移除 `entryListSchema` 后，预设派生改用 `parseEntryYaml`，旧版本回退 js-yaml `entryListSchema`；两者都不存在时在派生阶段失败。`entryListSchema` 回退使用惰性 `require`，1.2 宿主启动不依赖 js-yaml，但生产包的 `dependencies` 仍声明它。测试夹具补齐 SystemPrompt 初始化钩子；PTC 夹具显式选择 `per-call`，并在 `run_code` 不再回传完成值后通过受控输出标记取回断言数据。
+
+并行全测在本机重负载下曾在 `derived preset runs a real host filesystem DAG` 的 `edit` 步骤出现失败；临时诊断显示宿主返回 `FsError` / `FS_IO_ERROR`：`cannot write ... ReplaceFileW EIO (Win32 32)`，属于 Windows 文件替换时的共享冲突。未观察到运行时归一化掩盖其他宿主错误；随后默认并行 `npm run check` 与 `--test-concurrency=1` 串行复跑均 700/700 通过。该现象与先前记录的临时目录 rename EPERM 同属 Windows 文件系统外部竞争，未修改写入或重试语义，不能据此宣布已根除。
+
+该结果只覆盖组件、真实宿主安装 smoke 与隔离矩阵的这两个版本，不是真实模型、桌面 UI 或实际 OS 沙箱验收；未安装、升级或重启日常 DSH，未发布。逐版本矩阵中其余版本的结论仍以其自身执行记录为准。
 
 2026-11-16 首批会话驱动改进完成源码和组件验证：Windows / Node v26.13.1，最终 `npm run check` 为 **669/669 通过、0 失败、0 跳过**。本机实际解析的 dsh-tools/agent/scope 为 **0.2.2-rc.1**、Cordis 4.1.0，不能因依赖声明为 rc.3 而登记成 rc.3 实测；修实的宿主 smoke 覆盖 23 项断言，普通工具体及 Agent factory 为受控探针，不是 OS 沙箱或真实模型验收。`npm run verify:package` 核验 150 个打包文件；未运行安装矩阵、未安装或重启日常 DSH、未发布，真实十二项仍 pending。
 
@@ -44,7 +54,7 @@
 
 ## 多 Agent 工作区扩展的证据状态
 
-> **当前安全兼容边界：**标准 DSH 0.2.2-rc.3 没有“仅补查父级缺失策略且去重公共层”的公开接口。本插件入口未接入可信 `DelegationPolicyAdapter`，含 `agent` 的 run/resume 在执行前以 `RUNTIME_AGENT_POLICY_UNSUPPORTED` 拒绝；普通工具 DAG 不受影响。下述 Worker 执行能力仅适用于显式注入该适配器的受控宿主集成，测试适配器不是 rc.3 通用实现。不能通过删父策略、回放完整父链或修改已安装宿主绕过此门禁。
+> **当前安全兼容边界：**标准 DSH 0.2.2-rc.3 至 0.2.3-alpha.2 没有“仅补查父级缺失策略且去重公共层”的公开接口。本插件入口未接入可信 `DelegationPolicyAdapter`，含 `agent` 的 run/resume 在执行前以 `RUNTIME_AGENT_POLICY_UNSUPPORTED` 拒绝；普通工具 DAG 不受影响。下述 Worker 执行能力仅适用于显式注入该适配器的受控宿主集成，测试适配器不是 rc.3 通用实现。不能通过删父策略、回放完整父链或修改已安装宿主绕过此门禁。
 
 多 Agent 改造随 1.4.0 发布；验证结论只属于 1.4.0 原始候选，不沿用公开包或旧候选的验证结论。沿用 PTC 派生的 `xiao-he-runtime`；Lead 仍用 PTC，独立 Worker 强制 NativeToolExecutor，不是 PTC Worker。
 
@@ -79,11 +89,11 @@
 | 执行器 | 批次 DAG、依赖顺序、只读失败重试、超时不重试、每步 checkpoint、取消与晚到结果、未知副作用恢复停止新步骤 | 组件级状态机与注入故障，不代表底层工具必定响应取消 |
 | 持久化 | 原子写及失败清理、4MiB 记录上限、完整校验及坏记录诊断、owner 过滤分页、终态保留、启动 `running→interrupted` | 文件状态与故障回归，不是分布式锁 |
 | 运行服务 | 同 root 共享 active、跨 owner 隔离、run/resume 的 8 active 准入、同步信号/async detach、关闭与保留 | 单进程内服务组合；工具调用可用桩替代 |
-| 真实宿主组件 | Cordis ToolRuntime + 公开 `ToolExecutionPipeline.prepare/dispatch/complete` 链路、嵌套 write deny | rc.3 迁移结果待复核；Agent 与 read/write/pwsh 实现可为夹具，deny 不是实际 sandbox |
+| 真实宿主组件 | Cordis ToolRuntime + 公开 `ToolExecutionPipeline.prepare/dispatch/complete` 链路、嵌套 write deny | 0.2.3 迁移结果见本次 1.8.4 记录；Agent 与 read/write/pwsh 实现可为夹具，deny 不是实际 sandbox |
 | 真实进程故障 | fork 子进程执行、实际 kill、启动新进程 resume；成功写不重放、在途未知写阻止后续步骤 | 真实进程生命周期，子进程内工具仍为测试实现，不等于完整宿主桌面重启 |
 | 真实 pwsh 工具 | 宿主 pwsh 工具 + 实际 pwsh 进程：零/非零退出、自动转后台保留 jobId 并收集停止 | shell bridge 不是实际 sandbox；无 pwsh 环境会跳过，须看本次输出 |
 | 预设与模式 | 派生预设注册、默认预设不变、普通 Agent 不可见运行时、启动失败与声明边界、宿主策略拒绝仍有效 | 隔离与权限边界成立；不是实际桌面预设切换验收 |
-| PTC 整链 | 独立 native/PTC 执行器组件、Node PTC 子进程、生成 SDK、run_code → runtime_run → 嵌套宿主工具 | rc.3 迁移结果待复核；组件与进程不是实际模型、桌面或 sandbox provider 验收 |
+| PTC 整链 | 独立 native/PTC 执行器组件、Node PTC 子进程、生成 SDK、run_code → runtime_run → 嵌套宿主工具 | 0.2.3 迁移结果见本次 1.8.4 记录；组件与进程不是实际模型、桌面或 sandbox provider 验收 |
 | 运行展示与离线工具 | 进度与unknown提示、不初始化存储的静态能力说明及未知容量、候选验收账本、会话预设分段/项目筛选/完整度、pilot观测白名单及容量基准 | 只证明投影/校验与组件行为；人工断言、实际UI和模型收益需单独验收 |
 | 发布门禁 | 全量测试、包白名单、四矩阵 CI、npm 后逐字节校验 | 各自执行后才提供对应证据；本地测试不代替发布验收 |
 
@@ -98,7 +108,7 @@
 | exactly-once 副作用 | 不支持；崩溃时在途副作用可能已发生，只能标记 unknown/failed |
 | 跨进程/分布式执行 | 不支持；运行时随宿主进程退出 |
 | 大结果/长计划 | 单步结果 >64KiB 截断；计划 ≤64KiB、32 步 |
-| 宿主版本漂移 | 工作树目标为 DSH V0.2 的公开契约，重点 rc.3 pipeline/preset；不推导兼容其他 rc 或未来版本，升级需复核 |
+| 宿主版本漂移 | 工作树目标为 DSH V0.2 的公开契约，重点 0.2.3 pipeline/preset；不推导兼容其他 rc 或未来版本，升级需复核 |
 
 真实模型、桌面 UI、实际 OS 沙箱、整宿主生命周期与收益 pilot 尚未真实验收，状态保持 `pending`。生产依赖临时安装 smoke 只验证入口、注册和离线工具导入（stub host），不等于桌面安装或模型执行。宿主上游依赖安全告警是独立风险，不能用功能测试通过抵销，见[宿主兼容性](<host-compatibility.md#依赖安全告警>)。
 

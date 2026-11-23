@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
-const DEFAULT = ["0.2.0-rc.1", "0.2.1-rc.5", "0.2.2-alpha.2", "0.2.2-rc.1", "0.2.2-rc.3"];
+const DEFAULT = ["0.2.0-rc.1", "0.2.1-rc.5", "0.2.2-alpha.2", "0.2.2-rc.1", "0.2.2-rc.3", "0.2.3-alpha.2"];
 const HOST_NAMES = ["dsh-agent-preset-registry", "dsh-agent", "dsh-llm", "dsh-session", "dsh-sandbox-policy", "dsh-user-approval", "dsh-working-directory", "dsh-scope", "dsh-system-prompt", "dsh-tools"];
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
 const json = bytes => JSON.parse(String(bytes).replace(/^\uFEFF/, ""));

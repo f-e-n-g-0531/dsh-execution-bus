@@ -19,7 +19,7 @@ import { ToolRuntime } from "@deepseek-ai/dsh-tools";
 import * as NativeExecutor from "@deepseek-ai/dsh-tool-executor-native";
 import * as PtcExecutor from "@deepseek-ai/dsh-tool-executor-ptc";
 import { executeModelToolFixture } from "./fixtures/host-tools.mjs";
-import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
+import { mountSystemPrompt } from "./fixtures/system-prompt.mjs";
 import Jobs from "@deepseek-ai/dsh-jobs-local";
 import LocalFS from "@deepseek-ai/dsh-fs-local";
 import LocalSubprocess from "@deepseek-ai/dsh-subprocess-local";
@@ -42,11 +42,11 @@ async function fixture(mode = "ptc", scopedPresentation = false) {
     executions = [],
     agents = new Map(),
     scopes = [];
-  const host = root.plugin(function hostServices(context) {
+  const host = root.plugin(async function hostServices(context) {
     ctx = context;
-    new SystemPrompt(ctx, {});
-    new ToolRuntime(ctx);
     new SessionProjectionRegistry(ctx);
+    await mountSystemPrompt(ctx);
+    new ToolRuntime(ctx);
     ctx.provide("workingDirectory");
     ctx.set("workingDirectory", {
       defaultDirectory: dir,
@@ -77,7 +77,7 @@ async function fixture(mode = "ptc", scopedPresentation = false) {
     new LocalSubprocess(ctx);
     new NodePtcRuntime(
       ctx,
-      NodePtcRuntime.Config({ timeoutMs: 10000, maxTimeoutMs: 15000 }),
+      NodePtcRuntime.Config({ executionMode: "per-call", timeoutMs: 10000, maxTimeoutMs: 15000 }),
     );
     // A deployment default remains native when a preset owns its PTC selection.
     if (scopedPresentation || mode === "native") NativeExecutor.apply(ctx);
@@ -172,18 +172,29 @@ async function fixture(mode = "ptc", scopedPresentation = false) {
         signal,
         callId: randomUUID(),
       });
+    // The host transport no longer returns a program completion value; serialize
+    // the value into captured output so assertions still observe structured JSON.
+    const programMarker = "__XIAOHE_PROGRAM_RESULT__:";
     const program = async (code, caller = owner, options = {}) => {
       const result = await call(
         "run_code",
         {
           description: "Test declarative runtime host integration",
-          code,
+          code: [
+            "const __value = await (async () => {",
+            code,
+            "})();",
+            "console.log(" + JSON.stringify(programMarker) +
+              " + JSON.stringify(__value === undefined ? null : __value));",
+          ].join("\n"),
           ...options,
         },
         caller,
       );
       assert.equal(result.isError, false, JSON.stringify(result));
-      return result.value.result;
+      const line = [...result.value.logs].reverse().find((text) => text.includes(programMarker));
+      assert.ok(line, "PTC program produced no completion marker: " + JSON.stringify(result.value));
+      return JSON.parse(line.slice(line.indexOf(programMarker) + programMarker.length));
     };
     const runtime = async (name, input, caller = owner) => {
       if (mode === "ptc")
