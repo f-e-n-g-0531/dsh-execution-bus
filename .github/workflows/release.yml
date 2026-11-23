@@ -49,7 +49,13 @@ jobs:
       - run: npm run pack:candidate
         id: pack
       - name: Require exact-tag CI and identical four candidates
-        run: node scripts/require-tag-ci.mjs
+        shell: bash
+        run: |
+          # The gate runner follows main so a CI matrix change cannot strand a tag;
+          # the candidate and every compared artifact still come from this tag.
+          git fetch --depth=1 origin main
+          git show FETCH_HEAD:scripts/require-tag-ci.mjs > "$RUNNER_TEMP/require-tag-ci.mjs"
+          node "$RUNNER_TEMP/require-tag-ci.mjs"
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

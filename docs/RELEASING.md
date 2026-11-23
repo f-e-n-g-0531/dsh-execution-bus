@@ -42,7 +42,7 @@ npm run test:install -- artifacts/candidate/feng0531-dsh-execution-bus-X.Y.Z.tgz
 
 1. 检出指定标签，校验标签/版本/许可证/发布说明。
 2. 重新安装、检查和打包。
-3. 要求同一提交、同一标签的最新 push CI 成功，下载四份候选，与本次候选逐字节比较。
+3. 要求同一提交、同一标签的最新 push CI 成功，下载四份候选，与本次候选逐字节比较。门禁脚本从 main 读取，候选与四份矩阵制品仍取自该标签；CI 矩阵变更不会把已推送标签卡死在旧制品名上。
 4. 对同一 tgz 做隔离安装，保留发布候选制品。
 5. 查询 npm 已有版本：存在且 integrity 相同则跳过上传；不一致停止。确实未找到时才上传固定 tgz，禁用生命周期脚本。
 6. 有界核对公开 npm 元数据 integrity 和实际下载字节；成功后才创建非草稿、非预发布 GitHub Release，上传同一个 tgz 与 SHA256SUMS.txt。
