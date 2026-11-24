@@ -105,7 +105,11 @@ export function runAttention(run, settled, derived) {
         recovery.nextAction === "review_results" &&
         complete &&
         items.every((item) => item.kind === "decision_required" && item.disposition) &&
-        (derived?.review ?? ownerReview(run)).status !== "accepted")
+        // Without a declaration, no snapshot can be accepted. Keep the full
+        // projection for callers that expose or use its hash for compare-and-set.
+        (derived?.review?.status ??
+            (run.ownerReviews?.length ? ownerReview(run).status : "not_recorded")) !==
+            "accepted")
         add("review_results", undefined, digest(results));
     // Preserve the pre-acknowledgement key's JSON fields and insertion order.
     const alerts = notificationAlerts(items).map(({ acknowledged: _ack, disposition: _disposition, ...content }) => content);

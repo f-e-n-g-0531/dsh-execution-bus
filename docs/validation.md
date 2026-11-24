@@ -1,6 +1,6 @@
 # 验证范围与使用限制
 
-本文说明证据边界，不是生产环境认证。本文固定的历史参考基线为 **v1.3.2**（提交 `8d1a5bf`），已于 2026-11-04 发布至 [npm](https://registry.npmjs.org/@feng0531/dsh-execution-bus/1.3.2) 和 [GitHub Release](https://github.com/f-e-n-g-0531/dsh-execution-bus/releases/tag/v1.3.2)，交付范围见[发布说明](<releases/1.3.2.md>)；v1.3.0 是历史研发起点，v1.3.2 生产运行时与 v1.3.1 一致；版本发布不代表下述真实环境验收已经完成。v1.4.0 依赖目标为 **DSH 0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node ≥22；当前源码包版本为 1.8.4，包含 DSH V0.2 兼容实现，重点适配 0.2.3-alpha.2；legacy/modern API 分流已落地，但逐版本 smoke 和候选绑定仍须按本次产物复核。只对已验证的 V0.2 版本声称支持，其余版本及未来版本兼容性未知，不保证全系列兼容；公开 1.7.3 原包仍面向 rc.1，不追认新兼容。多 Agent 编排自 1.4.0 提供，公开 1.3.3 的原包兼容范围不因本次适配而改变，兼容范围见[宿主兼容性](<host-compatibility.md>)。历史 v1.2.0 的 Windows、Node.js 24.21.0、DSH rc.2 组件验证记录只属于当时版本，不能代替当前候选复核。后续研发与真实验收门禁见[研发计划](<DEVELOPMENT-PLAN.md>)。
+本文说明证据边界，不是生产环境认证。本文固定的历史参考基线为 **v1.3.2**（提交 `8d1a5bf`），已于 2026-11-04 发布至 [npm](https://registry.npmjs.org/@feng0531/dsh-execution-bus/1.3.2) 和 [GitHub Release](https://github.com/f-e-n-g-0531/dsh-execution-bus/releases/tag/v1.3.2)，交付范围见[发布说明](<releases/1.3.2.md>)；v1.3.0 是历史研发起点，v1.3.2 生产运行时与 v1.3.1 一致；版本发布不代表下述真实环境验收已经完成。v1.4.0 依赖目标为 **DSH 0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node ≥22；当前源码包版本为 1.8.5，包含 DSH V0.2 兼容实现，重点适配 0.2.3-alpha.2；legacy/modern API 分流已落地，但逐版本 smoke 和候选绑定仍须按本次产物复核。只对已验证的 V0.2 版本声称支持，其余版本及未来版本兼容性未知，不保证全系列兼容；公开 1.7.3 原包仍面向 rc.1，不追认新兼容。多 Agent 编排自 1.4.0 提供，公开 1.3.3 的原包兼容范围不因本次适配而改变，兼容范围见[宿主兼容性](<host-compatibility.md>)。历史 v1.2.0 的 Windows、Node.js 24.21.0、DSH rc.2 组件验证记录只属于当时版本，不能代替当前候选复核。后续研发与真实验收门禁见[研发计划](<DEVELOPMENT-PLAN.md>)。
 
 ### 1.8.4 DSH 0.2.3-alpha.2 适配验证（2026-11-23）
 
@@ -58,7 +58,7 @@ include 1.2 移除 `entryListSchema` 后，预设派生改用 `parseEntryYaml`�
 
 多 Agent 改造随 1.4.0 发布；验证结论只属于 1.4.0 原始候选，不沿用公开包或旧候选的验证结论。沿用 PTC 派生的 `xiao-he-runtime`；Lead 仍用 PTC，独立 Worker 强制 NativeToolExecutor，不是 PTC Worker。
 
-2026-11-05 整改前一轮先执行 `npm run check`：构建及 308/308 测试通过。独立复核随后发现并修复 trace 占用旧文本结果配额的问题，增加临界回归，当时共 309 项（相对此前 289 项基线新增 20 项）。修复后两次默认并行全测均为 308 通过、1 失败、0 跳过：分别在 continuous completion / offline cancellation 存储保留用例出现 `RUNTIME_STORAGE_FAILED`；单独复跑 `test/runtime-service.test.mjs` 为 15/15 通过。随后执行 `node --test --test-concurrency=1 test/*.test.mjs` 串行全测为 **309/309 通过，0 失败、0 跳过**，并再次通过 95 个包文件核验。当前不能判定并行失败根因，也不声称默认并行全测稳定通过；串行通过不抵销该限制。`npm run verify:package` 检查 95 个包文件通过，`tsc --noEmit`、28 个编译产物内存对比及 `git diff --check` 通过。
+2026-11-05 整改前一轮先执行 `npm run check`：构建及 308/308 测试通过。独立复核随后发现并修复 trace 占用旧文本结果配额的问题，增加临界回归，当时共 309 项（相对此前 289 项基线新增 20 项）。修复后两次默认并行全测均为 308 通过、1 失败、0 跳过：分别在 continuous completion / offline cancellation 存储保留用例出现 `RUNTIME_STORAGE_FAILED`；单独复跑 `test/runtime-service.test.mjs` 为 15/15 通过。随后执行 `node --test --test-concurrency=1 test/*.test.mjs` 串行全测为 **309/309 通过，0 失败、0 跳过**。当前不能判定并行失败根因，也不声称默认并行全测稳定通过；串行通过不抵销该限制。`npm run verify:package` 检查 95 个包文件通过，`tsc --noEmit`、28 个编译产物内存对比及 `git diff --check` 通过。
 
 新增回归覆盖严格协议边界、插件与 mode 入口、兼容文本与依赖上下文预算、错误清理及持久化校验；模型响应与部分工具仍为离线夹具，不代表真实模型调用、完整 PTC→runtime_run→Worker 桌面链路或 OS 沙箱攻击验证。本轮环境为 Windows、Node v26.13.0，不推导其他平台或最低 Node 版本已通过。此记录仅属于本轮工作区，不可沿用为公开 npm 包验收。
 

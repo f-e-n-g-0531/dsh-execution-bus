@@ -24,7 +24,7 @@
 
 运行时负责：DAG 校验、独立步骤并行、`read/glob/grep` 失败重试、每步超时、结果落盘、取消与重启后恢复。普通工具的 `depends_on` 只约束执行顺序，示例命令输入仍是固定的；只有 `agent` 步骤接收追加至 prompt 的直接依赖结果（不可信 JSON）。
 
-Lead 仍用 PTC 拆分任务，通过 `runtime_run` 的 `tool:agent` 启动独立上下文只读 Worker，再核实输出并负责修改、验收。Worker 由公开 `agents.create` + `agentPresets.composeFrom` 创建并继承模型路由，强制 `NativeToolExecutor`（不是 PTC）；同时设置宿主 read-only 沙箱、approval never，guard 仅准入 `read/glob/grep` 且与父 admission identity 取交集。Worker 不可使用 `run_code`、命令、写入或递归委派；提示词不是权限边界。
+Lead 仍用 PTC 拆分任务，通过 `runtime_run` 的 `tool:agent` 启动独立上下文只读 Worker，再核实输出并负责修改、验收。Worker 由公开 `agents.create` + `agentPresets.composeFrom` 创建并继承模型路由，强制 `NativeToolExecutor`（不是 PTC）；同时设置宿主 read-only 沙箱、approval never，文件工具仅允许 `read/glob/grep`；受控宿主可选[依赖结果读取](<protocol.md#依赖结果渐进读取>)，均须通过父调用准入。Worker 不可使用 `run_code`、命令、写入或递归委派；提示词不是权限边界。
 
 Agent 输入为 `{prompt, access?:"read", max_steps?:1..32, output_format?:"text"|"report"}`，默认 12 步；`output_format` 省略保留旧文本行为，`report` 要求严格 JSON 报告（`outcome/summary/evidence/limitations` 与可选 `requestedDecision`），总计不超过 16KiB。不提供 write 或写入范围授权，非空 `write_scopes` 拒绝，空数组仅作兼容归一化。直接依赖结果缺失/截断或追加后 prompt >64KiB 拒绝执行，不向其他工具插值。含 Agent 的计划不支持 `async:true` 或 service `background=true`，以 `RUNTIME_AGENT_ASYNC_UNSUPPORTED` 在创建 run/Worker 前拒绝；父 `exec.toolSet` 随外层工具批次返回而 dispose，不能安全 detach Worker。普通工具计划若携带 `exec.toolSet`，异步或 service 后台提交也在创建 run 前以 `RUNTIME_ASYNC_ADMISSION_UNSUPPORTED` 拒绝；宿主批次结束会销毁该准入集合，没有公开续租接口。不得删除准入集合或重新解析以绕过限制；请使用同步调用。Agent 不 retry、不自动重放；子会话 ID 写入 checkpoint 并在摘要可见。`whenIdle` 后检查结束事件与最终文本，执行 `succeeded` 不代表内容验收通过。完整示例与错误码见[协议](<protocol.md#agent-步骤受控宿主集成>)。
 

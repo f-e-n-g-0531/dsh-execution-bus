@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { apply } from "../dist/plugin.js";
 import { parsePlan } from "../dist/runtime/plan.js";
@@ -11,6 +11,55 @@ test("protocol tool index exactly matches the runtime registration", () => {
   const text = readFileSync("docs/protocol.md", "utf8").split("## 工具\n")[1].split("\n\n").filter(Boolean)[0];
   const entries = [...text.matchAll(/^\| `([a-z_]+)` \|/gm)].map(match => match[1]);
   assert.deepEqual(entries.sort(), names.sort());
+});
+
+test("product maintenance map names each core chain and links implementation and regression files", () => {
+  const product = readFileSync("docs/PRODUCT.md", "utf8").split(/\r?\n/);
+  const start = product.indexOf("## 维护导航");
+  assert.notEqual(start, -1);
+  const end = product.findIndex((line, index) => index > start && line.startsWith("## "));
+  const rows = product.slice(start + 1, end === -1 ? undefined : end)
+    .filter((line) => line.startsWith("| ")).slice(1);
+  assert.deepEqual(rows.map((row) => row.split("|")[1].trim()), [
+    "调度", "存储与恢复", "结果复核", "通知",
+  ]);
+  for (const row of rows) {
+    const [, chain, implementation, regression] = row.split("|");
+    for (const [cell, prefix, suffix] of [
+      [implementation, "../src/runtime/", ".ts"],
+      [regression, "../test/", ".test.mjs"],
+    ]) {
+      const targets = [...cell.matchAll(/][(]<([^>]+)>[)]/g)].map((match) => match[1]);
+      assert.ok(targets.length, `Missing ${prefix} link for ${chain.trim()}`);
+      for (const target of targets) {
+        const repository = "https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/";
+        const linkedPrefix = repository + prefix.slice(3);
+        assert.ok(target.startsWith(linkedPrefix) && target.endsWith(suffix), target);
+        assert.equal(target.slice(linkedPrefix.length).includes("/"), false, target);
+        assert.ok(statSync(target.slice(repository.length)).isFile(), target);
+      }
+    }
+  }
+});
+
+test("documented crash drill is a plain runnable DAG with a post-write read", () => {
+  const flow = readFileSync("docs/FLOW-TEST.md", "utf8");
+  const start = flow.indexOf("## 普通工具 DAG 中断恢复示例");
+  const end = flow.indexOf("## 本地会话指标", start);
+  assert.ok(start >= 0 && end > start);
+  const section = flow.slice(start, end);
+  const fence = "```";
+  const raw = section.split(fence + "json")[1].split(fence)[0];
+  const { steps } = parsePlan(JSON.parse(raw));
+  assert.deepEqual(steps.map(({ id, tool, dependsOn }) => [id, tool, dependsOn]), [
+    ["check-a", "read", []],
+    ["check-b", "read", []],
+    ["save", "write", ["check-a", "check-b"]],
+    ["verify", "read", ["save"]],
+  ]);
+  assert.equal(steps[3].input.file_path, steps[2].input.file_path);
+  assert.match(section, /runtime_resume/);
+  assert.match(section, /不重放该写入/);
 });
 
 function docs(dir) {
@@ -47,7 +96,8 @@ test("public documentation has resolvable local links and current README example
   const readme = readFileSync("README.md", "utf8");
   const pkg = JSON.parse(readFileSync("package.json", "utf8"));
   assert.ok(readme.includes("当前版本 **" + pkg.version + "**"));
-  assert.ok(readme.includes("@feng0531/dsh-execution-bus@" + pkg.version));
+  assert.ok(readme.includes("npm install --ignore-scripts " + pkg.name + String.fromCharCode(10)));
+  assert.ok(readme.includes(`docs/releases/${pkg.version}.md`));
   for (const file of ["README.md", "docs/DECLARATIVE-RUNTIME.md"]) {
     const text = readFileSync(file, "utf8");
     const json = [...text.matchAll(/```json\n([\s\S]*?)```/g)].map((match) =>

@@ -40,9 +40,9 @@
 本轮实现（0.12.0）：
 
 1. Handler 调度声明：queue、maxConcurrency、resources(input)、dedupe:"payload"；register 时校验。
-2. 调度：同会话内按类别优先级（fs < diagnostic < command < default）+ 等待老化（每 30 秒提升一级，不封顶，最低到 0）选择；跨会话仍按会话轮转；Handler.maxConcurrency 作为舱壁。0.12.1 修正老化封顶导致的 default 类饥饿。
+2. 调度：同会话内按类别优先级（fs < diagnostic < command < default）+ 等待老化（每 30 秒提升一级，老化加成最多 2）选择；跨会话仍按会话轮转；Handler.maxConcurrency 作为舱壁。0.12.1 取消老化加成上限，避免低优先级任务持续被压后。
 3. 资源互斥：Handler.resources 返回稳定字符串键（host.edit/host.write 使用 file:<file_path>）；同一总线实例内同键串行，失败/取消/关闭释放；排队期限仍然有效。
-4. 唯一任务：幂等 Handler 声明 dedupe:"payload"（host.read/glob/grep）；同会话同 handler+payload 已有 succeeded 终态时，新 requestId 直接复用快照并带 reused:true；失败结果不缓存。
+4. 唯一任务：幂等 Handler 声明 dedupe:"payload"（host.read/glob/grep）；同会话同 handler+payload 已有 succeeded 终态时，新 requestId 直接复用快照并带 reused:true；失败结果不缓存。0.12.1 关闭内置 host.* 的 payload 去重，核心扩展能力仍保留。
 5. 诊断：execution_bus_state 任务增加 longRunning（30 秒阈值）；waitReason 增加 resource。
 6. 测试：新增 8 项调度/唯一/资源回归、2 项 fast-check 属性回归与 2 项插件级 Handler 回归。
 

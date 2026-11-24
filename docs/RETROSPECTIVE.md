@@ -28,7 +28,7 @@
 
 ## 四、仍可复用的资产
 
-- **PTC 预算分离机制**：run_code settled → 只停止等待、执行继续、宿主 Job 保留（见 [宿主兼容性](<host-compatibility.md>)）。
+- **PTC 预算分离机制**：run_code settled → 只停止等待、执行继续、宿主 Job 保留（见 [0.12.1 验证记录](https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/130b0e341415432026f6c17d425b9a676baf809b/docs/validation.md#L12)）。
 - **宿主 Job 投影 / ExecutionOwner**：把 core completion、取消、Job 生命周期和工具交付统一管理。
 - **预设代际（generation）作用域**：插件实例按预设修订共享，跨会话共享容量/资源锁。
 - **幂等/去重语义与陷阱**：requestId 冲突、终态复用、reused:true、payload 去重需失效模型。
@@ -43,5 +43,5 @@
 ## 六、归档处置
 
 - 冻结于 0.12.1，不再发功能版；仓库保留作参考实现。
-- 不推荐新项目采用；若误装，请改用原生工具与后台 Job。历史发布说明与证据见 [0.12.1 发布说明](<releases/0.12.1.md>) 与 [验证记录](<validation.md>)。
+- 不推荐新项目采用；若误装，请改用原生工具与后台 Job。历史发布说明与证据见 [0.12.1 发布说明](<releases/0.12.1.md>) 与 [当时的验证记录](https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/130b0e341415432026f6c17d425b9a676baf809b/docs/validation.md#L12)。
 - 当时曾提出 npm 弃用说明，但未实际执行。该归档结论只适用于 0.x 总线，不适用于 1.0 起的声明式运行时；不得对整个包执行弃用。当前使用入口见 [README](<../README.md>)。

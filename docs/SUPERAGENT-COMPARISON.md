@@ -14,7 +14,7 @@
 
 用户明确要求再次全仓逐行阅读，本轮重新读取同一参考基线的全部 **216 个跟踪文件、37068 行**（111 个实现、65 个测试/夹具、40 个文档/提示词/配置/锁文件）。Lead 核实参考 checkout clean、远端 HEAD 未变；五组分工与 Lead 的逐文件台账对照 Git 清单，缺失与多列均为 0。分工全文阅读不表示每个文件均经 Lead 二次逐行审计；参考测试只读未执行，不构成运行或安全认证。原有未提交测试修复保持不变。
 
-新增维护方法候选：参考 [docs.spec.ts:58–66](<https://github.com/deepseek-ai/dsh-superagent-prototype/blob/8c32a9dc5d72c033816c6a8110b37f40cf94fba4/tests/docs.spec.ts#L58-L66>) 将目录与架构的模块/测试表双向比对；当前 [文档测试](<../test/docs.test.mjs>) 检查链接、示例、版本及安全声明，尚无同类全模块职责索引约束。仅在维护导航有实际成本时考虑在现有产品文档增加简短职责/写入者/测试映射；本轮不新增目录文档或实施门禁，不强制所有 class 注释或编号链接顺序。未确认新的必要运行时功能，既有采用与不采用处置保持有效。
+新增维护方法候选：参考 [docs.spec.ts:58–66](<https://github.com/deepseek-ai/dsh-superagent-prototype/blob/8c32a9dc5d72c033816c6a8110b37f40cf94fba4/tests/docs.spec.ts#L58-L66>) 将目录与架构的模块/测试表双向比对；当前 [文档测试](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/test/docs.test.mjs>) 检查链接、示例、版本及安全声明，尚无同类全模块职责索引约束。仅在维护导航有实际成本时考虑在现有产品文档增加简短职责/写入者/测试映射；本轮不新增目录文档或实施门禁，不强制所有 class 注释或编号链接顺序。未确认新的必要运行时功能，既有采用与不采用处置保持有效。
 
 本轮另核实两个**仅参考原型的静态问题**：
 
@@ -23,25 +23,29 @@
 
 锁文件还存在部分 peer 绑定范围不符，以及根 Node 声明涵盖的 24.0–24.10 与构建依赖 tsdown 要求 >=24.11.0 不一致；均仅静态元数据警示，不宣称安装失败、依赖安全或跨平台验收。未修改参考源码、安装依赖或启动服务；未以这些差异重开来源平台、持久 Effects、独立编辑器、常驻 Worker 等既有不采用项。
 
+## 后续采用：四条主链维护导航
+
+按后续需求，在[产品文档](<PRODUCT.md#维护导航>)补充调度、存储与恢复、结果复核、通知的职责与回归入口；[文档测试](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/test/docs.test.mjs>)核对四条主链及文件类型。仅采用小范围索引，不引入全仓清单、编号规则或运行时功能。
+
 ## 统一处置
 
 | 机制 | 萧何对应证据 | 处置与理由 |
 |---|---|---|
-| 任务与执行分离、关联前驱 | [plan](<../src/runtime/plan.ts>)、[service](<../src/runtime/service.ts>) | 已有；不引入 Ticket/Assignment/Mandate 工单域 |
-| 来源、范围、资料引用分离 | [plan](<../src/runtime/plan.ts>) 的 provenance | 已有；调用者元数据不是授权，不自动抓取引用 |
-| 不可信上下文与权限隔离 | [agent](<../src/runtime/agent.ts>)、[handoff](<../src/runtime/handoff.ts>)、[dependency-context](<../src/runtime/dependency-context.ts>) | 已有；保留可信父策略门禁，不接受 prompt 或来源消息授予权限 |
-| 并发配额、清理后释放槽、停机收束、目录锁 | [worker-quota](<../src/runtime/worker-quota.ts>)、[service](<../src/runtime/service.ts>)、[root-lock](<../src/runtime/root-lock.ts>) | 已有；不照搬常驻会话和每工单 worktree |
-| 陈旧结果与回调防护 | [decision](<../src/runtime/decision.ts>)、[review](<../src/runtime/review.ts>)、[notifications](<../src/runtime/notifications.ts>) | 已有 hash/revision/attempt 绑定；不全局吞并合法重复执行 |
-| 只读重试、退避、等待原因 | [retry](<../src/runtime/retry.ts>)、[waiting](<../src/runtime/waiting.ts>)、[executor](<../src/runtime/executor.ts>) | 已有；超时与未知副作用不重放 |
-| 容量观察、模型重试观察 | [service](<../src/runtime/service.ts>) 的 capacity、[model-wait](<../src/runtime/model-wait.ts>) | 已有；瞬时观察不是授权、容量预留或健康证明 |
-| 待办优先与降噪 | [action](<../src/runtime/action.ts>)、[attention](<../src/runtime/attention.ts>)、[acknowledgement](<../src/runtime/acknowledgement.ts>) | 已有；未知副作用即使已知悉仍警示 |
-| 人工决策、复核、执行完成分离 | [decision](<../src/runtime/decision.ts>)、[review](<../src/runtime/review.ts>)、[insights](<../src/runtime/insights.ts>) | 已有；自报、owner 声明均不是独立验收或人工批准 |
-| 通知槽合并、显式回执、宿主发送 | [notifications](<../src/runtime/notifications.ts>)、[notification-delivery](<../src/runtime/notification-delivery.ts>) | 已有；未知投递先核验，不自动重发，不照搬持久 Effects |
-| 分页任务视图、跨任务待办与元数据检索 | [history](<../src/runtime/history.ts>)、[query](<../src/runtime/query.ts>)、[presentation](<../src/presentation.ts>) | 已有；owner 隔离、先筛选再分页，不搜索敏感正文 |
-| 显式上下文交接、计划变化比较 | [handoff](<../src/runtime/handoff.ts>)、[plan-diff](<../src/runtime/plan-diff.ts>) | 已有；不自动执行、复用成功或扩大授权 |
-| 提示词离线预览、CAS 历史与基线漂移 | [prompt-preview](<../src/runtime/prompt-preview.ts>)、[prompt-history](<../src/runtime/prompt-history.ts>) | 已有；不增加可写模型工具或安全段覆盖 |
-| 旧业务默认正文的可解释差异 | [prompt-history](<../src/runtime/prompt-history.ts>) 的 businessDefaults/defaultChanges | 本轮采用；runtime 自取两业务段快照，未知旧正文保持 unknown，摘要不带正文 |
-| 持久 Effects、afterCommit、多表 SQLite 事务 | 参考 app/effects.ts、app/store.ts；当前 [store](<../src/runtime/store.ts>) | 不采用；当前按 run 原子 checkpoint，无需替换存储架构或恢复未知副作用 |
+| 任务与执行分离、关联前驱 | [plan](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/plan.ts>)、[service](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/service.ts>) | 已有；不引入 Ticket/Assignment/Mandate 工单域 |
+| 来源、范围、资料引用分离 | [plan](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/plan.ts>) 的 provenance | 已有；调用者元数据不是授权，不自动抓取引用 |
+| 不可信上下文与权限隔离 | [agent](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/agent.ts>)、[handoff](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/handoff.ts>)、[dependency-context](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/dependency-context.ts>) | 已有；保留可信父策略门禁，不接受 prompt 或来源消息授予权限 |
+| 并发配额、清理后释放槽、停机收束、目录锁 | [worker-quota](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/worker-quota.ts>)、[service](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/service.ts>)、[root-lock](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/root-lock.ts>) | 已有；不照搬常驻会话和每工单 worktree |
+| 陈旧结果与回调防护 | [decision](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/decision.ts>)、[review](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/review.ts>)、[notifications](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/notifications.ts>) | 已有 hash/revision/attempt 绑定；不全局吞并合法重复执行 |
+| 只读重试、退避、等待原因 | [retry](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/retry.ts>)、[waiting](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/waiting.ts>)、[executor](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/executor.ts>) | 已有；超时与未知副作用不重放 |
+| 容量观察、模型重试观察 | [service](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/service.ts>) 的 capacity、[model-wait](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/model-wait.ts>) | 已有；瞬时观察不是授权、容量预留或健康证明 |
+| 待办优先与降噪 | [action](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/action.ts>)、[attention](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/attention.ts>)、[acknowledgement](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/acknowledgement.ts>) | 已有；未知副作用即使已知悉仍警示 |
+| 人工决策、复核、执行完成分离 | [decision](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/decision.ts>)、[review](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/review.ts>)、[insights](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/insights.ts>) | 已有；自报、owner 声明均不是独立验收或人工批准 |
+| 通知槽合并、显式回执、宿主发送 | [notifications](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/notifications.ts>)、[notification-delivery](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/notification-delivery.ts>) | 已有；未知投递先核验，不自动重发，不照搬持久 Effects |
+| 分页任务视图、跨任务待办与元数据检索 | [history](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/history.ts>)、[query](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/query.ts>)、[presentation](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/presentation.ts>) | 已有；owner 隔离、先筛选再分页，不搜索敏感正文 |
+| 显式上下文交接、计划变化比较 | [handoff](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/handoff.ts>)、[plan-diff](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/plan-diff.ts>) | 已有；不自动执行、复用成功或扩大授权 |
+| 提示词离线预览、CAS 历史与基线漂移 | [prompt-preview](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/prompt-preview.ts>)、[prompt-history](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/prompt-history.ts>) | 已有；不增加可写模型工具或安全段覆盖 |
+| 旧业务默认正文的可解释差异 | [prompt-history](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/prompt-history.ts>) 的 businessDefaults/defaultChanges | 本轮采用；runtime 自取两业务段快照，未知旧正文保持 unknown，摘要不带正文 |
+| 持久 Effects、afterCommit、多表 SQLite 事务 | 参考 app/effects.ts、app/store.ts；当前 [store](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/store.ts>) | 不采用；当前按 run 原子 checkpoint，无需替换存储架构或恢复未知副作用 |
 | Later 与短时容量排队、人类额外优先槽 | 参考 app/effects.ts、executor/dsh.ts | 不采用；当前有限同步调用及 fail-fast 边界明确，无实际容量平滑需求，不增加排队配置 |
 | 单独组件健康板与运维总览 | 参考 infra/health.ts、app/views/overview.ts | 不采用；已有诊断/行动/查询/容量观察，累计错误不能推断当前健康，无独立运维入口需求 |
 | Web 编辑器、三方草稿合并、轮询与时间线 | 参考 src/client/、app/views/ | 不采用；萧何沿用宿主展示，不为参考新建前端/HTTP 服务和配置后台 |
@@ -54,7 +58,7 @@
 
 `BusinessPromptHistory.save()` 在原有同目录原子写中保存 runtime 实际观察的 communication/delivery 默认 text/hash；不接受调用者注入默认正文。`defaultChanges(revision)` 返回两段 baseline/current 文本资料，不做二次方 LCS、自动合并或应用。
 
-新读取器兼容没有 businessDefaults 的旧 version 1 记录，旧正文缺失始终 unknown；不回写历史、不把当前正文冒充旧版。新可选字段不兼容不认识它的旧读取器。保留 32 修订、1MiB、正文每段 8KiB、CAS、私有目录、锁、strict validation 与 summary 不泄露正文。known 仅指本地可解析且 hash 匹配，不证明可信来源或完整提示词可重放。详见[协议](<protocol.md#离线业务提示词版本历史源码新增未发布>)。
+新读取器兼容没有 businessDefaults 的旧 version 1 记录，旧正文缺失始终 unknown；不回写历史、不把当前正文冒充旧版。新可选字段不兼容不认识它的旧读取器。保留 32 修订、1MiB、正文每段 8KiB、CAS、私有目录、锁、strict validation 与 summary 不泄露正文。known 仅指本地可解析且 hash 匹配，不证明可信来源或完整提示词可重放。详见[协议](<protocol.md#离线业务提示词版本历史>)。
 
 ## 跨会话收口规则
 
@@ -72,7 +76,7 @@
 
 2026-11-09 统一验证：
 
-- `npm run check` 首轮 642/643，通过构建；native 文件系统 DAG 的 edit 步骤返回 RUNTIME_STEP_FAILED，断言位于 [runtime-ptc.test.mjs:311](<../test/runtime-ptc.test.mjs#L311>)。本轮不改该测试或执行器来掩盖失败。
+- `npm run check` 首轮 642/643，通过构建；native 文件系统 DAG 的 edit 步骤返回 RUNTIME_STEP_FAILED，断言位于 [runtime-ptc.test.mjs:311](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/3248a44f9883e0481a6fb226f0d937b7358780c5/test/runtime-ptc.test.mjs#L311>)。本轮不改该测试或执行器来掩盖失败。
 - 同用例先单独复跑 1 次通过，再完整重跑 `npm run check` 为 643/643（0 failed/cancelled/skipped），另连续单独复跑 5 次均通过。首轮根因未确定，不能据后续通过声称已修复间歇性问题；这是保留的验证局限，不是新增功能待办。
 - `node --test test/runtime-prompt-history.test.mjs` 为 18/18，通过旧格式兼容、默认正文快照、未知基线、跨段隔离、跨版本比较、畸形输入与 CAS/容量/原子写回归；新增 6 组测试。
 - `npm run verify:package` 核验 143 个打包文件；结案文档已列入必需白名单。`git diff --check` 通过。未进行安装 smoke、真实模型、桌面 GUI 或 OS 沙箱验收，不宣称这些完成。

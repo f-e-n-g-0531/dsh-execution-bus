@@ -1,6 +1,6 @@
 # 宿主兼容性
 
-当前源码包版本 **1.8.4** 包含 V0.2 兼容实现，重点适配 **DSH 0.2.3-alpha.2**；兼容声明仅限已经验证的 DSH V0.2 版本。其余列入兼容范围的 V0.2 版本仍待矩阵验证，未验证版本与未来版本均不承诺；不保证整个 V0.2 系列兼容。公开 1.7.3 原包仍面向 rc.1，不追认新兼容。legacy/modern API 适配已落地，但当前候选的逐版本结果仍须独立核对；新兼容须以本地候选隔离验证，不修改日常 DSH。以下 v1.4.0 / rc.1 记录仅为历史证据，不替代当前候选验证。
+当前源码包版本 **1.8.5** 包含 V0.2 兼容实现，重点适配 **DSH 0.2.3-alpha.2**；兼容声明仅限已经验证的 DSH V0.2 版本。其余列入兼容范围的 V0.2 版本仍待矩阵验证，未验证版本与未来版本均不承诺；不保证整个 V0.2 系列兼容。公开 1.7.3 原包仍面向 rc.1，不追认新兼容。legacy/modern API 适配已落地，但当前候选的逐版本结果仍须独立核对；新兼容须以本地候选隔离验证，不修改日常 DSH。以下 v1.4.0 / rc.1 记录仅为历史证据，不替代当前候选验证。
 
 v1.4.0 目标宿主：DSH **0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node ≥22；锁定依赖实际解析为 Cordis 4.1.0、include 1.1.0。DSH peer 与测试依赖精确锁定 0.2.2-rc.1，不推导兼容其他版本。旧公开 1.3.3 的宿主目标仍为 0.2.1-rc.5，不追认新宿主支持。
 
@@ -20,7 +20,7 @@ v1.4.0 目标宿主：DSH **0.2.2-rc.1**、Cordis ~4.1.0、include ~1.1.0、Node
 
 ## 0.2.3-alpha.2 适配核实（2026-11-23）
 
-只读与运行核实当前安装的 DSH **0.2.3-alpha.2**：实际解析 Cordis **4.2.0-alpha.1**、include **1.2.0-alpha.1**、cordis-plugin-loader **1.2.0-alpha.1**，`dsh-agent-preset-registry` 为 0.2.3-alpha.2。
+该次核查所用的 DSH **0.2.3-alpha.2**：实际解析 Cordis **4.2.0-alpha.1**、include **1.2.0-alpha.1**、cordis-plugin-loader **1.2.0-alpha.1**，`dsh-agent-preset-registry` 为 0.2.3-alpha.2。
 
 - include 1.2 不再导出 `entryListSchema`，改为 `parseEntryYaml`（YAML 1.2 core + `!!js`）。旧静态命名导入会在模块链接期抛 `SyntaxError`，导致 `preset-xiao-he-runtime` 启用失败。派生改为运行时选择方言：1.2 用 `parseEntryYaml`，1.0/1.1 回退 js-yaml `entryListSchema`，两者都保留 `!!js` 数据而不求值；两种方言都不存在时直接失败，不放开表达式标签。
 - `entryListProblem` 仍由 preset-registry 导出且签名未变；`readDocument`、`register`、`mount` 与 `ToolExecutionPipeline.prepare/dispatch/complete` 仍在公开入口。Worker 门禁仍无“仅补查父级缺失策略且去重公共层”的公开接口，保持 fail-closed。

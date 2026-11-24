@@ -3,6 +3,7 @@
 先由构建负责人准备当前完整dist。只在可丢弃的独立Node进程运行，不在真实DSH或同时执行其他代码的宿主里调用。工具临时替换进程级同步fs绑定；它不是生产遥测或沙箱。
 
 ```powershell
+New-Item -ItemType Directory -Force artifacts | Out-Null
 node dev/profile-capacity.mjs --size 1000 --ratio 0.5 > artifacts/capacity-profile.json
 ```
 

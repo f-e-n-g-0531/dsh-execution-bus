@@ -7,6 +7,7 @@
 先由构建负责人准备两个完整 dist 目录，勿在采样时重新构建或同时跑测试、安装。以同一构建做小规模工具自测：
 
 ```powershell
+New-Item -ItemType Directory -Force artifacts | Out-Null
 node dev/compare-capacity.mjs --before dist --after dist --sizes 4 --interrupted 0.5 --iterations 1 --timeout-ms 10000 > artifacts/capacity-selfcheck.json
 ```
 

@@ -15,9 +15,9 @@
 | `runtime_cancel` | `{ runId }` | 发起取消后的运行摘要；不保证 Worker 已清理或宿主操作已实际停止 |
 | `runtime_resume` | `{ runId }` | 同步等待恢复结果；仅 `interrupted` 可恢复 |
 | `runtime_task` | `{ taskId, limit?, offset? }` 或同任务的快照 / 游标参数 | [同任务运行与本页待办](#行动摘要任务视图与通知回执源码新增) |
-| `runtime_query` | `{ q?, taskId?, state?, action?, view?, limit?, offset? }` | [跨任务待办与元数据](#跨任务待办与历史元数据检索源码新增未发布) |
-| `runtime_decision` | 运行、快照、事项 key、预期修订及处置参数 | [记录决策处置](#决策处置关联源码新增未发布)；不执行后续操作 |
-| `runtime_handoff` | 运行、所选结果及摘要 | [生成交接快照](#跨-run-显式上下文交接源码新增未发布)；快照不授予权限 |
+| `runtime_query` | `{ q?, taskId?, state?, action?, view?, limit?, offset? }` | [跨任务待办与元数据](#跨任务待办与历史元数据检索) |
+| `runtime_decision` | 运行、快照、事项 key、预期修订及处置参数 | [记录决策处置](#决策处置关联)；不执行后续操作 |
+| `runtime_handoff` | 运行、所选结果及摘要 | [生成交接快照](#跨-run-显式上下文交接)；快照不授予权限 |
 | `runtime_notification` | 运行及 `get/sync/claim/settle` 对应参数 | [通知回执](#行动摘要任务视图与通知回执源码新增)；不发送消息 |
 
 `runtime_status` 列表 `limit` 为 1–100，默认 20；`offset` 为 0–10000，默认 0。先按所有者过滤，再按更新时间降序分页；同时间以运行 ID 稳定排序。指定 `runId` 时不能同时提供分页参数。所有工具拒绝未知字段。
@@ -25,6 +25,7 @@
 运行摘要与列表新增派生 `progress`（各步骤状态计数）及 `guidance`（未知副作用、后台 Job 和中断处置提示）。它们仅在会话归属检查后生成，不写入 version 1 记录。建议操作不是授权，不会自动执行 Job、恢复或重发。工具的 JSON 文本返回保留，另提供宿主支持的结构化输出及展示摘要；实际桌面效果需独立验收。
 
 <a id="跨任务待办与历史元数据检索源码新增未发布"></a>
+<a id="跨任务待办与历史元数据检索"></a>
 
 ### 跨任务待办与历史元数据检索（1.7.0）
 
@@ -54,6 +55,7 @@ await tools.runtime_query({q:"issue:42", taskId:"audit", state:"failed"});
 ```
 
 <a id="跨-run-显式上下文交接源码新增未发布"></a>
+<a id="跨-run-显式上下文交接"></a>
 
 ### 跨 run 显式上下文交接（1.7.0）
 
@@ -97,6 +99,7 @@ await tools.runtime_run({plan: {
 ```
 
 <a id="决策处置关联源码新增未发布"></a>
+<a id="决策处置关联"></a>
 
 ### 决策处置关联（1.7.0）
 
@@ -134,7 +137,7 @@ if (question && saved.attention?.snapshotHash) {
 - 可比较：`{comparable:true,changes:{addedSteps,removedSteps,changedSteps,concurrencyChanged,goalChanged,provenanceChanged,handoffChanged}}`。按显式 previousRunId 读取同 owner、同 task 且已终态收束的前驱，不自动寻找别的历史。步骤 ID 排序；changedSteps 为 `[{id,fields}]`，fields 仅包含 tool/input/dependsOn/retry/timeoutMs，不输出输入正文、前后值、字段路径或哈希。目标、来源说明与交接快照只报变化布尔值，不展示交接正文或哈希。
 - 忽略对象键顺序、步骤列表顺序和依赖集合顺序；输入数组仍区分顺序。依赖比较按集合；Worker 拼装上游正文和预览时仍按声明顺序，因此依赖重排可能改变实际提示词。步骤改名算删除加新增，不推测重命名。task/previousRunId 是关联，不列为计划内容变化。
 - 不可比较：`{comparable:false,reason}`，无 changes。reason 为 no_previous_run（未关联前驱）、predecessor_unavailable（缺失、不可读、记录/schema 不可用或不属于 owner，统一处理避免泄漏）、incompatible_predecessor（任务/状态不兼容或前驱仍占活动槽）。不可比较不等于无变化；仅 comparable:true 且所有变化列表为空、布尔值为 false 才表示所列字段无变化。
-- 比较只派生详情，不写入运行记录，不复用结果、不执行或恢复、不授予权限；差异小或无变化不证明行为等价、安全、交付或验收。返回的是当前仍保留的前驱记录比较，不是不可篡改历史。模型预算等待诊断本次不实现。
+- 比较只派生详情，不写入运行记录，不复用结果、不执行或恢复、不授予权限；差异小或无变化不证明行为等价、安全、交付或验收。返回的是当前仍保留的前驱记录比较，不是不可篡改历史。模型等待观察是独立的[宿主能力](<#模型等待观察>)，不属于计划比较。
 
 ### 能力说明
 
@@ -237,10 +240,11 @@ claim/settle前重新对齐当前事项；撤回、新key或陈旧revision/token
 
 ```ts
 const queued = await tools.runtime_notification({runId, operation:"sync"});
-// 仅current.shouldNotify且receipt.status为pending/failed时领取。
-const claimed = await tools.runtime_notification({runId, operation:"claim", key:queued.receipt.key, expectedRevision:queued.receipt.revision});
-// 宿主自行配置、授权渠道并显式投递；本工具不发送。
-// 获得明确结果后，用claimed.receipt的新revision与token登记sent/failed。
+const receipt = queued.receipt;
+if (queued.current.shouldNotify && receipt && ["pending", "failed"].includes(receipt.status)) {
+  const claimed = await tools.runtime_notification({runId, operation:"claim", key:receipt.key, expectedRevision:receipt.revision});
+  // 由获授权的宿主显式投递；获得明确结果后，用 claimed.receipt 的新修订和 token 登记。
+}
 ```
 
 sent仅投递方声明，不证明实际送达、阅读、处理、交付或验收。失败重试须显式重新claim，无后台发送或轮询。崩溃遗留delivering不超时回收，不自动重发；先核验渠道，确认后用原token登记。新key可替换旧投递，但不能撤销已发生的发送，不保证exactly-once。未知外部副作用不会因sent消音。
@@ -349,9 +353,9 @@ acceptance: {
 
 - `input = { prompt, access?:"read", max_steps?, output_format?:"text"|"report" }`：`output_format` 省略保留旧 `text` 行为；显式值仅接受 `text/report`。prompt 必须是非空字符串；`access` 默认 `read`，`max_steps` 为 1–32 的整数、默认 12。未知字段、`access:"write"` 与非空 `write_scopes` 拒绝；`write_scopes:[]` 仅作兼容归一化，不授予写权限。Agent 不允许非零 `retry`，也不自动重放。
 - 含 `agent` 的计划以 `async:true` 或 service `background=true` 提交时，在创建 run/Worker 前以 `RUNTIME_AGENT_ASYNC_UNSUPPORTED` 预检拒绝。父 `exec.toolSet` 在外层工具批次返回时 dispose，不能安全 detach Worker，也不能合成更宽权限代替原 admission。普通工具计划若携带 `exec.toolSet`，异步或 service 后台提交也在创建 run 前以 `RUNTIME_ASYNC_ADMISSION_UNSUPPORTED` 拒绝；宿主批次结束会销毁该准入集合，没有公开续租接口。不得删除准入集合或重新解析以绕过限制；请使用同步调用。
-- Lead 仍在 PTC 中编排；公开 `agents.create` 与 `agentPresets.composeFrom` 创建独立上下文 Worker，继承模型路由，强制使用 `NativeToolExecutor`，不是 PTC Worker。宿主 `sandbox:read-only`、`approval:never` 与 `tools.guard` 同时约束，仅允许 `read/glob/grep`，且不能放宽父调用 admission identity 的准入。禁止 `run_code`、命令、写入及递归委派；提示词不是权限控制。
+- Lead 仍在 PTC 中编排；公开 `agents.create` 与 `agentPresets.composeFrom` 创建独立上下文 Worker，继承模型路由，强制使用 `NativeToolExecutor`，不是 PTC Worker。宿主 `sandbox:read-only`、`approval:never` 与 `tools.guard` 同时约束，文件工具仅允许 `read/glob/grep`；受控宿主可另行启用[依赖结果读取](<#依赖结果渐进读取>)。两者都不能超出父调用准入。禁止 `run_code`、命令、写入及递归委派；提示词不是权限控制。
 - 工具白名单包含 Worker 实际继承的 preset 作用域工具，并继续核对父 admission identity。Worker 的原生管线检查其 global/preset/local 策略一次；可信宿主适配器只补查父级缺失策略（含局部 hooks/guards），不得再次执行公共层。补查监听以全局可见性（`{global:true}`）注册在 Worker 子上下文、随 Worker 清理注销，子作用域后注册并直接返回 allow、不调用 `next()` 的监听不能跳过它；没有补查证据时最终 guard 拒绝。适配器的 `deny/ask/cancel`、异常及非 allow 返回均拒绝调用，不弹审批。适配器仅由宿主通过 `RuntimeService` 第三个构造参数或 `executeAgent` 第七参数注入，不接受模型 input；缺省拒绝创建 Worker。
-- 仅把直接依赖的已保存结果按 `{id,result}` 数组序列化为不可信 JSON，追加至 Agent prompt，不是新指令或授权。无结果 value 或结果截断以 `RUNTIME_AGENT_DEPENDENCY_UNAVAILABLE` 拒绝；追加后 prompt >64KiB 以 `RUNTIME_AGENT_CONTEXT_TOO_LARGE` 拒绝。不会向其他工具插值结果。
+- 默认把直接依赖的已保存结果按 `{id,result}` 数组序列化为不可信 JSON，追加至 Agent prompt，不是新指令或授权。无结果 value 或结果截断以 `RUNTIME_AGENT_DEPENDENCY_UNAVAILABLE` 拒绝；追加后 prompt >64KiB 以 `RUNTIME_AGENT_CONTEXT_TOO_LARGE` 拒绝。不会向其他工具插值结果。
 - `whenIdle` 后检查 `turn/end` 和最终 assistant 文本；未正常结束或无最终文本不作为成功。子会话 ID 写入 checkpoint 并在运行摘要可见；运行时 `results[step].value` 在所有模式下均为 `{sessionId, output, verification:"not_independently_verified"}`，report 模式另含解析后的 `report`，原始 `output` 不被替换；追溯通过 `steps[].workerTrace` 暴露，不内嵌于结果 value；验收状态保持未验证。`succeeded` 只表示执行结束，不证明结论正确、测试通过或任务已验收；Lead 负责核实。
 - 取消/超时传播至 Worker，同步 run 的执行等待其 dispose 后才释放调度槽；服务 dispose 同步发起所属运行的取消并落终态检查点，再等待其清理（即使调用方不等待返回的 Promise，取消也已发起）。`runtime_cancel` 仅发起取消，不等待清理，其返回不是 Worker 已清理的证明。恢复遇到未知 Agent 时失败整个 run，不自动重发。真实模型、桌面 UI 与实际 OS 沙箱仍未验收。
 
@@ -412,7 +416,7 @@ acceptance: {
 - 目录锁不按时间或 PID 自动抢占。崩溃、断电、损坏或无法确认的遗留锁保持拒绝；先停掉所有访问该 root 的宿主，备份记录、核验外部工作，再由操作者移除 `.runtime-owner.lock`。不要在线清锁；锁的时间/PID/token不是授权或进程身份凭证。直接使用底层 RunStore 的受控调用仍须自行保证独占。
 - 仅失联的 `running` 记录标 `interrupted`，在途步骤标 `unknown`；不自动执行恢复。
 - 显式恢复保留已保存成功步骤，仅 `read/glob/grep` 在途步骤重新排队；若存在未知副作用或未知 Agent，标 `failed/RUNTIME_INTERRUPTED` 并停止整个恢复计划，不再启动任何新步骤。**不保证 exactly-once**。
-- 默认持续保留最近 100 个终态运行（`succeeded/failed/cancelled`），不删除 `running/interrupted`。中断记录可能长期保留，应由所有者确认后取消；本轮不提供 TTL 或归档接口。
+- 默认持续保留最近 100 个终态运行（`succeeded/failed/cancelled`），不删除 `running/interrupted`。中断记录可能长期保留，应由所有者确认后取消；运行时不提供 TTL 或归档接口。
 - status/result/cancel/resume 只允许所有者会话。单步结果 >64KiB 只保存截断标记；记录读取上限 4MiB，结构、计划、步骤、结果和时间戳不一致的记录隔离忽略。
 - `runtime_status` 列表和 `runtime_task` 附 `diagnostics`：当前存储实例有界累计计数 `invalidRecords/oversizedRecords/readFailures/writeFailures`，以及毫秒墙钟 `startedAt`（该存储实例创建时间，不是进程启动）、`observedAt`（本次快照读取时间）、`lastObservedAt`（固定四类键，最近一次计数观察时间，未观察为 null）。时间随墙钟可回拨，不是单调时长；计数和时间只在内存中，不持久化、不额外扫描或写盘，不含路径、ID或正文。重复扫描可重复计数，不代表坏文件去重数量；非法 runId 不计读取失败。历史错误不证明仍在持续，时间也不证明已恢复；不会清零计数、触发提醒或授予重试。
 - 保存失败以 `RUNTIME_STORAGE_FAILED` 停止调度并尝试提交失败状态；若磁盘不可写，只能在进程内保留最多 100 个失败摘要，不能承诺重启后仍可查询。记录正文可能含敏感输入或结果，保管记录目录与权限仍是部署者责任。
@@ -456,6 +460,7 @@ factory 给新覆盖文本标记当前默认段 baseHash；preview 显示 source
 这些是纯离线检查函数，不读取持久历史、不保存配置、不接入Worker、不调用模型或修改权限。hash只是输入差异与版本一致性检查，不证明历史真实性、批准或作者身份；持久历史须由宿主显式调用下述 BusinessPromptHistory，不能把预览接口说成完整配置后台。
 
 <a id="离线业务提示词版本历史源码新增未发布"></a>
+<a id="离线业务提示词版本历史"></a>
 
 ### 离线业务提示词版本历史（1.7.0）
 

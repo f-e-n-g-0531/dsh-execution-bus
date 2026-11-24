@@ -2,6 +2,27 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { runAttention } from "../dist/runtime/attention.js";
+import { ownerReview } from "../dist/runtime/review.js";
+
+test("unrecorded review does not serialize saved results for an unused review snapshot", () => {
+  let serializations = 0;
+  const run = record([step("a")], {
+    results: { a: { value: { toJSON() { serializations++; return "result"; } } } },
+  });
+  const attention = runAttention(run);
+  assert.equal(serializations, 2); // Per-step digest and attention snapshot.
+  const review = ownerReview(run);
+  assert.equal(review.status, "not_recorded");
+  assert.equal(typeof review.snapshotHash, "string");
+  assert.deepEqual(runAttention(run, undefined, { review }), attention);
+  run.ownerReviews = [{ snapshotHash: review.snapshotHash, disposition: "accepted" }];
+  assert.deepEqual(kinds(runAttention(run)), []);
+  run.ownerReviews[0].disposition = "needs_work";
+  assert.deepEqual(runAttention(run), attention);
+  run.ownerReviews[0].disposition = "accepted";
+  run.results.a.value = "updated";
+  assert.deepEqual(kinds(runAttention(run)), ["review_results"]);
+});
 
 const hash = (value) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");

@@ -32,7 +32,7 @@
 
 ## 决策请求处置（1.7.0）
 
-Worker 请求决策不代表暂停等待批准。先用 runtime_result 核实报告与证据，再由原 owner 显式调用 runtime_decision，记录 answered（须答复引用）、superseded 或 dismissed；仅已收束的终态源运行可写。参数与示例见[协议](<protocol.md#决策处置关联源码新增未发布>)。
+Worker 请求决策不代表暂停等待批准。先用 runtime_result 核实报告与证据，再由原 owner 显式调用 runtime_decision，记录 answered（须答复引用）、superseded 或 dismissed；仅已收束的终态源运行可写。参数与示例见[协议](<protocol.md#决策处置关联>)。
 
 已知悉不等于已回答；处置记录也不等于用户批准、解决或验收。可关联已存在的直接后继运行，但不会创建或继续执行它。当前版本已处置项保留展示、不再默认提醒；问题版本变化后重新待处理，未知副作用等其他风险不受影响。源记录沿用既有保留策略，不保证永久历史。
 
@@ -62,7 +62,7 @@ for (const worker of saved.acceptance.workers) {
 
 摘要与本会话列表项的 `attention.items` 仍保留外部核验、失败、Worker 待决、结果缺失/截断和结果待复核。卡片默认只展开前四类必须处理事项；结果待复核留在详情，不触发默认提醒。卡片不重复逐步进度；完整状态、guidance 和结果仍保留在 JSON。待决事项只给步骤与结果哈希入口，须读取原报告后由 Lead 判断，不能把它当执行授权或自动暂停。
 
-没有必须处理事项时 `notification.shouldNotify=false`。上层可按 `notification.key` 合并同一提醒，也可在自己的界面忽略该键；忽略不是运行时状态，不改变结果，也不算验收。键不是已发送、已读或已忽略标志，查询不会确认或清除事项；本运行时没有外部推送或投递去重；问题已知悉需显式调用 runtime_acknowledge，查询本身不会写记录。当前页只汇总各类事项计数，不折叠不同运行；即使事项相同，也逐项保留每个 runId、状态、结果读取入口与 Job 提示。所有待办均提供只读 runtime_result 定位；恢复、Job 处置和 owner 复核仍须先检查证据后显式请求，不自动执行。
+没有必须处理事项时 `notification.shouldNotify=false`。上层可按 `notification.key` 合并同一提醒，也可在自己的界面忽略该键；忽略不是运行时状态，不改变结果，也不算验收。键不是已发送、已读或已忽略标志，查询不会确认或清除事项；查询和 `runtime_notification` 不发送消息；只有受控宿主的显式投递入口才可发送，未知投递不自动重发；问题已知悉需显式调用 runtime_acknowledge，查询本身不会写记录。当前页只汇总各类事项计数，不折叠不同运行；即使事项相同，也逐项保留每个 runId、状态、结果读取入口与 Job 提示。所有待办均提供只读 runtime_result 定位；恢复、Job 处置和 owner 复核仍须先检查证据后显式请求，不自动执行。
 
 `waiting.steps` 区分等待依赖、等待调度槽或后续批次、真实重试退避。当前源码的纯 `read/glob/grep` 计划完成即补槽，含其他工具的计划保持批次调度；重试退避仍占步骤槽位，不重复派发。退避若带 `disposition:waiting_retry`，表示本次失败按既有策略等待只读重试，不升级为待处理；`needs_action` 表示该类别不能据此重试。仅退避有实际观察到的开始和下次尝试时间。重启不补猜时间，终态不再显示待执行步骤为活跃等待。清理等待仅指本进程，不代表外部 Job 退出；容量满仍按原行为拒绝，并未新增队列，也未给 edit/write/pwsh/agent 增加自动重试。
 

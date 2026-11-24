@@ -18,7 +18,7 @@
 
 标准 0.2.3 支持普通工具 DAG，独立分工可用宿主原生委派；原生委派不是运行时 `agent` 步骤，也不证明 Worker 门禁已打通。普通任务继续用原工具；运行时只处理“能写成稳定 DAG”的协调工作，简单一次性操作不包装。普通工具的 `depends_on` 只约束顺序，不插值结果；Agent 则追加直接依赖结果为不可信 JSON（缺失/截断或追加 prompt >64KiB 拒绝）；同一记录 root 的单进程 service 共享 8 个 active run，run/resume 均需准入。
 
-Worker 通过公开 `agents.create` + `agentPresets.composeFrom` 创建独立上下文并继承模型路由，强制使用 `NativeToolExecutor`（不是 PTC），宿主沙箱 read-only、approval never，guard 仅允许 `read/glob/grep` 并与父 admission identity 取交集。禁止 `run_code`、命令、写入与递归委派；不靠提示词限制权限。Agent 输入为 `{prompt, access?:"read", max_steps?:1..32, output_format?:"text"|"report"}`（默认 12 步；省略输出格式保留旧 text），不支持 write 或写入范围授权；非空 `write_scopes` 拒绝，空数组仅作兼容归一化。
+Worker 通过公开 `agents.create` + `agentPresets.composeFrom` 创建独立上下文并继承模型路由，强制使用 `NativeToolExecutor`（不是 PTC），宿主沙箱 read-only、approval never，文件工具仅允许 `read/glob/grep`；受控宿主可选[依赖结果读取](<protocol.md#依赖结果渐进读取>)，均须通过父调用准入。禁止 `run_code`、命令、写入与递归委派；不靠提示词限制权限。Agent 输入为 `{prompt, access?:"read", max_steps?:1..32, output_format?:"text"|"report"}`（默认 12 步；省略输出格式保留旧 text），不支持 write 或写入范围授权；非空 `write_scopes` 拒绝，空数组仅作兼容归一化。
 
 只读 Worker 可并行，但不与本 run 的直接写入/命令步骤同批，不锁跨 run 或外部写入。含 Agent 的计划不支持 `async:true` 或 service `background=true`，在创建 run/Worker 前以 `RUNTIME_AGENT_ASYNC_UNSUPPORTED` 拒绝：父 `exec.toolSet` 随外层工具批次返回而 dispose，不能安全 detach Worker；普通工具计划若携带 `exec.toolSet`，异步或 service 后台提交也在创建 run 前以 `RUNTIME_ASYNC_ADMISSION_UNSUPPORTED` 拒绝；宿主批次结束会销毁该准入集合，没有公开续租接口。不得删除准入集合或重新解析以绕过限制；请使用同步调用。Agent 不 retry、不自动重放；同步 run/服务 dispose 等待取消/超时的 Worker dispose，`runtime_cancel` 仅发起取消，返回不证明清理完成；恢复未知 Agent 失败整个 run。子会话 ID 在 checkpoint 与摘要可见，`succeeded` 不是验收结论。详见[协议](<protocol.md#agent-步骤受控宿主集成>)。
 
@@ -31,6 +31,17 @@ Worker 通过公开 `agents.create` + `agentPresets.composeFrom` 创建独立上
 - 不做跨进程/分布式执行，不保证 exactly-once 或副作用回滚。取消及时停止调度，但工具可能不合作；`unknown` 不代表副作用未发生。恢复遇到未知副作用时整个 run 失败，不再调新步骤。
 - 不替代宿主后台 Job、Teams、Skills、Goals；当前 Agent 步骤是受限的只读 DAG 分工，不是新的通用 team 模式或可写 Worker 系统。
 - 真实模型、桌面 UI 与实际沙箱仍未验收；测试证据必须区分组件桩、真实 ToolRuntime、真实进程与实际沙箱，见[验证范围](<validation.md>)。
+
+## 维护导航
+
+按问题定位核心实现与回归测试。以下链接指向 GitHub 源码仓库；npm 包不包含源码和测试。
+
+| 主链 | 先看哪里 | 回归测试 |
+|---|---|---|
+| 调度 | [执行器](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/executor.ts>) 负责依赖就绪、纯只读计划补槽、混合计划批次和步骤取消。 | [只读调度](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/test/runtime-readonly-scheduling.test.mjs>)、[执行器](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/test/runtime-executor.test.mjs>) |
+| 存储与恢复 | [记录存储](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/store.ts>) 负责检查点的原子保存、校验与保留；[运行服务](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/service.ts>) 负责恢复入口，[执行器](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/executor.ts>) 决定哪些步骤可以重排。 | [存储](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/test/runtime-store.test.mjs>)、[进程崩溃恢复](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/test/runtime-crash.test.mjs>) |
+| 结果复核 | [复核规则](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/review.ts>) 将 owner 的复核声明绑定到结果快照；[记录存储](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/store.ts>) 校验版本后落盘，不把声明当作独立验收。 | [复核账本](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/test/runtime-review.test.mjs>) |
+| 通知 | [通知回执](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/notifications.ts>) 管理投递状态；[宿主投递](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/src/runtime/notification-delivery.ts>) 处理显式发送。投递结果未知时不自动重发。 | [通知回执](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/test/runtime-notifications.test.mjs>)、[宿主投递](<https://github.com/f-e-n-g-0531/dsh-execution-bus/blob/main/test/runtime-notification-delivery.test.mjs>) |
 
 ## 维护契约
 
